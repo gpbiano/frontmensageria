@@ -3,6 +3,14 @@ import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import fetch from "node-fetch";
+import fs from "fs";
+import path from "path";
+
+
 dotenv.config();
 
 // ===============================
@@ -20,6 +28,42 @@ console.log("✅ VERIFY_TOKEN:", VERIFY_TOKEN ? "definido" : "NÃO definido");
 console.log("🚀 Porta da API:", PORT);
 console.log("======================================");
 
+const DB_FILE = path.join(process.cwd(), "data.json");
+
+function loadStateFromDisk() {
+  try {
+    if (!fs.existsSync(DB_FILE)) {
+      console.log("💾 data.json ainda não existe, começando vazio");
+      return { conversations: [], messagesByConversation: {} };
+    }
+
+    const raw = fs.readFileSync(DB_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+
+    console.log(
+      "💾 Estado carregado de data.json:",
+      `${(parsed.conversations || []).length} conversas`
+    );
+
+    return {
+      conversations: parsed.conversations || [],
+      messagesByConversation: parsed.messagesByConversation || {},
+    };
+  } catch (err) {
+    console.error("❌ Erro ao carregar data.json:", err);
+    return { conversations: [], messagesByConversation: {} };
+  }
+}
+
+function saveStateToDisk(state) {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
+    // console.log("💾 Estado salvo em data.json");
+  } catch (err) {
+    console.error("❌ Erro ao salvar data.json:", err);
+  }
+}
+
 // ===============================
 // APP EXPRESS
 // ===============================
@@ -29,11 +73,16 @@ app.use(cors());
 app.use(express.json());
 
 // ===============================
-// DADOS EM MEMÓRIA
+// DADOS EM MEMÓRIA + PERSISTÊNCIA
 // ===============================
-let conversations = [];          // [{ id, contactName, phone, lastMessage, status, updatedAt }]
-let messagesByConversation = {}; // { [conversationId]: [ {id, direction, text, timestamp} ] }
+const initialState = loadStateFromDisk();
 
+let conversations = initialState.conversations;
+let messagesByConversation = initialState.messagesByConversation;
+
+function persist() {
+  saveStateToDisk({ conversations, messagesByConversation });
+}
 // ===============================
 // HELPERS
 // ===============================
@@ -64,7 +113,14 @@ function findOrCreateConversationByPhone(phone, name) {
     };
 
     conversations.push(conv);
+    
     console.log("🆕 Nova conversa criada:", conv);
+    
+        conversations.push(conv);
+    console.log("🆕 Nova conversa criada:", conv);
+
+    persist(); // <--- salva no arquivo
+
   }
 
   return conv;
@@ -256,6 +312,7 @@ app.post("/webhook/whatsapp", (req, res) => {
             text,
             timestamp: new Date(),
           });
+          
 
           conv.lastMessage = text;
           conv.updatedAt = new Date();
