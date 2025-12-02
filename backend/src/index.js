@@ -5,24 +5,34 @@ import fetch from "node-fetch";
 
 dotenv.config();
 
+// ===============================
+// VARIÁVEIS DE AMBIENTE
+// ===============================
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-
-console.log("TOKEN LENGTH:", WHATSAPP_TOKEN?.length);
-console.log("PHONE ID:", PHONE_NUMBER_ID);
-
-const app = express();
 const PORT = process.env.PORT || 3001;
+
+console.log("======================================");
+console.log("🔐 WHATSAPP_TOKEN length:", WHATSAPP_TOKEN?.length || "N/A");
+console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "N/A");
+console.log("✅ VERIFY_TOKEN:", VERIFY_TOKEN ? "definido" : "NÃO definido");
+console.log("🚀 Porta da API:", PORT);
+console.log("======================================");
+
+// ===============================
+// APP EXPRESS
+// ===============================
+const app = express();
 
 app.use(cors());
 app.use(express.json());
 
 // ===============================
-// DADOS EM MEMÓRIA (SEM MOCKS)
+// DADOS EM MEMÓRIA
 // ===============================
-let conversations = [];
-let messagesByConversation = {};
+let conversations = [];          // [{ id, contactName, phone, lastMessage, status, updatedAt }]
+let messagesByConversation = {}; // { [conversationId]: [ {id, direction, text, timestamp} ] }
 
 // ===============================
 // HELPERS
@@ -61,6 +71,10 @@ function findOrCreateConversationByPhone(phone, name) {
 }
 
 async function sendWhatsAppMessage(to, text) {
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+    throw new Error("WHATSAPP_TOKEN ou PHONE_NUMBER_ID não configurados no .env");
+  }
+
   const url = `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`;
 
   const payload = {
@@ -70,7 +84,7 @@ async function sendWhatsAppMessage(to, text) {
     text: { body: text },
   };
 
-  console.log("➡️ Enviando para WA:", payload);
+  console.log("➡️ Enviando para WhatsApp:", JSON.stringify(payload, null, 2));
 
   const response = await fetch(url, {
     method: "POST",
@@ -83,12 +97,32 @@ async function sendWhatsAppMessage(to, text) {
 
   const data = await response.json();
   console.log("⬅️ Resposta do WhatsApp:", JSON.stringify(data, null, 2));
+
+  if (!response.ok) {
+    throw new Error(
+      `Erro da API do WhatsApp: ${response.status} - ${JSON.stringify(data)}`
+    );
+  }
+
   return data;
 }
 
 // ===============================
 // ROTAS REST
 // ===============================
+
+// Raiz – só para ver rapidamente no browser
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "API WhatsApp Plataforma rodando 🚀",
+    endpoints: {
+      health: "/health",
+      conversations: "/conversations",
+      webhook: "/webhook/whatsapp",
+    },
+  });
+});
 
 // Health check
 app.get("/health", (req, res) => {
@@ -106,7 +140,7 @@ app.get("/conversations", (req, res) => {
 
 // Histórico de mensagens de uma conversa
 app.get("/conversations/:id/messages", (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id, 10);
   const msgs = messagesByConversation[id] || [];
   console.log(
     `📤 GET /conversations/${id}/messages ->`,
@@ -118,10 +152,10 @@ app.get("/conversations/:id/messages", (req, res) => {
 
 // Enviar mensagem para uma conversa
 app.post("/conversations/:id/messages", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id, 10);
   const { text } = req.body;
 
-  console.log("POST /conversations/:id/messages", { id, text });
+  console.log("📥 POST /conversations/:id/messages", { id, text });
 
   const conv = conversations.find((c) => c.id === id);
 
@@ -148,7 +182,7 @@ app.post("/conversations/:id/messages", async (req, res) => {
 
     return res.status(201).json({ msg, waResponse });
   } catch (error) {
-    console.error("Erro ao enviar para WhatsApp:", error);
+    console.error("❌ Erro ao enviar para WhatsApp:", error);
     return res.status(500).json({ error: "Erro ao enviar mensagem" });
   }
 });
@@ -157,11 +191,17 @@ app.post("/conversations/:id/messages", async (req, res) => {
 // WEBHOOK WHATSAPP
 // ===============================
 
-// Verificação do webhook (GET)
+// Verificação do webhook (GET) – usada na Meta
 app.get("/webhook/whatsapp", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
+
+  console.log("🔎 Verificação de webhook recebida:", {
+    mode,
+    token,
+    challenge,
+  });
 
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
     console.log("✅ Webhook verificado com sucesso!");
@@ -176,7 +216,7 @@ app.get("/webhook/whatsapp", (req, res) => {
 app.post("/webhook/whatsapp", (req, res) => {
   const body = req.body;
   console.log(
-    "📩 WEBHOOK RECEBIDO (body.object=",
+    "📩 WEBHOOK RECEBIDO (body.object =",
     body.object,
     "):",
     JSON.stringify(body, null, 2)
@@ -237,8 +277,8 @@ app.post("/webhook/whatsapp", (req, res) => {
 });
 
 // ===============================
-
+// INICIAR SERVIDOR
+// ===============================
 app.listen(PORT, () => {
-  console.log(`API rodando na porta ${PORT}`);
+  console.log(`🚀 API rodando na porta ${PORT}`);
 });
-
