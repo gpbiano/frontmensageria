@@ -1,15 +1,14 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import fetch from "node-fetch";
+// index.js (ou server.js)
 
+// ===============================
+// IMPORTS
+// ===============================
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-
 
 dotenv.config();
 
@@ -28,6 +27,9 @@ console.log("✅ VERIFY_TOKEN:", VERIFY_TOKEN ? "definido" : "NÃO definido");
 console.log("🚀 Porta da API:", PORT);
 console.log("======================================");
 
+// ===============================
+// PERSISTÊNCIA EM ARQUIVO (data.json)
+// ===============================
 const DB_FILE = path.join(process.cwd(), "data.json");
 
 function loadStateFromDisk() {
@@ -83,6 +85,7 @@ let messagesByConversation = initialState.messagesByConversation;
 function persist() {
   saveStateToDisk({ conversations, messagesByConversation });
 }
+
 // ===============================
 // HELPERS
 // ===============================
@@ -113,14 +116,9 @@ function findOrCreateConversationByPhone(phone, name) {
     };
 
     conversations.push(conv);
-    
-    console.log("🆕 Nova conversa criada:", conv);
-    
-        conversations.push(conv);
     console.log("🆕 Nova conversa criada:", conv);
 
-    persist(); // <--- salva no arquivo
-
+    persist(); // salva no arquivo
   }
 
   return conv;
@@ -128,7 +126,9 @@ function findOrCreateConversationByPhone(phone, name) {
 
 async function sendWhatsAppMessage(to, text) {
   if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-    throw new Error("WHATSAPP_TOKEN ou PHONE_NUMBER_ID não configurados no .env");
+    throw new Error(
+      "WHATSAPP_TOKEN ou PHONE_NUMBER_ID não configurados no .env"
+    );
   }
 
   const url = `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`;
@@ -236,6 +236,8 @@ app.post("/conversations/:id/messages", async (req, res) => {
     conv.lastMessage = text;
     conv.updatedAt = new Date();
 
+    persist(); // salva alteração no arquivo
+
     return res.status(201).json({ msg, waResponse });
   } catch (error) {
     console.error("❌ Erro ao enviar para WhatsApp:", error);
@@ -312,7 +314,6 @@ app.post("/webhook/whatsapp", (req, res) => {
             text,
             timestamp: new Date(),
           });
-          
 
           conv.lastMessage = text;
           conv.updatedAt = new Date();
@@ -320,6 +321,8 @@ app.post("/webhook/whatsapp", (req, res) => {
           console.log(
             `💬 Nova mensagem de ${customerPhone} adicionada à conversa ${conv.id}`
           );
+
+          persist(); // salva alteração no arquivo
         } else {
           console.log("⚠️ Tipo de mensagem não tratado:", msg.type);
         }
