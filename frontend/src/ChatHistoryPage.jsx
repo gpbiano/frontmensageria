@@ -423,8 +423,60 @@ export default function ChatHistoryPage() {
                                 }
                               >
                                 <div className="msg-body">
-                                  {msg.body || msg.text || "(sem conteúdo)"}
-                                </div>
+
+  {/* 📸 IMAGEM */}
+  {msg.type === "image" && msg.mediaUrl && (
+    <img
+      src={msg.mediaUrl}
+      alt="imagem recebida"
+      className="msg-image"
+    />
+  )}
+
+  {/* 🎬 VÍDEO / GIF */}
+  {msg.type === "video" && msg.mediaUrl && (
+    <video
+      src={msg.mediaUrl}
+      controls
+      className="msg-video"
+    />
+  )}
+
+  {/* 🎧 ÁUDIO */}
+  {msg.type === "audio" && msg.mediaUrl && (
+    <audio
+      src={msg.mediaUrl}
+      controls
+      className="msg-audio"
+    />
+  )}
+
+  {/* 📄 DOCUMENTO / PDF */}
+  {msg.type === "document" && msg.mediaUrl && (
+    <a
+      href={msg.mediaUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="msg-document"
+    >
+      📄 Abrir documento
+    </a>
+  )}
+
+  {/* 🌟 FIGURINHA (WEBP) */}
+  {msg.type === "sticker" && msg.mediaUrl && (
+    <img
+      src={msg.mediaUrl}
+      alt="figurinha"
+      className="msg-sticker"
+    />
+  )}
+
+  {/* ✏️ TEXTO NORMAL (fallback) */}
+  {!msg.type && (msg.body || msg.text || "(sem conteúdo)")}
+
+</div>
+
                                 <div className="msg-meta">
                                   {formatDateTime(msg.timestamp)}
                                 </div>

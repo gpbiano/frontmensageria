@@ -60,7 +60,6 @@ function loadStateFromDisk() {
 function saveStateToDisk(state) {
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
-    // console.log("💾 Estado salvo em data.json");
   } catch (err) {
     console.error("❌ Erro ao salvar data.json:", err);
   }
@@ -163,6 +162,19 @@ async function sendWhatsAppMessage(to, text) {
   return data;
 }
 
+// 🔗 FUNÇÃO PARA OBTER URL TEMPORÁRIA DA MÍDIA
+async function getMediaUrl(mediaId) {
+  const url = `https://graph.facebook.com/v20.0/${mediaId}`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+  });
+
+  const json = await response.json();
+
+  return json.url; // link válido por 5 minutos
+}
+
 // ===============================
 // ROTAS REST
 // ===============================
@@ -206,7 +218,7 @@ app.get("/conversations/:id/messages", (req, res) => {
   res.json(msgs);
 });
 
-// Enviar mensagem para uma conversa
+// Enviar mensagem de TEXTO para uma conversa
 app.post("/conversations/:id/messages", async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const { text } = req.body;
@@ -244,6 +256,67 @@ app.post("/conversations/:id/messages", async (req, res) => {
     return res.status(500).json({ error: "Erro ao enviar mensagem" });
   }
 });
+
+// Enviar MÍDIA (imagem, vídeo, pdf, áudio) para uma conversa
+app.post("/conversations/:id/media", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { url, type } = req.body; 
+  // type pode ser: image, audio, video, document
+
+  console.log("📥 POST /conversations/:id/media", { id, url, type });
+
+  const conv = conversations.find((c) => c.id === id);
+  if (!conv) {
+    console.log("❌ Conversa não encontrada para id", id);
+    return res.status(404).json({ error: "Conversa não encontrada" });
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to: conv.phone,
+    type,
+    [type]: { link: url },
+  };
+
+  try {
+    console.log("➡️ Enviando mídia para WhatsApp:", JSON.stringify(payload, null, 2));
+
+    const waResponse = await fetch(
+      `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }
+    ).then((r) => r.json());
+
+    if (!messagesByConversation[id]) messagesByConversation[id] = [];
+
+    messagesByConversation[id].push({
+      id: messagesByConversation[id].length + 1,
+      direction: "out",
+      type,
+      mediaUrl: url,
+      timestamp: new Date(),
+    });
+
+    conv.lastMessage = `[${type}]`;
+    conv.updatedAt = new Date();
+
+    persist();
+
+    console.log("📤 Mídia enviada com sucesso:", waResponse);
+
+    return res.json({ ok: true, waResponse });
+  } catch (err) {
+    console.error("❌ Erro ao enviar mídia:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Atualizar status da conversa (ex: open -> closed)
 app.patch("/conversations/:id/status", (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -270,7 +343,6 @@ app.patch("/conversations/:id/status", (req, res) => {
   return res.json(conv);
 });
 
-
 // ===============================
 // WEBHOOK WHATSAPP
 // ===============================
@@ -295,13 +367,13 @@ app.get("/webhook/whatsapp", (req, res) => {
     return res.sendStatus(403);
   }
 });
+
 // Recebimento de mensagens/eventos (POST)
-app.post("/webhook/whatsapp", (req, res) => {
+app.post("/webhook/whatsapp", async (req, res) => {
   const body = req.body;
+
   console.log(
-    "📩 WEBHOOK RECEBIDO (body.object =",
-    body.object,
-    "):",
+    "📩 WEBHOOK RECEBIDO:",
     JSON.stringify(body, null, 2)
   );
 
@@ -309,65 +381,117 @@ app.post("/webhook/whatsapp", (req, res) => {
     const entry = body.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
+
     const messages = value?.messages;
     const contacts = value?.contacts;
 
     if (!Array.isArray(messages)) {
-      console.log("⚠️ Nenhuma mensagem encontrada em value.messages");
-    } else {
-      messages.forEach((msg) => {
-        if (msg.type === "text") {
-          const customerPhone = msg.from; // ex: 5564...
-          const text = msg.text?.body || "";
-          const customerName =
-            contacts?.[0]?.profile?.name || customerPhone;
+      console.log("⚠️ Nenhuma mensagem recebida");
+      return res.sendStatus(200);
+    }
 
-          console.log("📥 Mensagem de", customerPhone, "->", text);
+    // LOOP DE MENSAGENS RECEBIDAS
+    for (const msg of messages) {
+      const customerPhone = msg.from;
+      const customerName = contacts?.[0]?.profile?.name || customerPhone;
 
-          const conv = findOrCreateConversationByPhone(
-            customerPhone,
-            customerName
-          );
+      // GARANTE QUE TEMOS UMA CONVERSA
+      const conv = findOrCreateConversationByPhone(
+        customerPhone,
+        customerName
+      );
 
-          if (!messagesByConversation[conv.id]) {
-            messagesByConversation[conv.id] = [];
-          }
+      if (!messagesByConversation[conv.id]) {
+        messagesByConversation[conv.id] = [];
+      }
 
-          // adiciona mensagem recebida
-          messagesByConversation[conv.id].push({
-            id: messagesByConversation[conv.id].length + 1,
-            direction: "in",
-            text,
-            timestamp: new Date(),
-          });
+      // ==========================
+      // 📌 1) MENSAGEM DE TEXTO
+      // ==========================
+      if (msg.type === "text") {
+        const text = msg.text?.body || "";
 
-          // atualiza metadados
-          conv.lastMessage = text;
-          conv.updatedAt = new Date();
+        messagesByConversation[conv.id].push({
+          id: messagesByConversation[conv.id].length + 1,
+          direction: "in",
+          text,
+          timestamp: new Date(),
+        });
 
-          // 🔄 Se chegou mensagem nova e estava fechada, reabre automaticamente
-          if (conv.status === "closed") {
-            conv.status = "open";
-            console.log(`🔄 Conversa ${conv.id} reaberta automaticamente`);
-          }
+        conv.lastMessage = text;
+        conv.updatedAt = new Date();
 
-          console.log(
-            `💬 Nova mensagem de ${customerPhone} adicionada à conversa ${conv.id}`
-          );
-
-          persist(); // salva alteração no arquivo
-        } else {
-          console.log("⚠️ Tipo de mensagem não tratado:", msg.type);
+        if (conv.status === "closed") {
+          conv.status = "open";
+          console.log(`🔄 Reaberta conversa ${conv.id}`);
         }
-      });
+
+        persist();
+        continue;
+      }
+
+      // ==========================
+      // 📌 2) IMAGEM RECEBIDA
+      // ==========================
+      if (msg.type === "image") {
+        const mediaId = msg.image.id;
+        const mediaUrl = await getMediaUrl(mediaId);
+
+        messagesByConversation[conv.id].push({
+          id: messagesByConversation[conv.id].length + 1,
+          direction: "in",
+          type: "image",
+          mediaUrl,
+          timestamp: new Date(),
+        });
+
+        conv.lastMessage = "[imagem]";
+        conv.updatedAt = new Date();
+        if (conv.status === "closed") conv.status = "open";
+
+        persist();
+        console.log("🖼️ Imagem recebida:", mediaUrl);
+        continue;
+      }
+
+      // ==========================
+      // 📌 3) FIGURINHA RECEBIDA
+      // ==========================
+      if (msg.type === "sticker") {
+        const mediaId = msg.sticker.id;
+        const mediaUrl = await getMediaUrl(mediaId);
+
+        messagesByConversation[conv.id].push({
+          id: messagesByConversation[conv.id].length + 1,
+          direction: "in",
+          type: "sticker",
+          mediaUrl,
+          timestamp: new Date(),
+        });
+
+        conv.lastMessage = "[figurinha]";
+        conv.updatedAt = new Date();
+        if (conv.status === "closed") conv.status = "open";
+
+        persist();
+        console.log("🌟 Figurinha recebida:", mediaUrl);
+        continue;
+      }
+
+      // ==========================
+      // ⚠️ TIPOS AINDA NÃO TRATADOS
+      // ==========================
+      console.log("⚠️ Tipo não tratado:", msg.type);
     }
   } catch (e) {
     console.error("❌ Erro processando webhook:", e);
   }
 
   // sempre responde 200 pra Meta
-  res.sendStatus(200);
-});// ===============================
+  return res.sendStatus(200);
+});
+
+// ===============================
 // INICIAR SERVIDOR
 // ===============================
 app.listen(PORT, () => {

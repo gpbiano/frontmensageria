@@ -13,8 +13,8 @@
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
       "lastMessage": "Oi",
-      "status": "open",
-      "updatedAt": "2025-12-03T01:06:31.196Z"
+      "status": "closed",
+      "updatedAt": "2025-12-03T02:01:16.281Z"
     }
   ],
   "messagesByConversation": {
@@ -176,6 +176,12 @@
         "direction": "in",
         "text": "Oi",
         "timestamp": "2025-12-03T01:06:31.196Z"
+      },
+      {
+        "id": 16,
+        "direction": "out",
+        "text": "Oi",
+        "timestamp": "2025-12-03T01:54:24.934Z"
       }
     ]
   }

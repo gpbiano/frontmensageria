@@ -459,3 +459,27 @@
   flex: 1;
   min-height: 0;
 }
+.msg-image {
+  max-width: 220px;
+  border-radius: 10px;
+}
+
+.msg-video {
+  max-width: 240px;
+  border-radius: 12px;
+}
+
+.msg-audio {
+  width: 220px;
+}
+
+.msg-sticker {
+  width: 120px;
+  height: auto;
+}
+
+.msg-document {
+  color: #bef264;
+  text-decoration: underline;
+  font-size: 14px;
+}
