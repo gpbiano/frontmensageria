@@ -244,6 +244,32 @@ app.post("/conversations/:id/messages", async (req, res) => {
     return res.status(500).json({ error: "Erro ao enviar mensagem" });
   }
 });
+// Atualizar status da conversa (ex: open -> closed)
+app.patch("/conversations/:id/status", (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { status } = req.body; // esperado: "open" ou "closed"
+
+  console.log("📥 PATCH /conversations/:id/status", { id, status });
+
+  const conv = conversations.find((c) => c.id === id);
+
+  if (!conv) {
+    console.log("❌ Conversa não encontrada para id", id);
+    return res.status(404).json({ error: "Conversa não encontrada" });
+  }
+
+  conv.status = status || "closed";
+  conv.updatedAt = new Date();
+
+  persist(); // salva alteração no data.json
+
+  console.log(
+    `✅ Conversa ${id} atualizada para status: ${conv.status}`
+  );
+
+  return res.json(conv);
+});
+
 
 // ===============================
 // WEBHOOK WHATSAPP
@@ -269,7 +295,6 @@ app.get("/webhook/whatsapp", (req, res) => {
     return res.sendStatus(403);
   }
 });
-
 // Recebimento de mensagens/eventos (POST)
 app.post("/webhook/whatsapp", (req, res) => {
   const body = req.body;
@@ -308,6 +333,7 @@ app.post("/webhook/whatsapp", (req, res) => {
             messagesByConversation[conv.id] = [];
           }
 
+          // adiciona mensagem recebida
           messagesByConversation[conv.id].push({
             id: messagesByConversation[conv.id].length + 1,
             direction: "in",
@@ -315,8 +341,15 @@ app.post("/webhook/whatsapp", (req, res) => {
             timestamp: new Date(),
           });
 
+          // atualiza metadados
           conv.lastMessage = text;
           conv.updatedAt = new Date();
+
+          // 🔄 Se chegou mensagem nova e estava fechada, reabre automaticamente
+          if (conv.status === "closed") {
+            conv.status = "open";
+            console.log(`🔄 Conversa ${conv.id} reaberta automaticamente`);
+          }
 
           console.log(
             `💬 Nova mensagem de ${customerPhone} adicionada à conversa ${conv.id}`
@@ -334,9 +367,7 @@ app.post("/webhook/whatsapp", (req, res) => {
 
   // sempre responde 200 pra Meta
   res.sendStatus(200);
-});
-
-// ===============================
+});// ===============================
 // INICIAR SERVIDOR
 // ===============================
 app.listen(PORT, () => {

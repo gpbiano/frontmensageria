@@ -5,8 +5,8 @@
       "contactName": "Adriano Ferreira",
       "phone": "556499477939",
       "lastMessage": "Tchau",
-      "status": "open",
-      "updatedAt": "2025-12-02T22:10:39.124Z"
+      "status": "closed",
+      "updatedAt": "2025-12-03T00:14:30.319Z"
     },
     {
       "id": 2,
@@ -14,7 +14,7 @@
       "phone": "556499989978",
       "lastMessage": "Oi",
       "status": "open",
-      "updatedAt": "2025-12-02T22:28:06.131Z"
+      "updatedAt": "2025-12-03T01:06:31.196Z"
     }
   ],
   "messagesByConversation": {
@@ -164,6 +164,18 @@
         "direction": "in",
         "text": "Oi",
         "timestamp": "2025-12-02T22:28:06.131Z"
+      },
+      {
+        "id": 14,
+        "direction": "out",
+        "text": "Oi",
+        "timestamp": "2025-12-03T00:56:13.939Z"
+      },
+      {
+        "id": 15,
+        "direction": "in",
+        "text": "Oi",
+        "timestamp": "2025-12-03T01:06:31.196Z"
       }
     ]
   }
