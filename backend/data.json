@@ -14,7 +14,7 @@
       "phone": "556499989978",
       "lastMessage": "Oi",
       "status": "closed",
-      "updatedAt": "2025-12-03T02:01:16.281Z"
+      "updatedAt": "2025-12-03T23:32:14.205Z"
     }
   ],
   "messagesByConversation": {
@@ -182,6 +182,12 @@
         "direction": "out",
         "text": "Oi",
         "timestamp": "2025-12-03T01:54:24.934Z"
+      },
+      {
+        "id": 17,
+        "direction": "out",
+        "text": "Oi",
+        "timestamp": "2025-12-03T23:32:14.205Z"
       }
     ]
   }
