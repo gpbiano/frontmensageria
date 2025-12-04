@@ -39,6 +39,7 @@ export default function LoginPage({ onLogin }) {
         return;
       }
 
+      // salva no navegador
       localStorage.setItem("gpLabsAuthToken", data.token);
       localStorage.setItem("gpLabsUser", JSON.stringify(data.user || {}));
       if (rememberMe) {
@@ -47,6 +48,7 @@ export default function LoginPage({ onLogin }) {
         localStorage.removeItem("gpLabsRememberMe");
       }
 
+      // avisa o App.jsx que deu certo
       if (onLogin) {
         onLogin(data);
       }
@@ -104,7 +106,6 @@ export default function LoginPage({ onLogin }) {
             <p>Acesse com suas credenciais de operador.</p>
           </div>
 
-          {/* IMPORTANTE: form com onSubmit={handleSubmit} */}
           <form className="login-form" onSubmit={handleSubmit}>
             <label className="login-field">
               <span>E-mail</span>
@@ -149,7 +150,6 @@ export default function LoginPage({ onLogin }) {
               </button>
             </div>
 
-            {/* IMPORTANTE: type="submit" */}
             <button
               type="submit"
               className="login-submit"
@@ -167,3 +167,4 @@ export default function LoginPage({ onLogin }) {
     </div>
   );
 }
+

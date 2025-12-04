@@ -9,19 +9,27 @@ import "./chat-history.css";
 
 const AUTH_KEY = "gpLabsAuthToken";
 
-function App() {
+export default function App() {
   const [activeSection, setActiveSection] = useState("inbound");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
+  // Quando a aplicação carrega, vê se já tem token salvo
   useEffect(() => {
     const token = localStorage.getItem(AUTH_KEY);
     if (token) {
+      console.log("🔐 Token encontrado, autenticando automaticamente");
       setIsAuthenticated(true);
     }
   }, []);
 
   function handleLogin(data) {
-    console.log("✅ Login bem-sucedido no App.jsx:", data);
+    console.log("🔥 Login confirmado no App.jsx:", data);
+
+    // garante que o token está salvo (LoginPage já salva, mas aqui reforça)
+    if (data?.token) {
+      localStorage.setItem(AUTH_KEY, data.token);
+    }
+
     setIsAuthenticated(true);
   }
 
@@ -32,10 +40,12 @@ function App() {
     setIsAuthenticated(false);
   }
 
+  // 🔒 Se NÃO estiver autenticado, mostra somente a tela de login
   if (!isAuthenticated) {
     return <LoginPage onLogin={handleLogin} />;
   }
 
+  // ✅ Se estiver autenticado, mostra o painel
   return (
     <div className="app-root">
       <header className="app-header">
@@ -82,6 +92,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
-
