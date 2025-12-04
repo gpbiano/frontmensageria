@@ -1,4 +1,4 @@
-// index.js (ou server.js)
+// index.js
 
 // ===============================
 // IMPORTS
@@ -20,10 +20,15 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PORT = process.env.PORT || 3001;
 
+// 👇 NOVA: base pública da API (domínio do Cloudflare / produção)
+const PUBLIC_BASE_URL =
+  process.env.PUBLIC_BASE_URL || "https://bot.gphparticipacoes.com.br";
+
 console.log("======================================");
 console.log("🔐 WHATSAPP_TOKEN length:", WHATSAPP_TOKEN?.length || "N/A");
 console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "N/A");
 console.log("✅ VERIFY_TOKEN:", VERIFY_TOKEN ? "definido" : "NÃO definido");
+console.log("🌍 PUBLIC_BASE_URL:", PUBLIC_BASE_URL);
 console.log("🚀 Porta da API:", PORT);
 console.log("======================================");
 
@@ -89,7 +94,7 @@ function persist() {
 // HELPERS
 // ===============================
 function normalizePhone(phone) {
-  return String(phone || "").replace(/[^\d]/g, ""); // deixa só números
+  return String(phone || "").replace(/[^\d]/g, "");
 }
 
 function findOrCreateConversationByPhone(phone, name) {
@@ -117,7 +122,7 @@ function findOrCreateConversationByPhone(phone, name) {
     conversations.push(conv);
     console.log("🆕 Nova conversa criada:", conv);
 
-    persist(); // salva no arquivo
+    persist();
   }
 
   return conv;
@@ -162,7 +167,7 @@ async function sendWhatsAppMessage(to, text) {
   return data;
 }
 
-// 🔗 FUNÇÃO PARA OBTER URL TEMPORÁRIA DA MÍDIA
+// 🔗 FUNÇÃO PARA OBTER URL TEMPORÁRIA DA MÍDIA (usada pelo proxy)
 async function getMediaUrl(mediaId) {
   const url = `https://graph.facebook.com/v20.0/${mediaId}`;
 
@@ -171,8 +176,12 @@ async function getMediaUrl(mediaId) {
   });
 
   const json = await response.json();
+  if (!response.ok) {
+    console.error("❌ Erro ao obter URL da mídia:", json);
+    throw new Error("Erro ao obter URL da mídia");
+  }
 
-  return json.url; // link válido por 5 minutos
+  return json.url; // link válido por alguns minutos
 }
 
 // ===============================
@@ -187,7 +196,9 @@ app.get("/", (req, res) => {
     endpoints: {
       health: "/health",
       conversations: "/conversations",
-      webhook: "/webhook/whatsapp",
+      webhook: "/webhook",
+      webhookWhatsApp: "/webhook/whatsapp",
+      mediaProxy: "/media/:mediaId",
     },
   });
 });
@@ -248,7 +259,13 @@ app.post("/conversations/:id/messages", async (req, res) => {
     conv.lastMessage = text;
     conv.updatedAt = new Date();
 
-    persist(); // salva alteração no arquivo
+    // 🔄 Se estava fechada, reabre ao responder pelo painel
+    if (conv.status === "closed") {
+      conv.status = "open";
+      console.log(`🔄 Conversa ${id} reaberta ao enviar resposta`);
+    }
+
+    persist();
 
     return res.status(201).json({ msg, waResponse });
   } catch (error) {
@@ -260,8 +277,7 @@ app.post("/conversations/:id/messages", async (req, res) => {
 // Enviar MÍDIA (imagem, vídeo, pdf, áudio) para uma conversa
 app.post("/conversations/:id/media", async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const { url, type } = req.body; 
-  // type pode ser: image, audio, video, document
+  const { url, type } = req.body; // type: image, audio, video, document
 
   console.log("📥 POST /conversations/:id/media", { id, url, type });
 
@@ -279,7 +295,10 @@ app.post("/conversations/:id/media", async (req, res) => {
   };
 
   try {
-    console.log("➡️ Enviando mídia para WhatsApp:", JSON.stringify(payload, null, 2));
+    console.log(
+      "➡️ Enviando mídia para WhatsApp:",
+      JSON.stringify(payload, null, 2)
+    );
 
     const waResponse = await fetch(
       `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
@@ -306,6 +325,11 @@ app.post("/conversations/:id/media", async (req, res) => {
     conv.lastMessage = `[${type}]`;
     conv.updatedAt = new Date();
 
+    if (conv.status === "closed") {
+      conv.status = "open";
+      console.log(`🔄 Conversa ${id} reaberta (envio de mídia)`);
+    }
+
     persist();
 
     console.log("📤 Mídia enviada com sucesso:", waResponse);
@@ -320,7 +344,7 @@ app.post("/conversations/:id/media", async (req, res) => {
 // Atualizar status da conversa (ex: open -> closed)
 app.patch("/conversations/:id/status", (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const { status } = req.body; // esperado: "open" ou "closed"
+  const { status } = req.body;
 
   console.log("📥 PATCH /conversations/:id/status", { id, status });
 
@@ -334,7 +358,7 @@ app.patch("/conversations/:id/status", (req, res) => {
   conv.status = status || "closed";
   conv.updatedAt = new Date();
 
-  persist(); // salva alteração no data.json
+  persist();
 
   console.log(
     `✅ Conversa ${id} atualizada para status: ${conv.status}`
@@ -344,11 +368,55 @@ app.patch("/conversations/:id/status", (req, res) => {
 });
 
 // ===============================
+// PROXY DE MÍDIA WHATSAPP
+// ===============================
+app.get("/media/:mediaId", async (req, res) => {
+  const mediaId = req.params.mediaId;
+
+  console.log("📥 GET /media/:mediaId", mediaId);
+
+  try {
+    // 1) Obter URL interna da mídia na Meta
+    const mediaUrl = await getMediaUrl(mediaId);
+    if (!mediaUrl) {
+      console.error("❌ URL de mídia vazia para mediaId:", mediaId);
+      return res.status(500).json({ error: "Erro ao obter mídia" });
+    }
+
+    // 2) Baixar o binário com o token
+    const fileResp = await fetch(mediaUrl, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      },
+    });
+
+    if (!fileResp.ok) {
+      console.error(
+        "❌ Erro ao baixar mídia:",
+        fileResp.status,
+        await fileResp.text()
+      );
+      return res.status(500).json({ error: "Erro ao baixar mídia" });
+    }
+
+    const contentType =
+      fileResp.headers.get("content-type") || "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+
+    const buffer = await fileResp.buffer();
+    return res.end(buffer);
+  } catch (err) {
+    console.error("❌ Erro geral no proxy de mídia:", err);
+    return res.status(500).json({ error: "Erro no proxy de mídia" });
+  }
+});
+
+// ===============================
 // WEBHOOK WHATSAPP
 // ===============================
 
-// Verificação do webhook (GET) – usada na Meta
-app.get("/webhook/whatsapp", (req, res) => {
+// Handler comum de verificação
+function handleWebhookVerify(req, res) {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
@@ -366,130 +434,154 @@ app.get("/webhook/whatsapp", (req, res) => {
     console.log("❌ Falha na verificação do webhook");
     return res.sendStatus(403);
   }
-});
+}
 
-// Recebimento de mensagens/eventos (POST)
-app.post("/webhook/whatsapp", async (req, res) => {
+// Handler comum de recebimento de eventos
+async function handleWebhookPost(req, res) {
   const body = req.body;
 
-  console.log(
-    "📩 WEBHOOK RECEBIDO:",
-    JSON.stringify(body, null, 2)
-  );
+  console.log("📩 WEBHOOK RECEBIDO:", JSON.stringify(body, null, 2));
 
   try {
-    const entry = body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-
-    const messages = value?.messages;
-    const contacts = value?.contacts;
-
-    if (!Array.isArray(messages)) {
-      console.log("⚠️ Nenhuma mensagem recebida");
+    if (body.object !== "whatsapp_business_account") {
+      console.log("⚠️ Evento não é de whatsapp_business_account");
       return res.sendStatus(200);
     }
 
-    // LOOP DE MENSAGENS RECEBIDAS
-    for (const msg of messages) {
-      const customerPhone = msg.from;
-      const customerName = contacts?.[0]?.profile?.name || customerPhone;
+    for (const entry of body.entry || []) {
+      for (const change of entry.changes || []) {
+        const value = change.value;
+        const messages = value?.messages || [];
+        const contacts = value?.contacts || [];
 
-      // GARANTE QUE TEMOS UMA CONVERSA
-      const conv = findOrCreateConversationByPhone(
-        customerPhone,
-        customerName
-      );
-
-      if (!messagesByConversation[conv.id]) {
-        messagesByConversation[conv.id] = [];
-      }
-
-      // ==========================
-      // 📌 1) MENSAGEM DE TEXTO
-      // ==========================
-      if (msg.type === "text") {
-        const text = msg.text?.body || "";
-
-        messagesByConversation[conv.id].push({
-          id: messagesByConversation[conv.id].length + 1,
-          direction: "in",
-          text,
-          timestamp: new Date(),
-        });
-
-        conv.lastMessage = text;
-        conv.updatedAt = new Date();
-
-        if (conv.status === "closed") {
-          conv.status = "open";
-          console.log(`🔄 Reaberta conversa ${conv.id}`);
+        // Eventos só de status (sent/delivered/read) não têm messages[]
+        if (!Array.isArray(messages) || messages.length === 0) {
+          console.log("⚠️ Nenhuma mensagem no evento");
+          continue;
         }
 
-        persist();
-        continue;
+        for (const msg of messages) {
+          const customerPhone = msg.from;
+          const customerName =
+            contacts?.[0]?.profile?.name || customerPhone;
+
+          const conv = findOrCreateConversationByPhone(
+            customerPhone,
+            customerName
+          );
+
+          if (!messagesByConversation[conv.id]) {
+            messagesByConversation[conv.id] = [];
+          }
+
+          // TEXTO
+          if (msg.type === "text") {
+            const text = msg.text?.body || "";
+
+            messagesByConversation[conv.id].push({
+              id: messagesByConversation[conv.id].length + 1,
+              direction: "in",
+              text,
+              timestamp: new Date(),
+            });
+
+            conv.lastMessage = text;
+            conv.updatedAt = new Date();
+            if (conv.status === "closed") {
+              conv.status = "open";
+              console.log(
+                `🔄 Reaberta conversa ${conv.id} (mensagem de texto)`
+              );
+            }
+
+            persist();
+            continue;
+          }
+
+          // IMAGEM
+          if (msg.type === "image") {
+            const mediaId = msg.image.id;
+            const mediaUrl = `${PUBLIC_BASE_URL}/media/${mediaId}`;
+
+            messagesByConversation[conv.id].push({
+              id: messagesByConversation[conv.id].length + 1,
+              direction: "in",
+              type: "image",
+              mediaUrl,
+              timestamp: new Date(),
+            });
+
+            conv.lastMessage = "[imagem]";
+            conv.updatedAt = new Date();
+            if (conv.status === "closed") conv.status = "open";
+
+            persist();
+            console.log("🖼️ Imagem recebida:", mediaId);
+            continue;
+          }
+
+          // FIGURINHA
+          if (msg.type === "sticker") {
+            const mediaId = msg.sticker.id;
+            const mediaUrl = `${PUBLIC_BASE_URL}/media/${mediaId}`;
+
+            messagesByConversation[conv.id].push({
+              id: messagesByConversation[conv.id].length + 1,
+              direction: "in",
+              type: "sticker",
+              mediaUrl,
+              timestamp: new Date(),
+            });
+
+            conv.lastMessage = "[figurinha]";
+            conv.updatedAt = new Date();
+            if (conv.status === "closed") conv.status = "open";
+
+            persist();
+            console.log("🌟 Figurinha recebida:", mediaId);
+            continue;
+          }
+
+          // ÁUDIO
+          if (msg.type === "audio") {
+            const mediaId = msg.audio.id;
+            const mediaUrl = `${PUBLIC_BASE_URL}/media/${mediaId}`;
+
+            messagesByConversation[conv.id].push({
+              id: messagesByConversation[conv.id].length + 1,
+              direction: "in",
+              type: "audio",
+              mediaUrl,
+              timestamp: new Date(),
+            });
+
+            conv.lastMessage = "[áudio]";
+            conv.updatedAt = new Date();
+            if (conv.status === "closed") conv.status = "open";
+
+            persist();
+            console.log("🎧 Áudio recebido:", mediaId);
+            continue;
+          }
+
+          console.log("⚠️ Tipo de mensagem não tratado:", msg.type);
+        }
       }
-
-      // ==========================
-      // 📌 2) IMAGEM RECEBIDA
-      // ==========================
-      if (msg.type === "image") {
-        const mediaId = msg.image.id;
-        const mediaUrl = await getMediaUrl(mediaId);
-
-        messagesByConversation[conv.id].push({
-          id: messagesByConversation[conv.id].length + 1,
-          direction: "in",
-          type: "image",
-          mediaUrl,
-          timestamp: new Date(),
-        });
-
-        conv.lastMessage = "[imagem]";
-        conv.updatedAt = new Date();
-        if (conv.status === "closed") conv.status = "open";
-
-        persist();
-        console.log("🖼️ Imagem recebida:", mediaUrl);
-        continue;
-      }
-
-      // ==========================
-      // 📌 3) FIGURINHA RECEBIDA
-      // ==========================
-      if (msg.type === "sticker") {
-        const mediaId = msg.sticker.id;
-        const mediaUrl = await getMediaUrl(mediaId);
-
-        messagesByConversation[conv.id].push({
-          id: messagesByConversation[conv.id].length + 1,
-          direction: "in",
-          type: "sticker",
-          mediaUrl,
-          timestamp: new Date(),
-        });
-
-        conv.lastMessage = "[figurinha]";
-        conv.updatedAt = new Date();
-        if (conv.status === "closed") conv.status = "open";
-
-        persist();
-        console.log("🌟 Figurinha recebida:", mediaUrl);
-        continue;
-      }
-
-      // ==========================
-      // ⚠️ TIPOS AINDA NÃO TRATADOS
-      // ==========================
-      console.log("⚠️ Tipo não tratado:", msg.type);
     }
   } catch (e) {
     console.error("❌ Erro processando webhook:", e);
   }
 
-  // sempre responde 200 pra Meta
   return res.sendStatus(200);
-});
+}
+
+// Verificação do webhook (GET)
+app.get("/webhook", handleWebhookVerify);
+app.get("/webhook/whatsapp", handleWebhookVerify);
+
+// Recebimento de mensagens/eventos (POST)
+app.post("/webhook", handleWebhookPost);
+app.post("/webhook/whatsapp", handleWebhookPost);
 
 // ===============================
 // INICIAR SERVIDOR

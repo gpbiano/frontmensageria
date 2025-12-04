@@ -1,7 +1,7 @@
 // frontend/src/ChatHistoryPage.jsx
 import { useEffect, useMemo, useState } from "react";
 
-const API_BASE = "http://localhost:3010";
+const API_BASE = "https://bot.gphparticipacoes.com.br";
 
 export default function ChatHistoryPage() {
   const [conversations, setConversations] = useState([]);
@@ -50,9 +50,11 @@ export default function ChatHistoryPage() {
 
   // ============ LOADERS ============
 
-  const loadConversations = async () => {
+  const loadConversations = async (options = { silent: false }) => {
+    const { silent } = options;
     try {
-      setLoadingConversations(true);
+      if (!silent) setLoadingConversations(true);
+
       const res = await fetch(`${API_BASE}/conversations`);
       const data = await res.json();
       const ordered = [...data].sort(
@@ -66,14 +68,20 @@ export default function ChatHistoryPage() {
     } catch (err) {
       console.error("Erro ao buscar conversas:", err);
     } finally {
-      setLoadingConversations(false);
+      if (!silent) setLoadingConversations(false);
     }
   };
 
-  const loadMessages = async (conversationId) => {
+  const loadMessages = async (
+    conversationId,
+    options = { silent: false }
+  ) => {
     if (!conversationId) return;
+    const { silent } = options;
+
     try {
-      setLoadingMessages(true);
+      if (!silent) setLoadingMessages(true);
+
       const res = await fetch(
         `${API_BASE}/conversations/${conversationId}/messages`
       );
@@ -81,11 +89,19 @@ export default function ChatHistoryPage() {
       const sorted = [...data].sort(
         (a, b) => new Date(a.timestamp) - new Date(b.timestamp)
       );
-      setMessages(sorted);
+
+      setMessages((prev) => {
+        const prevLast = prev[prev.length - 1]?.timestamp;
+        const nextLast = sorted[sorted.length - 1]?.timestamp;
+        if (prev.length === sorted.length && prevLast === nextLast) {
+          return prev;
+        }
+        return sorted;
+      });
     } catch (err) {
       console.error("Erro ao buscar mensagens:", err);
     } finally {
-      setLoadingMessages(false);
+      if (!silent) setLoadingMessages(false);
     }
   };
 
@@ -103,12 +119,12 @@ export default function ChatHistoryPage() {
     }
   }, [selectedConversationId]);
 
-  // polling leve
+  // polling leve (sem piscar)
   useEffect(() => {
     const interval = setInterval(() => {
-      loadConversations();
+      loadConversations({ silent: true });
       if (selectedConversationId) {
-        loadMessages(selectedConversationId);
+        loadMessages(selectedConversationId, { silent: true });
       }
     }, 5000);
 
@@ -188,7 +204,7 @@ export default function ChatHistoryPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }), // 👈 ALINHADO COM O BACKEND
+          body: JSON.stringify({ text }),
         }
       );
 
@@ -423,59 +439,106 @@ export default function ChatHistoryPage() {
                                 }
                               >
                                 <div className="msg-body">
+                                  {/* ✏️ TEXTO (sempre que existir) */}
+                                  {(msg.text || msg.body) && (
+                                    <p className="msg-text">
+                                      {msg.text || msg.body}
+                                    </p>
+                                  )}
 
-  {/* 📸 IMAGEM */}
-  {msg.type === "image" && msg.mediaUrl && (
-    <img
-      src={msg.mediaUrl}
-      alt="imagem recebida"
-      className="msg-image"
-    />
-  )}
+                                  {/* 📸 IMAGEM */}
+                                  {msg.type === "image" &&
+                                    msg.mediaUrl && (
+                                      <img
+                                        src={msg.mediaUrl}
+                                        alt="imagem recebida"
+                                        className="msg-image"
+                                      />
+                                    )}
+                                  {msg.type === "image" &&
+                                    !msg.mediaUrl && (
+                                      <span className="msg-placeholder">
+                                        📷 Imagem recebida
+                                      </span>
+                                    )}
 
-  {/* 🎬 VÍDEO / GIF */}
-  {msg.type === "video" && msg.mediaUrl && (
-    <video
-      src={msg.mediaUrl}
-      controls
-      className="msg-video"
-    />
-  )}
+                                  {/* 🎬 VÍDEO / GIF */}
+                                  {msg.type === "video" &&
+                                    msg.mediaUrl && (
+                                      <video
+                                        src={msg.mediaUrl}
+                                        controls
+                                        className="msg-video"
+                                      />
+                                    )}
+                                  {msg.type === "video" &&
+                                    !msg.mediaUrl && (
+                                      <span className="msg-placeholder">
+                                        🎥 Vídeo recebido
+                                      </span>
+                                    )}
 
-  {/* 🎧 ÁUDIO */}
-  {msg.type === "audio" && msg.mediaUrl && (
-    <audio
-      src={msg.mediaUrl}
-      controls
-      className="msg-audio"
-    />
-  )}
+                                  {/* 🎧 ÁUDIO */}
+                                  {msg.type === "audio" &&
+                                    msg.mediaUrl && (
+                                      <audio
+                                        src={msg.mediaUrl}
+                                        controls
+                                        className="msg-audio"
+                                      />
+                                    )}
+                                  {msg.type === "audio" &&
+                                    !msg.mediaUrl && (
+                                      <span className="msg-placeholder">
+                                        🎧 Áudio recebido
+                                      </span>
+                                    )}
 
-  {/* 📄 DOCUMENTO / PDF */}
-  {msg.type === "document" && msg.mediaUrl && (
-    <a
-      href={msg.mediaUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="msg-document"
-    >
-      📄 Abrir documento
-    </a>
-  )}
+                                  {/* 📄 DOCUMENTO / PDF */}
+                                  {msg.type === "document" &&
+                                    msg.mediaUrl && (
+                                      <a
+                                        href={msg.mediaUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="msg-document"
+                                      >
+                                        📄 Abrir documento
+                                      </a>
+                                    )}
+                                  {msg.type === "document" &&
+                                    !msg.mediaUrl && (
+                                      <span className="msg-placeholder">
+                                        📄 Documento recebido
+                                      </span>
+                                    )}
 
-  {/* 🌟 FIGURINHA (WEBP) */}
-  {msg.type === "sticker" && msg.mediaUrl && (
-    <img
-      src={msg.mediaUrl}
-      alt="figurinha"
-      className="msg-sticker"
-    />
-  )}
+                                  {/* 🌟 FIGURINHA (WEBP) */}
+                                  {msg.type === "sticker" &&
+                                    msg.mediaUrl && (
+                                      <img
+                                        src={msg.mediaUrl}
+                                        alt="figurinha"
+                                        className="msg-sticker"
+                                      />
+                                    )}
+                                  {msg.type === "sticker" &&
+                                    !msg.mediaUrl && (
+                                      <span className="msg-placeholder">
+                                        🌟 Figurinha recebida
+                                      </span>
+                                    )}
 
-  {/* ✏️ TEXTO NORMAL (fallback) */}
-  {!msg.type && (msg.body || msg.text || "(sem conteúdo)")}
-
-</div>
+                                  {/* Fallback geral */}
+                                  {!msg.text &&
+                                    !msg.body &&
+                                    !msg.mediaUrl &&
+                                    !msg.type && (
+                                      <span className="msg-placeholder">
+                                        (sem conteúdo)
+                                      </span>
+                                    )}
+                                </div>
 
                                 <div className="msg-meta">
                                   {formatDateTime(msg.timestamp)}
