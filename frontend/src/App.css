@@ -414,4 +414,18 @@ body {
   font-size: 20px;
   font-weight: 600;
 }
+.app-logout-btn {
+  margin-left: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background: transparent;
+  color: #e5e7eb;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.app-logout-btn:hover {
+  background: rgba(15, 23, 42, 0.8);
+}
 

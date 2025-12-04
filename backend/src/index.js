@@ -9,19 +9,13 @@ import dotenv from "dotenv";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
+import jwt from "jsonwebtoken";
+import { fileURLToPath } from "url";
 
-// ===============================
-// CARREGAR ARQUIVO .env CORRETO
-// ===============================
-const envFile =
-  process.env.NODE_ENV === "production"
-    ? ".env.production"
-    : ".env.development";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: envFile });
-
-console.log("======================================");
-console.log("🌱 NODE_ENV:", process.env.NODE_ENV || "development");
+dotenv.config();
 
 // ===============================
 // VARIÁVEIS DE AMBIENTE
@@ -30,12 +24,13 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PORT = process.env.PORT || 3010;
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "http://localhost:3010";
+const JWT_SECRET = process.env.JWT_SECRET || "gplabs-dev-secret";
 
+console.log("======================================");
 console.log("🔐 WHATSAPP_TOKEN length:", WHATSAPP_TOKEN?.length || "N/A");
 console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "N/A");
 console.log("✅ VERIFY_TOKEN:", VERIFY_TOKEN ? "definido" : "NÃO definido");
-console.log("🌐 PUBLIC_BASE_URL:", PUBLIC_BASE_URL);
+console.log("🔑 JWT_SECRET:", JWT_SECRET ? "definido" : "NÃO definido");
 console.log("🚀 Porta da API:", PORT);
 console.log("======================================");
 
@@ -44,507 +39,513 @@ console.log("======================================");
 // ===============================
 const DB_FILE = path.join(process.cwd(), "data.json");
 
-let state = {
-  conversations: [],
-  messages: [],
-  campaigns: [],
-  templates: [],
-  mediaLibrary: [],
-  campaignResults: [],
-};
+let state = loadStateFromDisk();
 
+if (!state.users) state.users = [];
+if (!state.conversations) state.conversations = [];
+if (!state.messagesByConversation) state.messagesByConversation = {};
+
+ensureDefaultAdminUser();
+
+// -------------------------------
 function loadStateFromDisk() {
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const raw = fs.readFileSync(DB_FILE, "utf-8");
-      if (raw.trim().length > 0) {
-        state = JSON.parse(raw);
-      } else {
-        console.log("💾 data.json vazio, iniciando state padrão");
-      }
-    } else {
-      console.log("💾 data.json não encontrado, será criado ao salvar");
+    if (!fs.existsSync(DB_FILE)) {
+      console.log("📁 data.json não encontrado, criando estrutura inicial.");
+      const initial = {
+        users: [],
+        conversations: [],
+        messagesByConversation: {}
+      };
+      fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), "utf8");
+      return initial;
     }
+
+    const raw = fs.readFileSync(DB_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    console.log(
+      `💾 Estado carregado de data.json: ${parsed.conversations?.length || 0} conversas`
+    );
+    return parsed;
   } catch (err) {
     console.error("❌ Erro ao carregar data.json:", err);
+    return {
+      users: [],
+      conversations: [],
+      messagesByConversation: {}
+    };
   }
-
-  // Garantir coleções novas
-  if (!state.conversations) state.conversations = [];
-  if (!state.messages) state.messages = [];
-  if (!state.campaigns) state.campaigns = [];
-  if (!state.templates) state.templates = [];
-  if (!state.mediaLibrary) state.mediaLibrary = [];
-  if (!state.campaignResults) state.campaignResults = [];
-
-  console.log(
-    `💾 Estado carregado de data.json: ${state.conversations.length} conversas`
-  );
 }
 
 function saveStateToDisk() {
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
+    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf8");
   } catch (err) {
     console.error("❌ Erro ao salvar data.json:", err);
   }
 }
 
-// Carrega ao iniciar
-loadStateFromDisk();
+// Sempre garante o admin@gplabs.com.br com senha em TEXTO PURO (DEV)
+function ensureDefaultAdminUser() {
+  const email = "admin@gplabs.com.br";
+  const password = "gplabs123";
 
-// ===============================
-// APP EXPRESS
-// ===============================
-const app = express();
-app.use(
-  cors({
-    origin: ["http://localhost:5173", "https://bot.gphparticipacoes.com.br"],
-  })
-);
-app.use(express.json());
+  if (!state.users) state.users = [];
 
-// ===============================
-// FUNÇÕES AUXILIARES
-// ===============================
+  const existingIndex = state.users.findIndex(
+    (u) => u.email && u.email.toLowerCase() === email.toLowerCase()
+  );
 
-function findOrCreateConversationFromMessage(messageObj, value) {
-  const from = messageObj.from;
-  const contactName =
-    messageObj.profile?.name || `Contato ${from.substring(from.length - 4)}`;
+  if (existingIndex >= 0) {
+    state.users[existingIndex].name = "Administrador";
+    state.users[existingIndex].password = password;
+  } else {
+    const ids = state.users.map((u) => u.id || 0);
+    const nextId = ids.length ? Math.max(...ids) + 1 : 1;
 
-  let conversation = state.conversations.find((c) => c.phone === from);
-
-  if (!conversation) {
-    conversation = {
-      id:
-        state.conversations.length > 0
-          ? state.conversations[state.conversations.length - 1].id + 1
-          : 1,
-      contactName,
-      phone: from,
-      lastMessage: "",
-      status: "open",
-      updatedAt: new Date().toISOString(),
-    };
-    state.conversations.push(conversation);
-    console.log("🆕 Nova conversa criada:", conversation);
-  }
-
-  return conversation;
-}
-
-function addMessageToConversation(conversationId, payload) {
-  const newMessage = {
-    id:
-      state.messages.length > 0
-        ? state.messages[state.messages.length - 1].id + 1
-        : 1,
-    conversationId,
-    ...payload,
-  };
-
-  state.messages.push(newMessage);
-
-  const conv = state.conversations.find((c) => c.id === conversationId);
-  if (conv) {
-    if (payload.text) {
-      conv.lastMessage = payload.text;
-    } else {
-      conv.lastMessage = "[mídia]";
-    }
-    conv.updatedAt = new Date().toISOString();
+    state.users.push({
+      id: nextId,
+      name: "Administrador",
+      email,
+      password
+    });
   }
 
   saveStateToDisk();
-  return newMessage;
+
+  console.log("👤 Usuário admin padrão definido/atualizado:");
+  console.log("   Email:", email);
+  console.log("   Senha:", password);
 }
 
 // ===============================
-// ROTAS BÁSICAS / HEALTHCHECK
+// HELPERS – CONVERSAS E MENSAGENS
+// ===============================
+function getNextConversationId() {
+  const ids = state.conversations.map((c) => c.id);
+  const max = ids.length ? Math.max(...ids) : 0;
+  return max + 1;
+}
+
+function getNextMessageId(conversationId) {
+  const msgs = state.messagesByConversation[conversationId] || [];
+  const ids = msgs.map((m) => m.id);
+  const max = ids.length ? Math.max(...ids) : 0;
+  return max + 1;
+}
+
+function findConversationById(id) {
+  return state.conversations.find((c) => c.id === Number(id));
+}
+
+function findOrCreateConversationByPhone(phone, contactName) {
+  let conv = state.conversations.find((c) => c.phone === phone);
+
+  if (!conv) {
+    const id = getNextConversationId();
+    conv = {
+      id,
+      contactName: contactName || phone,
+      phone,
+      lastMessage: "",
+      status: "open",
+      updatedAt: new Date().toISOString()
+    };
+    state.conversations.push(conv);
+  }
+
+  if (!state.messagesByConversation[conv.id]) {
+    state.messagesByConversation[conv.id] = [];
+  }
+
+  return conv;
+}
+
+function addMessageToConversation(conversationId, message) {
+  if (!state.messagesByConversation[conversationId]) {
+    state.messagesByConversation[conversationId] = [];
+  }
+
+  const msgs = state.messagesByConversation[conversationId];
+  const id = getNextMessageId(conversationId);
+  const msgWithId = { id, ...message };
+
+  msgs.push(msgWithId);
+
+  const conv = findConversationById(conversationId);
+  if (conv) {
+    conv.lastMessage =
+      msgWithId.type === "text"
+        ? msgWithId.text
+        : msgWithId.caption || `[${msgWithId.type}]`;
+    conv.updatedAt = msgWithId.timestamp || new Date().toISOString();
+
+    if (conv.status === "closed" && msgWithId.direction === "in") {
+      conv.status = "open";
+    }
+  }
+
+  saveStateToDisk();
+  return msgWithId;
+}
+
+// ===============================
+// HELPERS – WHATSAPP CLOUD API
+// ===============================
+async function sendWhatsAppText(to, text) {
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+    console.error("❌ WHATSAPP_TOKEN ou PHONE_NUMBER_ID não definidos.");
+    throw new Error("Configuração WhatsApp ausente");
+  }
+
+  const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+
+  const body = {
+    messaging_product: "whatsapp",
+    to,
+    type: "text",
+    text: { body: text }
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    console.error("❌ Erro ao enviar mensagem de texto WhatsApp:", data);
+    throw new Error("Erro ao enviar mensagem de texto");
+  }
+
+  console.log("📤 Mensagem de texto enviada para", to, "->", data);
+  return data;
+}
+
+async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+    console.error("❌ WHATSAPP_TOKEN ou PHONE_NUMBER_ID não definidos.");
+    throw new Error("Configuração WhatsApp ausente");
+  }
+
+  const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+
+  const mediaObject = { link: mediaUrl };
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type,
+    [type]: mediaObject
+  };
+
+  if (caption && (type === "image" || type === "video" || type === "document")) {
+    mediaObject.caption = caption;
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    console.error("❌ Erro ao enviar mídia WhatsApp:", data);
+    throw new Error("Erro ao enviar mídia");
+  }
+
+  console.log("📤 Mídia enviada para", to, "->", data);
+  return data;
+}
+
+// ===============================
+// EXPRESS APP
+// ===============================
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+// ===============================
+// HEALTH / STATUS
 // ===============================
 app.get("/", (req, res) => {
-  res.json({ ok: true, service: "GP Labs WhatsApp API", version: "1.0.1" });
+  res.json({
+    status: "ok",
+    message: "GP Labs – WhatsApp Plataforma API",
+    version: "1.0.1"
+  });
 });
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, timestamp: new Date().toISOString() });
+  res.json({
+    ok: true,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    conversationsCount: state.conversations.length
+  });
 });
 
 // ===============================
-// WHATSAPP WEBHOOK – VERIFICAÇÃO
+// LOGIN REAL (DEV) – /login
 // ===============================
-function whatsappVerifyHandler(req, res) {
+app.post("/login", (req, res) => {
+  const { email, password } = req.body || {};
+
+  if (!email || !password) {
+    return res
+      .status(400)
+      .json({ error: "Informe e-mail e senha para entrar." });
+  }
+
+  const users = state.users || [];
+  const user = users.find(
+    (u) => u.email && u.email.toLowerCase() === email.toLowerCase()
+  );
+
+  if (!user) {
+    return res.status(401).json({ error: "Usuário não encontrado." });
+  }
+
+  const passwordMatch = password === user.password;
+
+  if (!passwordMatch) {
+    return res.status(401).json({ error: "Senha incorreta." });
+  }
+
+  const token = jwt.sign(
+    { id: user.id, email: user.email },
+    JWT_SECRET,
+    { expiresIn: "8h" }
+  );
+
+  console.log("✅ Login realizado para:", user.email);
+
+  return res.json({
+    token,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email
+    }
+  });
+});
+
+// ===============================
+// ROTAS DE CONVERSAS
+// ===============================
+app.get("/conversations", (req, res) => {
+  const { status } = req.query;
+
+  let conversations = [...state.conversations];
+
+  if (status && status !== "all") {
+    conversations = conversations.filter((c) => c.status === status);
+  }
+
+  conversations.sort(
+    (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
+  );
+
+  res.json(conversations);
+});
+
+app.get("/conversations/:id/messages", (req, res) => {
+  const { id } = req.params;
+  const msgs = state.messagesByConversation[id] || [];
+  res.json(msgs);
+});
+
+app.post("/conversations/:id/messages", async (req, res) => {
+  const { id } = req.params;
+  const { text } = req.body || {};
+
+  const conversation = findConversationById(id);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversa não encontrada." });
+  }
+
+  if (!text) {
+    return res.status(400).json({ error: "Texto da mensagem é obrigatório." });
+  }
+
+  try {
+    await sendWhatsAppText(conversation.phone, text);
+
+    const timestamp = new Date().toISOString();
+
+    const message = addMessageToConversation(conversation.id, {
+      direction: "out",
+      type: "text",
+      text,
+      timestamp
+    });
+
+    res.status(201).json(message);
+  } catch (err) {
+    console.error("❌ Erro ao enviar mensagem:", err);
+    res.status(500).json({ error: "Erro ao enviar mensagem." });
+  }
+});
+
+app.post("/conversations/:id/media", async (req, res) => {
+  const { id } = req.params;
+  const { type, mediaUrl, caption } = req.body || {};
+
+  const conversation = findConversationById(id);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversa não encontrada." });
+  }
+
+  if (!type || !mediaUrl) {
+    return res
+      .status(400)
+      .json({ error: "type e mediaUrl são obrigatórios." });
+  }
+
+  try {
+    await sendWhatsAppMedia(conversation.phone, type, mediaUrl, caption);
+
+    const timestamp = new Date().toISOString();
+
+    const message = addMessageToConversation(conversation.id, {
+      direction: "out",
+      type,
+      text: caption || "",
+      mediaUrl,
+      timestamp
+    });
+
+    res.status(201).json(message);
+  } catch (err) {
+    console.error("❌ Erro ao enviar mídia:", err);
+    res.status(500).json({ error: "Erro ao enviar mídia." });
+  }
+});
+
+app.patch("/conversations/:id/status", (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body || {};
+
+  const conversation = findConversationById(id);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversa não encontrada." });
+  }
+
+  if (!["open", "closed"].includes(status)) {
+    return res
+      .status(400)
+      .json({ error: "Status inválido. Use 'open' ou 'closed'." });
+  }
+
+  conversation.status = status;
+  conversation.updatedAt = new Date().toISOString();
+  saveStateToDisk();
+
+  res.json(conversation);
+});
+
+// ===============================
+// WEBHOOK WHATSAPP (META)
+// ===============================
+app.get("/webhook/whatsapp", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
+  console.log("🌐 GET /webhook/whatsapp", { mode, token, challenge });
+
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("✅ Webhook verificado com sucesso!");
+    console.log("✅ Webhook Verificado com sucesso.");
     return res.status(200).send(challenge);
   }
 
-  console.log("❌ Falha na verificação do webhook");
+  console.warn("⚠️ Webhook não autorizado.");
   return res.sendStatus(403);
-}
+});
 
-// ===============================
-// WHATSAPP WEBHOOK – RECEBIMENTO
-// ===============================
-function whatsappReceiveHandler(req, res) {
+app.post("/webhook/whatsapp", async (req, res) => {
+  const body = req.body;
+  console.log("📩 Webhook recebido:", JSON.stringify(body, null, 2));
+
   try {
-    const body = req.body;
+    if (body.object === "whatsapp_business_account") {
+      const entry = body.entry?.[0];
+      const changes = entry?.changes?.[0];
+      const value = changes?.value;
 
-    if (body.object !== "whatsapp_business_account") {
-      return res.sendStatus(404);
-    }
+      const messages = value?.messages;
+      if (messages && messages.length > 0) {
+        for (const msg of messages) {
+          const waId = msg.from;
+          const profileName = value?.contacts?.[0]?.profile?.name;
 
-    const entry = body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const messages = value?.messages;
+          const conv = findOrCreateConversationByPhone(waId, profileName);
 
-    if (!messages || messages.length === 0) {
-      return res.sendStatus(200);
-    }
+          const timestamp = new Date(
+            Number(msg.timestamp) * 1000
+          ).toISOString();
 
-    messages.forEach((msg) => {
-      console.log(`📥 Mensagem de ${msg.from} -> tipo: ${msg.type}`);
+          let type = msg.type;
+          let text = "";
+          let mediaUrl = null;
 
-      const conv = findOrCreateConversationFromMessage(msg, value);
+          if (type === "text") {
+            text = msg.text?.body || "";
+          } else if (type === "image") {
+            mediaUrl = msg.image?.link || null;
+            text = msg.image?.caption || "";
+          } else if (type === "video") {
+            mediaUrl = msg.video?.link || null;
+            text = msg.video?.caption || "";
+          } else if (type === "document") {
+            mediaUrl = msg.document?.link || null;
+            text = msg.document?.caption || msg.document?.filename || "";
+          } else if (type === "audio") {
+            mediaUrl = msg.audio?.link || null;
+          } else if (type === "sticker") {
+            mediaUrl = msg.sticker?.link || null;
+          }
 
-      const type = msg.type;
-      let text = null;
-      let mediaId = null;
-      let mimeType = null;
+          addMessageToConversation(conv.id, {
+            direction: "in",
+            type,
+            text,
+            mediaUrl,
+            timestamp
+          });
 
-      if (type === "text") {
-        text = msg.text?.body || null;
-      } else if (
-        ["image", "audio", "video", "document", "sticker"].includes(type)
-      ) {
-        const mediaObj = msg[type];
-        if (mediaObj) {
-          mediaId = mediaObj.id || null;
-          mimeType = mediaObj.mime_type || null;
-          // legenda (caption) vai em text se existir
-          text = mediaObj.caption || null;
+          console.log(
+            `💬 Nova mensagem de ${waId} adicionada à conversa ${conv.id}`
+          );
         }
       }
 
-      addMessageToConversation(conv.id, {
-        from: msg.from,
-        to: value.metadata?.display_phone_number || null,
-        type,
-        text,
-        mediaId,
-        mimeType,
-        direction: "inbound",
-        timestamp: new Date(Number(msg.timestamp) * 1000).toISOString(),
-      });
-    });
+      const statuses = value?.statuses;
+      if (statuses && statuses.length > 0) {
+        console.log("📊 Status de mensagens:", JSON.stringify(statuses, null, 2));
+      }
+    }
 
     res.sendStatus(200);
   } catch (err) {
     console.error("❌ Erro ao processar webhook:", err);
     res.sendStatus(500);
   }
-}
-
-// Mapear /webhook e /webhook/whatsapp (para Cloudflare)
-app.get("/webhook", whatsappVerifyHandler);
-app.get("/webhook/whatsapp", whatsappVerifyHandler);
-app.post("/webhook", whatsappReceiveHandler);
-app.post("/webhook/whatsapp", whatsappReceiveHandler);
-
-// ===============================
-// ENVIO DE MENSAGEM AD-HOC (NÃO É O DO CHAT)
-// ===============================
-app.post("/messages/send", async (req, res) => {
-  const { to, text } = req.body;
-
-  if (!to || !text) {
-    return res.status(400).json({ error: "to e text são obrigatórios" });
-  }
-
-  try {
-    const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
-
-    const payload = {
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: text },
-    };
-
-    console.log("📤 Enviando mensagem ad-hoc para WhatsApp:", to);
-
-    const waRes = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await waRes.json();
-
-    if (!waRes.ok) {
-      console.error("❌ Erro ao enviar mensagem para WhatsApp:", data);
-      return res.status(waRes.status).json(data);
-    }
-
-    // Apenas registra no log; não relaciona com conversa específica
-    res.json({ ok: true, data });
-  } catch (err) {
-    console.error("❌ Erro geral ao enviar mensagem:", err);
-    res.status(500).json({ error: "Erro ao enviar mensagem" });
-  }
-});
-
-// ===============================
-// CONVERSAS & HISTÓRICO
-// ===============================
-app.get("/conversations", (req, res) => {
-  const ordered = [...state.conversations].sort(
-    (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
-  );
-  res.json(ordered);
-});
-
-app.get("/conversations/:id/messages", (req, res) => {
-  const id = Number(req.params.id);
-  const msgs = state.messages.filter((m) => m.conversationId === id);
-  console.log(
-    `📤 GET /conversations/${id}/messages -> ${msgs.length} mensagens`
-  );
-  res.json(msgs);
-});
-
-// ✅ ROTA USADA PELO FRONT PARA ENVIAR MENSAGEM NO CHAT
-app.post("/conversations/:id/messages", async (req, res) => {
-  const id = Number(req.params.id);
-  const { text } = req.body;
-
-  if (!text) {
-    return res.status(400).json({ error: "Campo text é obrigatório" });
-  }
-
-  const conversation = state.conversations.find((c) => c.id === id);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversa não encontrada" });
-  }
-
-  const to = conversation.phone;
-
-  try {
-    const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
-
-    const payload = {
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: text },
-    };
-
-    console.log(
-      `📤 Enviando mensagem via chat (conversa ${id}) para ${to}:`,
-      text
-    );
-
-    const waRes = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await waRes.json();
-
-    if (!waRes.ok) {
-      console.error("❌ Erro ao enviar mensagem para WhatsApp:", data);
-      return res.status(waRes.status).json(data);
-    }
-
-    // Registra mensagem outbound na conversa
-    const newMsg = addMessageToConversation(id, {
-      from: "me",
-      to,
-      type: "text",
-      text,
-      direction: "outbound",
-      timestamp: new Date().toISOString(),
-    });
-
-    res.status(201).json({ ok: true, message: newMsg, wa: data });
-  } catch (err) {
-    console.error("❌ Erro geral ao enviar mensagem (chat):", err);
-    res.status(500).json({ error: "Erro ao enviar mensagem" });
-  }
-});
-
-// ===============================
-// OUTBOUND – MEDIA LIBRARY
-// ===============================
-app.get("/media-library", (req, res) => {
-  res.json(state.mediaLibrary);
-});
-
-app.post("/media-library", (req, res) => {
-  const { label, type, url } = req.body;
-
-  if (!label || !type || !url) {
-    return res
-      .status(400)
-      .json({ error: "label, type e url são obrigatórios" });
-  }
-
-  const newMedia = {
-    id:
-      state.mediaLibrary.length > 0
-        ? state.mediaLibrary[state.mediaLibrary.length - 1].id + 1
-        : 1,
-    label,
-    type,
-    url,
-    createdAt: new Date().toISOString(),
-  };
-
-  state.mediaLibrary.push(newMedia);
-  saveStateToDisk();
-
-  res.status(201).json(newMedia);
-});
-
-// ===============================
-// OUTBOUND – TEMPLATES
-// ===============================
-app.get("/templates", (req, res) => {
-  res.json(state.templates);
-});
-
-app.post("/templates", (req, res) => {
-  const { name, body, type, mediaId } = req.body;
-
-  if (!name || !body || !type) {
-    return res
-      .status(400)
-      .json({ error: "name, body e type são obrigatórios" });
-  }
-
-  const newTemplate = {
-    id:
-      state.templates.length > 0
-        ? state.templates[state.templates.length - 1].id + 1
-        : 1,
-    name,
-    body,
-    type,
-    mediaId: mediaId || null,
-  };
-
-  state.templates.push(newTemplate);
-  saveStateToDisk();
-
-  res.status(201).json(newTemplate);
-});
-
-// ===============================
-// OUTBOUND – CAMPANHAS
-// ===============================
-app.get("/campaigns", (req, res) => {
-  res.json(state.campaigns);
-});
-
-app.post("/campaigns", (req, res) => {
-  const { name, description, templateId, scheduledAt } = req.body;
-
-  if (!name || !templateId) {
-    return res
-      .status(400)
-      .json({ error: "name e templateId são obrigatórios" });
-  }
-
-  const now = new Date().toISOString();
-
-  const newCampaign = {
-    id:
-      state.campaigns.length > 0
-        ? state.campaigns[state.campaigns.length - 1].id + 1
-        : 1,
-    name,
-    description: description || "",
-    templateId,
-    status: scheduledAt ? "scheduled" : "draft",
-    createdAt: now,
-    scheduledAt: scheduledAt || null,
-  };
-
-  state.campaigns.push(newCampaign);
-  saveStateToDisk();
-
-  res.status(201).json(newCampaign);
-});
-
-// Simula envio da campanha
-app.post("/campaigns/:id/send", (req, res) => {
-  const id = Number(req.params.id);
-  const campaign = state.campaigns.find((c) => c.id === id);
-
-  if (!campaign) {
-    return res.status(404).json({ error: "Campanha não encontrada" });
-  }
-
-  const now = new Date().toISOString();
-
-  campaign.status = "sent";
-  campaign.scheduledAt = campaign.scheduledAt || now;
-
-  let report = state.campaignResults.find((r) => r.campaignId === id);
-
-  if (!report) {
-    report = {
-      campaignId: id,
-      sent: 0,
-      delivered: 0,
-      read: 0,
-      failed: 0,
-      timeline: {
-        startedAt: now,
-        finishedAt: now,
-      },
-      results: [],
-    };
-    state.campaignResults.push(report);
-  } else {
-    report.timeline.finishedAt = now;
-  }
-
-  saveStateToDisk();
-
-  res.json({ ok: true });
-});
-
-// Relatório da campanha
-app.get("/campaigns/:id/report", (req, res) => {
-  const id = Number(req.params.id);
-  const report = state.campaignResults.find((r) => r.campaignId === id);
-
-  if (!report) {
-    return res.status(404).json({ error: "Relatório não encontrado" });
-  }
-
-  res.json(report);
 });
 
 // ===============================
 // START SERVER
 // ===============================
 app.listen(PORT, () => {
-  console.log("======================================");
   console.log(`🚀 API rodando na porta ${PORT}`);
-  console.log("======================================");
 });

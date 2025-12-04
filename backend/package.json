@@ -8,9 +8,11 @@
     "start": "node src/index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.1",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.3",
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {
