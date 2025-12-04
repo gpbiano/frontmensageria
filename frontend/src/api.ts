@@ -1,45 +1,101 @@
 // frontend/src/api.ts
 
-// =======================================
-// API BASE FIXA (para usar o backend real)
-// =======================================
-const API_BASE = "https://bot.gphparticipacoes.com.br";
+// Detecta se estamos rodando localmente (dev)
+const isLocalDev =
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1";
 
-console.log("🔥 API BASE:", API_BASE);
+// Se for localhost, força falar com o backend local.
+// Em qualquer outro host (produção), usa o VITE_API_BASE do .env.
+const API_BASE = isLocalDev
+  ? "http://localhost:3010"
+  : (import.meta.env.VITE_API_BASE?.trim() ||
+     "https://bot.gphparticipacoes.com.br");
 
-// ===============================
-// Lista de conversas
-// ===============================
-export async function getConversations() {
-  const res = await fetch(`${API_BASE}/conversations`);
-  if (!res.ok) throw new Error("Erro ao carregar conversas");
+console.log("🌐 API_BASE (frontend):", API_BASE);
+
+// Helper genérico para GET
+async function apiGet(path: string) {
+  const url = `${API_BASE}${path}`;
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error(`❌ GET ${url} -> ${res.status}`, text);
+    throw new Error(`Erro na API: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+// Helper genérico para POST
+async function apiPost(path: string, body: any) {
+  const url = `${API_BASE}${path}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error(`❌ POST ${url} -> ${res.status}`, text);
+    throw new Error(`Erro na API: ${res.status}`);
+  }
+
   return res.json();
 }
 
 // ===============================
-// Mensagens por conversa
+// ATENDIMENTO (inbound)
 // ===============================
-export async function getMessages(conversationId: number) {
-  const res = await fetch(
-    `${API_BASE}/conversations/${conversationId}/messages`
-  );
-  if (!res.ok) throw new Error("Erro ao carregar mensagens");
-  return res.json();
+
+export async function fetchConversations() {
+  return apiGet("/conversations");
+}
+
+export async function fetchMessages(conversationId: number) {
+  return apiGet(`/conversations/${conversationId}/messages`);
+}
+
+export async function sendMessageToConversation(
+  conversationId: number,
+  text: string
+) {
+  return apiPost(`/conversations/${conversationId}/messages`, { text });
 }
 
 // ===============================
-// Enviar mensagem
+// OUTBOUND – Campaigns / Templates / Media
 // ===============================
-export async function sendMessage(conversationId: number, text: string) {
-  const res = await fetch(
-    `${API_BASE}/conversations/${conversationId}/messages`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    }
-  );
 
-  if (!res.ok) throw new Error("Erro ao enviar mensagem");
-  return res.json();
+export async function fetchCampaigns() {
+  return apiGet("/campaigns");
 }
+
+export async function createCampaign(payload: any) {
+  return apiPost("/campaigns", payload);
+}
+
+export async function sendCampaign(id: number) {
+  return apiPost(`/campaigns/${id}/send`, {});
+}
+
+export async function fetchTemplates() {
+  return apiGet("/templates");
+}
+
+export async function createTemplate(payload: any) {
+  return apiPost("/templates", payload);
+}
+
+export async function fetchMediaLibrary() {
+  return apiGet("/media-library");
+}
+
+export async function createMediaItem(payload: any) {
+  return apiPost("/media-library", payload);
+}
+

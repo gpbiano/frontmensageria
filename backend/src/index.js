@@ -1,4 +1,4 @@
-// index.js
+// backend/src/index.js
 
 // ===============================
 // IMPORTS
@@ -10,7 +10,18 @@ import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
 
-dotenv.config();
+// ===============================
+// CARREGAR ARQUIVO .env CORRETO
+// ===============================
+const envFile =
+  process.env.NODE_ENV === "production"
+    ? ".env.production"
+    : ".env.development";
+
+dotenv.config({ path: envFile });
+
+console.log("======================================");
+console.log("🌱 NODE_ENV:", process.env.NODE_ENV || "development");
 
 // ===============================
 // VARIÁVEIS DE AMBIENTE
@@ -18,17 +29,13 @@ dotenv.config();
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3010;
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "http://localhost:3010";
 
-// 👇 NOVA: base pública da API (domínio do Cloudflare / produção)
-const PUBLIC_BASE_URL =
-  process.env.PUBLIC_BASE_URL || "https://bot.gphparticipacoes.com.br";
-
-console.log("======================================");
 console.log("🔐 WHATSAPP_TOKEN length:", WHATSAPP_TOKEN?.length || "N/A");
 console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "N/A");
 console.log("✅ VERIFY_TOKEN:", VERIFY_TOKEN ? "definido" : "NÃO definido");
-console.log("🌍 PUBLIC_BASE_URL:", PUBLIC_BASE_URL);
+console.log("🌐 PUBLIC_BASE_URL:", PUBLIC_BASE_URL);
 console.log("🚀 Porta da API:", PORT);
 console.log("======================================");
 
@@ -37,32 +44,45 @@ console.log("======================================");
 // ===============================
 const DB_FILE = path.join(process.cwd(), "data.json");
 
+let state = {
+  conversations: [],
+  messages: [],
+  campaigns: [],
+  templates: [],
+  mediaLibrary: [],
+  campaignResults: [],
+};
+
 function loadStateFromDisk() {
   try {
-    if (!fs.existsSync(DB_FILE)) {
-      console.log("💾 data.json ainda não existe, começando vazio");
-      return { conversations: [], messagesByConversation: {} };
+    if (fs.existsSync(DB_FILE)) {
+      const raw = fs.readFileSync(DB_FILE, "utf-8");
+      if (raw.trim().length > 0) {
+        state = JSON.parse(raw);
+      } else {
+        console.log("💾 data.json vazio, iniciando state padrão");
+      }
+    } else {
+      console.log("💾 data.json não encontrado, será criado ao salvar");
     }
-
-    const raw = fs.readFileSync(DB_FILE, "utf-8");
-    const parsed = JSON.parse(raw);
-
-    console.log(
-      "💾 Estado carregado de data.json:",
-      `${(parsed.conversations || []).length} conversas`
-    );
-
-    return {
-      conversations: parsed.conversations || [],
-      messagesByConversation: parsed.messagesByConversation || {},
-    };
   } catch (err) {
     console.error("❌ Erro ao carregar data.json:", err);
-    return { conversations: [], messagesByConversation: {} };
   }
+
+  // Garantir coleções novas
+  if (!state.conversations) state.conversations = [];
+  if (!state.messages) state.messages = [];
+  if (!state.campaigns) state.campaigns = [];
+  if (!state.templates) state.templates = [];
+  if (!state.mediaLibrary) state.mediaLibrary = [];
+  if (!state.campaignResults) state.campaignResults = [];
+
+  console.log(
+    `💾 Estado carregado de data.json: ${state.conversations.length} conversas`
+  );
 }
 
-function saveStateToDisk(state) {
+function saveStateToDisk() {
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
   } catch (err) {
@@ -70,522 +90,461 @@ function saveStateToDisk(state) {
   }
 }
 
+// Carrega ao iniciar
+loadStateFromDisk();
+
 // ===============================
 // APP EXPRESS
 // ===============================
 const app = express();
-
-app.use(cors());
+app.use(
+  cors({
+    origin: ["http://localhost:5173", "https://bot.gphparticipacoes.com.br"],
+  })
+);
 app.use(express.json());
 
 // ===============================
-// DADOS EM MEMÓRIA + PERSISTÊNCIA
+// FUNÇÕES AUXILIARES
 // ===============================
-const initialState = loadStateFromDisk();
 
-let conversations = initialState.conversations;
-let messagesByConversation = initialState.messagesByConversation;
+function findOrCreateConversationFromMessage(messageObj, value) {
+  const from = messageObj.from;
+  const contactName =
+    messageObj.profile?.name || `Contato ${from.substring(from.length - 4)}`;
 
-function persist() {
-  saveStateToDisk({ conversations, messagesByConversation });
-}
+  let conversation = state.conversations.find((c) => c.phone === from);
 
-// ===============================
-// HELPERS
-// ===============================
-function normalizePhone(phone) {
-  return String(phone || "").replace(/[^\d]/g, "");
-}
-
-function findOrCreateConversationByPhone(phone, name) {
-  const normalized = normalizePhone(phone);
-
-  let conv = conversations.find(
-    (c) => normalizePhone(c.phone) === normalized
-  );
-
-  if (!conv) {
-    const newId =
-      conversations.length > 0
-        ? Math.max(...conversations.map((c) => c.id)) + 1
-        : 1;
-
-    conv = {
-      id: newId,
-      contactName: name || normalized,
-      phone: normalized,
+  if (!conversation) {
+    conversation = {
+      id:
+        state.conversations.length > 0
+          ? state.conversations[state.conversations.length - 1].id + 1
+          : 1,
+      contactName,
+      phone: from,
       lastMessage: "",
       status: "open",
-      updatedAt: new Date(),
+      updatedAt: new Date().toISOString(),
     };
-
-    conversations.push(conv);
-    console.log("🆕 Nova conversa criada:", conv);
-
-    persist();
+    state.conversations.push(conversation);
+    console.log("🆕 Nova conversa criada:", conversation);
   }
 
-  return conv;
+  return conversation;
 }
 
-async function sendWhatsAppMessage(to, text) {
-  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-    throw new Error(
-      "WHATSAPP_TOKEN ou PHONE_NUMBER_ID não configurados no .env"
-    );
-  }
-
-  const url = `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`;
-
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "text",
-    text: { body: text },
+function addMessageToConversation(conversationId, payload) {
+  const newMessage = {
+    id:
+      state.messages.length > 0
+        ? state.messages[state.messages.length - 1].id + 1
+        : 1,
+    conversationId,
+    ...payload,
   };
 
-  console.log("➡️ Enviando para WhatsApp:", JSON.stringify(payload, null, 2));
+  state.messages.push(newMessage);
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const data = await response.json();
-  console.log("⬅️ Resposta do WhatsApp:", JSON.stringify(data, null, 2));
-
-  if (!response.ok) {
-    throw new Error(
-      `Erro da API do WhatsApp: ${response.status} - ${JSON.stringify(data)}`
-    );
+  const conv = state.conversations.find((c) => c.id === conversationId);
+  if (conv) {
+    if (payload.text) {
+      conv.lastMessage = payload.text;
+    } else {
+      conv.lastMessage = "[mídia]";
+    }
+    conv.updatedAt = new Date().toISOString();
   }
 
-  return data;
-}
-
-// 🔗 FUNÇÃO PARA OBTER URL TEMPORÁRIA DA MÍDIA (usada pelo proxy)
-async function getMediaUrl(mediaId) {
-  const url = `https://graph.facebook.com/v20.0/${mediaId}`;
-
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
-  });
-
-  const json = await response.json();
-  if (!response.ok) {
-    console.error("❌ Erro ao obter URL da mídia:", json);
-    throw new Error("Erro ao obter URL da mídia");
-  }
-
-  return json.url; // link válido por alguns minutos
+  saveStateToDisk();
+  return newMessage;
 }
 
 // ===============================
-// ROTAS REST
+// ROTAS BÁSICAS / HEALTHCHECK
 // ===============================
-
-// Raiz – só para ver rapidamente no browser
 app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "API WhatsApp Plataforma rodando 🚀",
-    endpoints: {
-      health: "/health",
-      conversations: "/conversations",
-      webhook: "/webhook",
-      webhookWhatsApp: "/webhook/whatsapp",
-      mediaProxy: "/media/:mediaId",
-    },
-  });
+  res.json({ ok: true, service: "GP Labs WhatsApp API", version: "1.0.1" });
 });
 
-// Health check
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", message: "API rodando 🚀" });
-});
-
-// Lista de conversas
-app.get("/conversations", (req, res) => {
-  const ordered = [...conversations].sort(
-    (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
-  );
-  console.log("📤 GET /conversations ->", ordered.length, "conversas");
-  res.json(ordered);
-});
-
-// Histórico de mensagens de uma conversa
-app.get("/conversations/:id/messages", (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const msgs = messagesByConversation[id] || [];
-  console.log(
-    `📤 GET /conversations/${id}/messages ->`,
-    msgs.length,
-    "mensagens"
-  );
-  res.json(msgs);
-});
-
-// Enviar mensagem de TEXTO para uma conversa
-app.post("/conversations/:id/messages", async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { text } = req.body;
-
-  console.log("📥 POST /conversations/:id/messages", { id, text });
-
-  const conv = conversations.find((c) => c.id === id);
-
-  if (!conv) {
-    console.log("❌ Conversa não encontrada para id", id);
-    return res.status(404).json({ error: "Conversa não encontrada" });
-  }
-
-  try {
-    const waResponse = await sendWhatsAppMessage(conv.phone, text);
-
-    const msg = {
-      id: (messagesByConversation[id]?.length || 0) + 1,
-      direction: "out",
-      text,
-      timestamp: new Date(),
-    };
-
-    if (!messagesByConversation[id]) messagesByConversation[id] = [];
-    messagesByConversation[id].push(msg);
-
-    conv.lastMessage = text;
-    conv.updatedAt = new Date();
-
-    // 🔄 Se estava fechada, reabre ao responder pelo painel
-    if (conv.status === "closed") {
-      conv.status = "open";
-      console.log(`🔄 Conversa ${id} reaberta ao enviar resposta`);
-    }
-
-    persist();
-
-    return res.status(201).json({ msg, waResponse });
-  } catch (error) {
-    console.error("❌ Erro ao enviar para WhatsApp:", error);
-    return res.status(500).json({ error: "Erro ao enviar mensagem" });
-  }
-});
-
-// Enviar MÍDIA (imagem, vídeo, pdf, áudio) para uma conversa
-app.post("/conversations/:id/media", async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { url, type } = req.body; // type: image, audio, video, document
-
-  console.log("📥 POST /conversations/:id/media", { id, url, type });
-
-  const conv = conversations.find((c) => c.id === id);
-  if (!conv) {
-    console.log("❌ Conversa não encontrada para id", id);
-    return res.status(404).json({ error: "Conversa não encontrada" });
-  }
-
-  const payload = {
-    messaging_product: "whatsapp",
-    to: conv.phone,
-    type,
-    [type]: { link: url },
-  };
-
-  try {
-    console.log(
-      "➡️ Enviando mídia para WhatsApp:",
-      JSON.stringify(payload, null, 2)
-    );
-
-    const waResponse = await fetch(
-      `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      }
-    ).then((r) => r.json());
-
-    if (!messagesByConversation[id]) messagesByConversation[id] = [];
-
-    messagesByConversation[id].push({
-      id: messagesByConversation[id].length + 1,
-      direction: "out",
-      type,
-      mediaUrl: url,
-      timestamp: new Date(),
-    });
-
-    conv.lastMessage = `[${type}]`;
-    conv.updatedAt = new Date();
-
-    if (conv.status === "closed") {
-      conv.status = "open";
-      console.log(`🔄 Conversa ${id} reaberta (envio de mídia)`);
-    }
-
-    persist();
-
-    console.log("📤 Mídia enviada com sucesso:", waResponse);
-
-    return res.json({ ok: true, waResponse });
-  } catch (err) {
-    console.error("❌ Erro ao enviar mídia:", err);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// Atualizar status da conversa (ex: open -> closed)
-app.patch("/conversations/:id/status", (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { status } = req.body;
-
-  console.log("📥 PATCH /conversations/:id/status", { id, status });
-
-  const conv = conversations.find((c) => c.id === id);
-
-  if (!conv) {
-    console.log("❌ Conversa não encontrada para id", id);
-    return res.status(404).json({ error: "Conversa não encontrada" });
-  }
-
-  conv.status = status || "closed";
-  conv.updatedAt = new Date();
-
-  persist();
-
-  console.log(
-    `✅ Conversa ${id} atualizada para status: ${conv.status}`
-  );
-
-  return res.json(conv);
+  res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
 // ===============================
-// PROXY DE MÍDIA WHATSAPP
+// WHATSAPP WEBHOOK – VERIFICAÇÃO
 // ===============================
-app.get("/media/:mediaId", async (req, res) => {
-  const mediaId = req.params.mediaId;
-
-  console.log("📥 GET /media/:mediaId", mediaId);
-
-  try {
-    // 1) Obter URL interna da mídia na Meta
-    const mediaUrl = await getMediaUrl(mediaId);
-    if (!mediaUrl) {
-      console.error("❌ URL de mídia vazia para mediaId:", mediaId);
-      return res.status(500).json({ error: "Erro ao obter mídia" });
-    }
-
-    // 2) Baixar o binário com o token
-    const fileResp = await fetch(mediaUrl, {
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-      },
-    });
-
-    if (!fileResp.ok) {
-      console.error(
-        "❌ Erro ao baixar mídia:",
-        fileResp.status,
-        await fileResp.text()
-      );
-      return res.status(500).json({ error: "Erro ao baixar mídia" });
-    }
-
-    const contentType =
-      fileResp.headers.get("content-type") || "application/octet-stream";
-    res.setHeader("Content-Type", contentType);
-
-    const buffer = await fileResp.buffer();
-    return res.end(buffer);
-  } catch (err) {
-    console.error("❌ Erro geral no proxy de mídia:", err);
-    return res.status(500).json({ error: "Erro no proxy de mídia" });
-  }
-});
-
-// ===============================
-// WEBHOOK WHATSAPP
-// ===============================
-
-// Handler comum de verificação
-function handleWebhookVerify(req, res) {
+function whatsappVerifyHandler(req, res) {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  console.log("🔎 Verificação de webhook recebida:", {
-    mode,
-    token,
-    challenge,
-  });
-
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
     console.log("✅ Webhook verificado com sucesso!");
     return res.status(200).send(challenge);
-  } else {
-    console.log("❌ Falha na verificação do webhook");
-    return res.sendStatus(403);
   }
+
+  console.log("❌ Falha na verificação do webhook");
+  return res.sendStatus(403);
 }
 
-// Handler comum de recebimento de eventos
-async function handleWebhookPost(req, res) {
-  const body = req.body;
-
-  console.log("📩 WEBHOOK RECEBIDO:", JSON.stringify(body, null, 2));
-
+// ===============================
+// WHATSAPP WEBHOOK – RECEBIMENTO
+// ===============================
+function whatsappReceiveHandler(req, res) {
   try {
+    const body = req.body;
+
     if (body.object !== "whatsapp_business_account") {
-      console.log("⚠️ Evento não é de whatsapp_business_account");
+      return res.sendStatus(404);
+    }
+
+    const entry = body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const messages = value?.messages;
+
+    if (!messages || messages.length === 0) {
       return res.sendStatus(200);
     }
 
-    for (const entry of body.entry || []) {
-      for (const change of entry.changes || []) {
-        const value = change.value;
-        const messages = value?.messages || [];
-        const contacts = value?.contacts || [];
+    messages.forEach((msg) => {
+      console.log(`📥 Mensagem de ${msg.from} -> tipo: ${msg.type}`);
 
-        // Eventos só de status (sent/delivered/read) não têm messages[]
-        if (!Array.isArray(messages) || messages.length === 0) {
-          console.log("⚠️ Nenhuma mensagem no evento");
-          continue;
-        }
+      const conv = findOrCreateConversationFromMessage(msg, value);
 
-        for (const msg of messages) {
-          const customerPhone = msg.from;
-          const customerName =
-            contacts?.[0]?.profile?.name || customerPhone;
+      const type = msg.type;
+      let text = null;
+      let mediaId = null;
+      let mimeType = null;
 
-          const conv = findOrCreateConversationByPhone(
-            customerPhone,
-            customerName
-          );
-
-          if (!messagesByConversation[conv.id]) {
-            messagesByConversation[conv.id] = [];
-          }
-
-          // TEXTO
-          if (msg.type === "text") {
-            const text = msg.text?.body || "";
-
-            messagesByConversation[conv.id].push({
-              id: messagesByConversation[conv.id].length + 1,
-              direction: "in",
-              text,
-              timestamp: new Date(),
-            });
-
-            conv.lastMessage = text;
-            conv.updatedAt = new Date();
-            if (conv.status === "closed") {
-              conv.status = "open";
-              console.log(
-                `🔄 Reaberta conversa ${conv.id} (mensagem de texto)`
-              );
-            }
-
-            persist();
-            continue;
-          }
-
-          // IMAGEM
-          if (msg.type === "image") {
-            const mediaId = msg.image.id;
-            const mediaUrl = `${PUBLIC_BASE_URL}/media/${mediaId}`;
-
-            messagesByConversation[conv.id].push({
-              id: messagesByConversation[conv.id].length + 1,
-              direction: "in",
-              type: "image",
-              mediaUrl,
-              timestamp: new Date(),
-            });
-
-            conv.lastMessage = "[imagem]";
-            conv.updatedAt = new Date();
-            if (conv.status === "closed") conv.status = "open";
-
-            persist();
-            console.log("🖼️ Imagem recebida:", mediaId);
-            continue;
-          }
-
-          // FIGURINHA
-          if (msg.type === "sticker") {
-            const mediaId = msg.sticker.id;
-            const mediaUrl = `${PUBLIC_BASE_URL}/media/${mediaId}`;
-
-            messagesByConversation[conv.id].push({
-              id: messagesByConversation[conv.id].length + 1,
-              direction: "in",
-              type: "sticker",
-              mediaUrl,
-              timestamp: new Date(),
-            });
-
-            conv.lastMessage = "[figurinha]";
-            conv.updatedAt = new Date();
-            if (conv.status === "closed") conv.status = "open";
-
-            persist();
-            console.log("🌟 Figurinha recebida:", mediaId);
-            continue;
-          }
-
-          // ÁUDIO
-          if (msg.type === "audio") {
-            const mediaId = msg.audio.id;
-            const mediaUrl = `${PUBLIC_BASE_URL}/media/${mediaId}`;
-
-            messagesByConversation[conv.id].push({
-              id: messagesByConversation[conv.id].length + 1,
-              direction: "in",
-              type: "audio",
-              mediaUrl,
-              timestamp: new Date(),
-            });
-
-            conv.lastMessage = "[áudio]";
-            conv.updatedAt = new Date();
-            if (conv.status === "closed") conv.status = "open";
-
-            persist();
-            console.log("🎧 Áudio recebido:", mediaId);
-            continue;
-          }
-
-          console.log("⚠️ Tipo de mensagem não tratado:", msg.type);
+      if (type === "text") {
+        text = msg.text?.body || null;
+      } else if (
+        ["image", "audio", "video", "document", "sticker"].includes(type)
+      ) {
+        const mediaObj = msg[type];
+        if (mediaObj) {
+          mediaId = mediaObj.id || null;
+          mimeType = mediaObj.mime_type || null;
+          // legenda (caption) vai em text se existir
+          text = mediaObj.caption || null;
         }
       }
-    }
-  } catch (e) {
-    console.error("❌ Erro processando webhook:", e);
-  }
 
-  return res.sendStatus(200);
+      addMessageToConversation(conv.id, {
+        from: msg.from,
+        to: value.metadata?.display_phone_number || null,
+        type,
+        text,
+        mediaId,
+        mimeType,
+        direction: "inbound",
+        timestamp: new Date(Number(msg.timestamp) * 1000).toISOString(),
+      });
+    });
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ Erro ao processar webhook:", err);
+    res.sendStatus(500);
+  }
 }
 
-// Verificação do webhook (GET)
-app.get("/webhook", handleWebhookVerify);
-app.get("/webhook/whatsapp", handleWebhookVerify);
-
-// Recebimento de mensagens/eventos (POST)
-app.post("/webhook", handleWebhookPost);
-app.post("/webhook/whatsapp", handleWebhookPost);
+// Mapear /webhook e /webhook/whatsapp (para Cloudflare)
+app.get("/webhook", whatsappVerifyHandler);
+app.get("/webhook/whatsapp", whatsappVerifyHandler);
+app.post("/webhook", whatsappReceiveHandler);
+app.post("/webhook/whatsapp", whatsappReceiveHandler);
 
 // ===============================
-// INICIAR SERVIDOR
+// ENVIO DE MENSAGEM AD-HOC (NÃO É O DO CHAT)
+// ===============================
+app.post("/messages/send", async (req, res) => {
+  const { to, text } = req.body;
+
+  if (!to || !text) {
+    return res.status(400).json({ error: "to e text são obrigatórios" });
+  }
+
+  try {
+    const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      type: "text",
+      text: { body: text },
+    };
+
+    console.log("📤 Enviando mensagem ad-hoc para WhatsApp:", to);
+
+    const waRes = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await waRes.json();
+
+    if (!waRes.ok) {
+      console.error("❌ Erro ao enviar mensagem para WhatsApp:", data);
+      return res.status(waRes.status).json(data);
+    }
+
+    // Apenas registra no log; não relaciona com conversa específica
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error("❌ Erro geral ao enviar mensagem:", err);
+    res.status(500).json({ error: "Erro ao enviar mensagem" });
+  }
+});
+
+// ===============================
+// CONVERSAS & HISTÓRICO
+// ===============================
+app.get("/conversations", (req, res) => {
+  const ordered = [...state.conversations].sort(
+    (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
+  );
+  res.json(ordered);
+});
+
+app.get("/conversations/:id/messages", (req, res) => {
+  const id = Number(req.params.id);
+  const msgs = state.messages.filter((m) => m.conversationId === id);
+  console.log(
+    `📤 GET /conversations/${id}/messages -> ${msgs.length} mensagens`
+  );
+  res.json(msgs);
+});
+
+// ✅ ROTA USADA PELO FRONT PARA ENVIAR MENSAGEM NO CHAT
+app.post("/conversations/:id/messages", async (req, res) => {
+  const id = Number(req.params.id);
+  const { text } = req.body;
+
+  if (!text) {
+    return res.status(400).json({ error: "Campo text é obrigatório" });
+  }
+
+  const conversation = state.conversations.find((c) => c.id === id);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversa não encontrada" });
+  }
+
+  const to = conversation.phone;
+
+  try {
+    const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      type: "text",
+      text: { body: text },
+    };
+
+    console.log(
+      `📤 Enviando mensagem via chat (conversa ${id}) para ${to}:`,
+      text
+    );
+
+    const waRes = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await waRes.json();
+
+    if (!waRes.ok) {
+      console.error("❌ Erro ao enviar mensagem para WhatsApp:", data);
+      return res.status(waRes.status).json(data);
+    }
+
+    // Registra mensagem outbound na conversa
+    const newMsg = addMessageToConversation(id, {
+      from: "me",
+      to,
+      type: "text",
+      text,
+      direction: "outbound",
+      timestamp: new Date().toISOString(),
+    });
+
+    res.status(201).json({ ok: true, message: newMsg, wa: data });
+  } catch (err) {
+    console.error("❌ Erro geral ao enviar mensagem (chat):", err);
+    res.status(500).json({ error: "Erro ao enviar mensagem" });
+  }
+});
+
+// ===============================
+// OUTBOUND – MEDIA LIBRARY
+// ===============================
+app.get("/media-library", (req, res) => {
+  res.json(state.mediaLibrary);
+});
+
+app.post("/media-library", (req, res) => {
+  const { label, type, url } = req.body;
+
+  if (!label || !type || !url) {
+    return res
+      .status(400)
+      .json({ error: "label, type e url são obrigatórios" });
+  }
+
+  const newMedia = {
+    id:
+      state.mediaLibrary.length > 0
+        ? state.mediaLibrary[state.mediaLibrary.length - 1].id + 1
+        : 1,
+    label,
+    type,
+    url,
+    createdAt: new Date().toISOString(),
+  };
+
+  state.mediaLibrary.push(newMedia);
+  saveStateToDisk();
+
+  res.status(201).json(newMedia);
+});
+
+// ===============================
+// OUTBOUND – TEMPLATES
+// ===============================
+app.get("/templates", (req, res) => {
+  res.json(state.templates);
+});
+
+app.post("/templates", (req, res) => {
+  const { name, body, type, mediaId } = req.body;
+
+  if (!name || !body || !type) {
+    return res
+      .status(400)
+      .json({ error: "name, body e type são obrigatórios" });
+  }
+
+  const newTemplate = {
+    id:
+      state.templates.length > 0
+        ? state.templates[state.templates.length - 1].id + 1
+        : 1,
+    name,
+    body,
+    type,
+    mediaId: mediaId || null,
+  };
+
+  state.templates.push(newTemplate);
+  saveStateToDisk();
+
+  res.status(201).json(newTemplate);
+});
+
+// ===============================
+// OUTBOUND – CAMPANHAS
+// ===============================
+app.get("/campaigns", (req, res) => {
+  res.json(state.campaigns);
+});
+
+app.post("/campaigns", (req, res) => {
+  const { name, description, templateId, scheduledAt } = req.body;
+
+  if (!name || !templateId) {
+    return res
+      .status(400)
+      .json({ error: "name e templateId são obrigatórios" });
+  }
+
+  const now = new Date().toISOString();
+
+  const newCampaign = {
+    id:
+      state.campaigns.length > 0
+        ? state.campaigns[state.campaigns.length - 1].id + 1
+        : 1,
+    name,
+    description: description || "",
+    templateId,
+    status: scheduledAt ? "scheduled" : "draft",
+    createdAt: now,
+    scheduledAt: scheduledAt || null,
+  };
+
+  state.campaigns.push(newCampaign);
+  saveStateToDisk();
+
+  res.status(201).json(newCampaign);
+});
+
+// Simula envio da campanha
+app.post("/campaigns/:id/send", (req, res) => {
+  const id = Number(req.params.id);
+  const campaign = state.campaigns.find((c) => c.id === id);
+
+  if (!campaign) {
+    return res.status(404).json({ error: "Campanha não encontrada" });
+  }
+
+  const now = new Date().toISOString();
+
+  campaign.status = "sent";
+  campaign.scheduledAt = campaign.scheduledAt || now;
+
+  let report = state.campaignResults.find((r) => r.campaignId === id);
+
+  if (!report) {
+    report = {
+      campaignId: id,
+      sent: 0,
+      delivered: 0,
+      read: 0,
+      failed: 0,
+      timeline: {
+        startedAt: now,
+        finishedAt: now,
+      },
+      results: [],
+    };
+    state.campaignResults.push(report);
+  } else {
+    report.timeline.finishedAt = now;
+  }
+
+  saveStateToDisk();
+
+  res.json({ ok: true });
+});
+
+// Relatório da campanha
+app.get("/campaigns/:id/report", (req, res) => {
+  const id = Number(req.params.id);
+  const report = state.campaignResults.find((r) => r.campaignId === id);
+
+  if (!report) {
+    return res.status(404).json({ error: "Relatório não encontrado" });
+  }
+
+  res.json(report);
+});
+
+// ===============================
+// START SERVER
 // ===============================
 app.listen(PORT, () => {
+  console.log("======================================");
   console.log(`🚀 API rodando na porta ${PORT}`);
+  console.log("======================================");
 });

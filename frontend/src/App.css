@@ -1,42 +1,417 @@
+/* ===============================
+   BASE DA APLICAÇÃO
+   =============================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  margin: 0;
+  padding: 0;
+  height: 100%;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    sans-serif;
+  background: #020617;
+  color: #e5e7eb;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.app-root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(circle at top, #020617 0, #020617 40%, #020617 100%);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+/* ===============================
+   HEADER
+   =============================== */
+
+.app-header {
+  height: 60px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.98);
+  backdrop-filter: blur(16px);
+  position: sticky;
+  top: 0;
+  z-index: 30;
 }
 
-.card {
-  padding: 2em;
+.app-header-left {
+  display: flex;
+  align-items: center;
+  gap: 24px;
 }
 
-.read-the-docs {
-  color: #888;
+.app-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
+
+.app-logo-img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.app-logo-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.app-logo-main {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 14px;
+}
+
+.app-logo-sub {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-env-badge {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(22, 163, 74, 0.1);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.6);
+}
+
+/* Navegação principal (Atendimento / Campanhas) */
+
+.app-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.app-nav button {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.app-nav button:hover {
+  color: #e5e7eb;
+  background: rgba(15, 23, 42, 0.85);
+}
+
+.app-nav button.active {
+  background: #16a34a;
+  color: #ecfdf5;
+}
+
+/* ===============================
+   ÁREA PRINCIPAL
+   =============================== */
+
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 20px 20px;
+}
+
+/* Dar um acabamento no card de atendimento */
+.chat-history-layout {
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  overflow: hidden;
+  background: radial-gradient(circle at top left, #020617 0, #020617 45%, #020617 100%);
+}
+
+/* ===============================
+   OUTBOUND – CAMPANHAS / TEMPLATES / MÍDIA
+   =============================== */
+
+.outbound-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 0 0;
+  height: calc(100vh - 80px);
+  color: #e5e7eb;
+}
+
+.outbound-header {
+  margin-bottom: 4px;
+}
+
+.outbound-header h1 {
+  font-size: 24px;
+  margin: 0;
+}
+
+.outbound-header p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+/* Abas (Campanhas / Templates / Biblioteca de mídia) */
+
+.outbound-tabs {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 3px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  margin-bottom: 8px;
+}
+
+.outbound-tabs button {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.outbound-tabs button:hover {
+  color: #e5e7eb;
+}
+
+.outbound-tabs button.active {
+  background: #16a34a;
+  color: #ecfdf5;
+}
+
+/* Cards / Seções */
+
+.outbound-section {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.outbound-card {
+  background: rgba(15, 23, 42, 0.95);
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 14px 16px;
+}
+
+.outbound-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.outbound-card-header h2 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.outbound-card-header p {
+  font-size: 12px;
+  color: #9ca3af;
+  margin: 2px 0 0;
+}
+
+/* Formulário de campanha / template / mídia */
+
+.outbound-form-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.outbound-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.outbound-form-field label {
+  color: #9ca3af;
+}
+
+.outbound-form-field input,
+.outbound-form-field select,
+.outbound-form-field textarea {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: rgba(15, 23, 42, 0.95);
+  color: #e5e7eb;
+  font-size: 13px;
+  padding: 7px 9px;
+}
+
+.outbound-form-field textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* Botão principal */
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: none;
+  padding: 8px 18px;
+  background: #16a34a;
+  color: #ecfdf5;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-primary:hover {
+  background: #22c55e;
+}
+
+.btn-primary:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+/* Tabela */
+
+.outbound-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.outbound-table thead {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.outbound-table th,
+.outbound-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.8);
+  text-align: left;
+}
+
+.outbound-table th {
+  font-size: 12px;
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.outbound-table tbody tr:hover {
+  background: rgba(15, 23, 42, 0.85);
+}
+
+/* Tag de status em campanhas */
+
+.outbound-status-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.6);
+}
+
+/* Lista vazia */
+
+.outbound-empty {
+  font-size: 13px;
+  color: #6b7280;
+  padding: 6px 0;
+}
+
+/* Biblioteca de mídia */
+
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.media-card {
+  background: rgba(15, 23, 42, 0.9);
+  border-radius: 10px;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  padding: 8px;
+  font-size: 12px;
+}
+
+.media-card-thumb {
+  width: 100%;
+  height: 120px;
+  border-radius: 8px;
+  object-fit: cover;
+  margin-bottom: 6px;
+}
+
+.media-card-label {
+  font-weight: 500;
+}
+
+.media-card-meta {
+  font-size: 11px;
+  color: #9ca3af;
+}
+/* ===============================
+   RELATÓRIOS – KPIs
+   =============================== */
+
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.kpi-card {
+  background: radial-gradient(circle at top left, #022c22, #020617);
+  border-radius: 12px;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kpi-label {
+  font-size: 11px;
+  color: #a5b4fc;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.kpi-value {
+  font-size: 20px;
+  font-weight: 600;
+}
+

@@ -4,9 +4,9 @@
       "id": 1,
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
-      "lastMessage": "Oi",
+      "lastMessage": "Tudo bem com vc?",
       "status": "open",
-      "updatedAt": "2025-12-04T13:34:33.675Z"
+      "updatedAt": "2025-12-04T20:56:23.590Z"
     },
     {
       "id": 2,
@@ -239,5 +239,31 @@
         "timestamp": "2025-12-04T10:46:20.580Z"
       }
     ]
-  }
+  },
+  "messages": [
+    {
+      "id": 1,
+      "conversationId": 1,
+      "from": "me",
+      "to": "556499989978",
+      "type": "text",
+      "text": "Oi",
+      "direction": "outbound",
+      "timestamp": "2025-12-04T19:57:42.433Z"
+    },
+    {
+      "id": 2,
+      "conversationId": 1,
+      "from": "me",
+      "to": "556499989978",
+      "type": "text",
+      "text": "Tudo bem com vc?",
+      "direction": "outbound",
+      "timestamp": "2025-12-04T20:56:23.590Z"
+    }
+  ],
+  "campaigns": [],
+  "templates": [],
+  "mediaLibrary": [],
+  "campaignResults": []
 }
