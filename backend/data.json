@@ -7,6 +7,124 @@
       "password": "gplabs123"
     }
   ],
-  "conversations": [],
-  "messagesByConversation": {}
+  "conversations": [
+    {
+      "id": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "lastMessage": "Oi",
+      "status": "open",
+      "updatedAt": "2025-12-05T23:15:47.000Z",
+      "currentMode": "bot",
+      "botAttempts": 0
+    }
+  ],
+  "messagesByConversation": {
+    "1": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:15:47.000Z"
+      },
+      {
+        "id": 2,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:15:47.000Z"
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:15:47.000Z"
+      },
+      {
+        "id": 4,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:15:47.000Z"
+      },
+      {
+        "id": 5,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:15:47.000Z"
+      },
+      {
+        "id": 6,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:15:47.000Z"
+      },
+      {
+        "id": 7,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:22:37.000Z"
+      },
+      {
+        "id": 8,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:22:37.000Z"
+      },
+      {
+        "id": 9,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:22:37.000Z"
+      },
+      {
+        "id": 10,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:22:37.000Z"
+      },
+      {
+        "id": 11,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:22:37.000Z"
+      },
+      {
+        "id": 12,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:22:37.000Z"
+      },
+      {
+        "id": 13,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-05T23:15:47.000Z"
+      }
+    ]
+  }
 }

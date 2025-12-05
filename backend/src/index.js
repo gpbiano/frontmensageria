@@ -12,10 +12,27 @@ import path from "path";
 import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 
+import chatbotRouter from "./chatbot/chatbotRouter.js";
+import {
+  getChatbotSettingsForAccount,
+  decideRoute
+} from "./chatbot/rulesEngine.js";
+import { callGenAIBot } from "./chatbot/botEngine.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config();
+// ===============================
+// ENV – CARREGAR .env.{ENV}
+// ===============================
+const ENV = process.env.NODE_ENV || "development";
+const envFile = `.env.${ENV}`;
+
+console.log("🧾 Carregando arquivo de env:", envFile);
+
+dotenv.config({
+  path: path.join(process.cwd(), envFile)
+});
 
 // ===============================
 // VARIÁVEIS DE AMBIENTE
@@ -26,11 +43,16 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PORT = process.env.PORT || 3010;
 const JWT_SECRET = process.env.JWT_SECRET || "gplabs-dev-secret";
 
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+
 console.log("======================================");
 console.log("🔐 WHATSAPP_TOKEN length:", WHATSAPP_TOKEN?.length || "N/A");
 console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "N/A");
 console.log("✅ VERIFY_TOKEN:", VERIFY_TOKEN ? "definido" : "NÃO definido");
 console.log("🔑 JWT_SECRET:", JWT_SECRET ? "definido" : "NÃO definido");
+console.log("🧠 OPENAI_API_KEY:", OPENAI_API_KEY ? "definida" : "NÃO definida");
+console.log("🤖 OPENAI_MODEL:", OPENAI_MODEL);
 console.log("🚀 Porta da API:", PORT);
 console.log("======================================");
 
@@ -149,9 +171,14 @@ function findOrCreateConversationByPhone(phone, contactName) {
       phone,
       lastMessage: "",
       status: "open",
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      currentMode: "bot",
+      botAttempts: 0
     };
     state.conversations.push(conv);
+  } else {
+    if (!conv.currentMode) conv.currentMode = "bot";
+    if (typeof conv.botAttempts !== "number") conv.botAttempts = 0;
   }
 
   if (!state.messagesByConversation[conv.id]) {
@@ -187,6 +214,28 @@ function addMessageToConversation(conversationId, message) {
 
   saveStateToDisk();
   return msgWithId;
+}
+
+/**
+ * Monta o histórico para enviar ao bot (IA).
+ * Converte mensagens para o formato user/assistant.
+ */
+function getConversationHistoryForBot(conversationId, maxMessages = 10) {
+  const msgs = state.messagesByConversation[conversationId] || [];
+  const last = msgs.slice(-maxMessages);
+
+  return last.map((m) => {
+    const role = m.direction === "in" ? "user" : "assistant";
+    const content =
+      m.type === "text"
+        ? m.text || ""
+        : m.caption || `[${m.type}]`;
+
+    return {
+      role,
+      content
+    };
+  });
 }
 
 // ===============================
@@ -274,6 +323,9 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Rotas de configuração do chatbot
+app.use("/api", chatbotRouter);
 
 // ===============================
 // HEALTH / STATUS
@@ -516,17 +568,95 @@ app.post("/webhook/whatsapp", async (req, res) => {
             mediaUrl = msg.sticker?.link || null;
           }
 
+          // =======================================================
+          // PREVENÇÃO DE MENSAGENS DUPLICADAS
+          // =======================================================
+          const existingMsgs = state.messagesByConversation[conv.id] || [];
+          const alreadyExists = existingMsgs.some(
+            (m) => m.waMessageId === msg.id
+          );
+
+          if (alreadyExists) {
+            console.log("⚠️ Mensagem já processada, ignorando:", msg.id);
+            continue;
+          }
+
+          // 1) Salvar mensagem recebida
           addMessageToConversation(conv.id, {
             direction: "in",
             type,
             text,
             mediaUrl,
-            timestamp
+            timestamp,
+            waMessageId: msg.id
           });
 
           console.log(
             `💬 Nova mensagem de ${waId} adicionada à conversa ${conv.id}`
           );
+
+          // 2) Decidir se vai para BOT ou HUMANO
+          const accountId = "default"; // por enquanto uma conta única
+          const accountSettings = getChatbotSettingsForAccount(accountId);
+
+          const decision = decideRoute({
+            accountSettings,
+            conversation: conv,
+            messageText: text
+          });
+
+          console.log(
+            `🤖 Roteamento da conversa ${conv.id}:`,
+            decision.target,
+            "-",
+            decision.reason
+          );
+
+          if (decision.target === "bot" && type === "text") {
+            // 3) Montar histórico para o bot
+            const history = getConversationHistoryForBot(conv.id, 10);
+
+            // 4) Chamar IA
+            const botResult = await callGenAIBot({
+              accountSettings,
+              conversation: conv,
+              messageText: text,
+              history
+            });
+
+            const botReply = botResult.replyText || "";
+
+            try {
+              // 5) Enviar resposta via WhatsApp
+              await sendWhatsAppText(conv.phone, botReply);
+
+              const outTimestamp = new Date().toISOString();
+
+              // 6) Salvar mensagem de resposta do BOT
+              addMessageToConversation(conv.id, {
+                direction: "out",
+                type: "text",
+                text: botReply,
+                timestamp: outTimestamp,
+                fromBot: true
+              });
+
+              // 7) Atualizar tentativas do bot e modo
+              conv.botAttempts = (conv.botAttempts || 0) + 1;
+              conv.currentMode = "bot";
+              saveStateToDisk();
+            } catch (err) {
+              console.error(
+                "❌ Erro ao enviar mensagem de texto WhatsApp:",
+                err
+              );
+              throw new Error("Erro ao enviar mensagem de texto");
+            }
+          } else {
+            // Vai para humano: marcar modo humano
+            conv.currentMode = "human";
+            saveStateToDisk();
+          }
         }
       }
 
