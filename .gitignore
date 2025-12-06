@@ -9,10 +9,16 @@ pnpm-lock.yaml
 dist
 build
 
-# Ambiente
+# Ambiente (raiz)
 .env
 .env.local
 .env.*.local
+
+# Ambiente — Backend e Frontend
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
 
 # Vite
 .vite
