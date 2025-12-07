@@ -55,6 +55,7 @@ console.log("🧠 OPENAI_API_KEY:", OPENAI_API_KEY ? "definida" : "NÃO definida
 console.log("🤖 OPENAI_MODEL:", OPENAI_MODEL);
 console.log("🚀 Porta da API:", PORT);
 console.log("======================================");
+console.log("🔍 DEBUG OPENAI_API_KEY:", (OPENAI_API_KEY || "").slice(0, 15));
 
 // ===============================
 // PERSISTÊNCIA EM ARQUIVO (data.json)
@@ -249,6 +250,12 @@ async function sendWhatsAppText(to, text) {
 
   const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
 
+  console.log("➡️ Enviando mensagem de texto:", {
+    to,
+    PHONE_NUMBER_ID,
+    url
+  });
+
   const body = {
     messaging_product: "whatsapp",
     to,
@@ -268,7 +275,10 @@ async function sendWhatsAppText(to, text) {
   const data = await res.json();
 
   if (!res.ok) {
-    console.error("❌ Erro ao enviar mensagem de texto WhatsApp:", data);
+    console.error("❌ Erro ao enviar mensagem de texto WhatsApp:", {
+      status: res.status,
+      data
+    });
     throw new Error("Erro ao enviar mensagem de texto");
   }
 
@@ -283,6 +293,14 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
   }
 
   const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+
+  console.log("➡️ Enviando mídia:", {
+    to,
+    type,
+    mediaUrl,
+    PHONE_NUMBER_ID,
+    url
+  });
 
   const mediaObject = { link: mediaUrl };
   const payload = {
@@ -308,7 +326,10 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
   const data = await res.json();
 
   if (!res.ok) {
-    console.error("❌ Erro ao enviar mídia WhatsApp:", data);
+    console.error("❌ Erro ao enviar mídia WhatsApp:", {
+      status: res.status,
+      data
+    });
     throw new Error("Erro ao enviar mídia");
   }
 
@@ -426,12 +447,13 @@ app.post("/conversations/:id/messages", async (req, res) => {
     return res.status(404).json({ error: "Conversa não encontrada." });
   }
 
-  if (!text) {
+  if (!text || !text.trim()) {
     return res.status(400).json({ error: "Texto da mensagem é obrigatório." });
   }
 
   try {
-    await sendWhatsAppText(conversation.phone, text);
+    const waResponse = await sendWhatsAppText(conversation.phone, text);
+    const waMessageId = waResponse?.messages?.[0]?.id || null;
 
     const timestamp = new Date().toISOString();
 
@@ -439,7 +461,8 @@ app.post("/conversations/:id/messages", async (req, res) => {
       direction: "out",
       type: "text",
       text,
-      timestamp
+      timestamp,
+      waMessageId
     });
 
     res.status(201).json(message);
@@ -465,7 +488,13 @@ app.post("/conversations/:id/media", async (req, res) => {
   }
 
   try {
-    await sendWhatsAppMedia(conversation.phone, type, mediaUrl, caption);
+    const waResponse = await sendWhatsAppMedia(
+      conversation.phone,
+      type,
+      mediaUrl,
+      caption
+    );
+    const waMessageId = waResponse?.messages?.[0]?.id || null;
 
     const timestamp = new Date().toISOString();
 
@@ -474,7 +503,8 @@ app.post("/conversations/:id/media", async (req, res) => {
       type,
       text: caption || "",
       mediaUrl,
-      timestamp
+      timestamp,
+      waMessageId
     });
 
     res.status(201).json(message);
@@ -628,7 +658,8 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
             try {
               // 5) Enviar resposta via WhatsApp
-              await sendWhatsAppText(conv.phone, botReply);
+              const waResp = await sendWhatsAppText(conv.phone, botReply);
+              const waBotMessageId = waResp?.messages?.[0]?.id || null;
 
               const outTimestamp = new Date().toISOString();
 
@@ -638,7 +669,8 @@ app.post("/webhook/whatsapp", async (req, res) => {
                 type: "text",
                 text: botReply,
                 timestamp: outTimestamp,
-                fromBot: true
+                fromBot: true,
+                waMessageId: waBotMessageId
               });
 
               // 7) Atualizar tentativas do bot e modo
@@ -647,7 +679,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
               saveStateToDisk();
             } catch (err) {
               console.error(
-                "❌ Erro ao enviar mensagem de texto WhatsApp:",
+                "❌ Erro ao enviar mensagem de texto WhatsApp (bot):",
                 err
               );
               throw new Error("Erro ao enviar mensagem de texto");
@@ -679,3 +711,4 @@ app.post("/webhook/whatsapp", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 API rodando na porta ${PORT}`);
 });
+
