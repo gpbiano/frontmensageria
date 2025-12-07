@@ -12,10 +12,10 @@
       "id": 1,
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
-      "lastMessage": "Olá novamente! Estou aqui para ajudar. O que você precisa?",
+      "lastMessage": "Oi",
       "status": "open",
-      "updatedAt": "2025-12-07T02:46:13.620Z",
-      "currentMode": "bot",
+      "updatedAt": "2025-12-07T01:18:50.000Z",
+      "currentMode": "human",
       "botAttempts": 3
     },
     {
@@ -84,6 +84,15 @@
         "timestamp": "2025-12-07T02:46:13.620Z",
         "fromBot": true,
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMDlCMzVFNjg4QTZGM0QyMzA2AA=="
+      },
+      {
+        "id": 7,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "timestamp": "2025-12-07T01:18:50.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0E3RjY1QTZDRjlBNkVEOEM0MDMA"
       }
     ],
     "2": [
