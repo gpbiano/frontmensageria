@@ -12,9 +12,9 @@
       "id": 1,
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
-      "lastMessage": "[image]",
-      "status": "closed",
-      "updatedAt": "2025-12-08T07:11:09.140Z",
+      "lastMessage": "Oi",
+      "status": "open",
+      "updatedAt": "2025-12-08T15:24:56.000Z",
       "currentMode": "human",
       "botAttempts": 3
     },
@@ -22,9 +22,9 @@
       "id": 2,
       "contactName": "Adriano Ferreira",
       "phone": "556499477939",
-      "lastMessage": "Sim",
-      "status": "closed",
-      "updatedAt": "2025-12-08T04:24:08.857Z",
+      "lastMessage": "teste",
+      "status": "open",
+      "updatedAt": "2025-12-08T15:24:29.000Z",
       "currentMode": "human",
       "botAttempts": 3
     },
@@ -518,6 +518,88 @@
         "location": null,
         "timestamp": "2025-12-08T07:08:17.000Z",
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JGNzkwNDIzMzJGQjI2Mjc5Q0MA"
+      },
+      {
+        "id": 48,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:03:01.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JBN0I2NUZBMDEzNzE1RUY5NEQA"
+      },
+      {
+        "id": 49,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi",
+        "timestamp": "2025-12-08T14:03:13.402Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRjc3RDRBOEI3RjM3MEMzQUUzAA=="
+      },
+      {
+        "id": 50,
+        "direction": "out",
+        "type": "text",
+        "text": "OI",
+        "timestamp": "2025-12-08T14:30:08.186Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSQzVGOTc2QzRDQzVEMTNFMUZCAA=="
+      },
+      {
+        "id": 51,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:30:15.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JENkNGREJGMTVFMzg5RTM4NTQA"
+      },
+      {
+        "id": 52,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi",
+        "timestamp": "2025-12-08T15:03:22.538Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRkEzRjgzMzBDNjNGREMxNjMyAA=="
+      },
+      {
+        "id": 53,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:23:44.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IzNTZERUY1NzNGRDFCMEUwMkUA"
+      },
+      {
+        "id": 54,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi",
+        "timestamp": "2025-12-08T15:23:54.475Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRTE1NTY0MDAyMTE3RDhCMEE0AA=="
+      },
+      {
+        "id": 55,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:24:01.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I2OTkxOTFCQUU0QzBFRUU3NDEA"
+      },
+      {
+        "id": 56,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:24:56.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I3MzgxRDA3ODNFNUUzNTVCRDEA"
       }
     ],
     "2": [
@@ -668,6 +750,400 @@
         "mediaUrl": null,
         "timestamp": "2025-12-08T02:58:36.000Z",
         "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0EyN0U3RDMzODVEMzU0RDYxMjUA"
+      },
+      {
+        "id": 18,
+        "direction": "in",
+        "type": "text",
+        "text": "Bom dia!!",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T12:48:50.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0FCOTA2NzBGOTk3RDU5NUNBRkEA"
+      },
+      {
+        "id": 19,
+        "direction": "in",
+        "type": "text",
+        "text": "💪🏼",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T12:49:06.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0E1N0YwODJEMjdGRDQyMDJDNjcA"
+      },
+      {
+        "id": 20,
+        "direction": "in",
+        "type": "sticker",
+        "text": "",
+        "mediaUrl": "/uploads/sticker-1526386778414448-1765198158369.webp",
+        "location": null,
+        "timestamp": "2025-12-08T12:49:14.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0E3MDJBRDJBMDQ5QjMxNzlCOTkA"
+      },
+      {
+        "id": 21,
+        "direction": "in",
+        "type": "location",
+        "text": "Igreja de Cristo Orizona",
+        "mediaUrl": null,
+        "location": {
+          "latitude": -17.033740997314,
+          "longitude": -48.300960540771,
+          "name": "Igreja de Cristo Orizona",
+          "address": "R. Euclídes Tolentino Bretas, 4, Orizona, 75280-000, GO, BR"
+        },
+        "timestamp": "2025-12-08T12:49:28.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0FFRDNDNjg3MDRGQURBNDZDMkYA"
+      },
+      {
+        "id": 22,
+        "direction": "in",
+        "type": "image",
+        "text": "",
+        "mediaUrl": "/uploads/image-871909312153370-1765198183799.jpg",
+        "location": null,
+        "timestamp": "2025-12-08T12:49:40.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0EwMkNGMkZCQ0E3N0I3MkYyRkMA"
+      },
+      {
+        "id": 23,
+        "direction": "in",
+        "type": "audio",
+        "text": "",
+        "mediaUrl": "/uploads/audio-1644945560215791-1765198197416.ogg",
+        "location": null,
+        "timestamp": "2025-12-08T12:49:54.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0E1NzUyQTlCN0NDNUM4RkM4QTAA"
+      },
+      {
+        "id": 24,
+        "direction": "in",
+        "type": "document",
+        "text": "genivaldo.pdf",
+        "mediaUrl": "/uploads/document-1183237899929116-1765198239373.pdf",
+        "location": null,
+        "timestamp": "2025-12-08T12:50:34.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0E1Qzc0RTcwNzI0OUVFMEMzQ0EA"
+      },
+      {
+        "id": 25,
+        "direction": "in",
+        "type": "contacts",
+        "text": "",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T12:51:16.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0FGQkM2OUIyQTg2OEIyRjk1MDAA"
+      },
+      {
+        "id": 26,
+        "direction": "in",
+        "type": "text",
+        "text": "Oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:04:55.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0E5ODNBRUZGRTUwNzQyQUMxNUYA"
+      },
+      {
+        "id": 27,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi",
+        "timestamp": "2025-12-08T13:52:00.679Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSRDg3Rjc0QUU0REQ5RDQ2OEY2AA=="
+      },
+      {
+        "id": 28,
+        "direction": "in",
+        "type": "text",
+        "text": "Oiii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:52:13.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0FGRDkzQzhGNjg1OEIxMTIxNzEA"
+      },
+      {
+        "id": 29,
+        "direction": "out",
+        "type": "image",
+        "text": "",
+        "mediaUrl": "https://gplabs.com.br/assets/gp-labs-GraL4Yjg.png",
+        "timestamp": "2025-12-08T13:52:41.043Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSQjQwMEUwOTJFRjQ2NEE1M0I5AA=="
+      },
+      {
+        "id": 30,
+        "direction": "in",
+        "type": "text",
+        "text": "RECEBIDO ✅",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:53:19.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I5QTcwMUE4RDk3QzNGNDY0NDAA"
+      },
+      {
+        "id": 31,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:56:50.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I3MkM2QTIwNzkzQzhFMjk4MDgA"
+      },
+      {
+        "id": 32,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:56:55.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I0QTRGMTU1NTNBNTVGNjVFNTgA"
+      },
+      {
+        "id": 33,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:56:57.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I0RTc4QTEwODRDMDFEMjNEMTkA"
+      },
+      {
+        "id": 34,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:56:58.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0IxQjRGMzM2NEQ3MTZBNDY1NDkA"
+      },
+      {
+        "id": 35,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:56:59.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0JCNDdBM0NGNTdFMTU4NEQ2OEEA"
+      },
+      {
+        "id": 36,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T13:56:59.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I3MjZERUFDQzhCRUNERjE5MDUA"
+      },
+      {
+        "id": 37,
+        "direction": "out",
+        "type": "text",
+        "text": "Tá bom moço",
+        "timestamp": "2025-12-08T13:57:07.984Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSODY2Qjc1ODE2NjZEOTNCOTNGAA=="
+      },
+      {
+        "id": 38,
+        "direction": "in",
+        "type": "text",
+        "text": "Bom dia",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:38:59.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I4OTYzQkNGRkNBRDIwMkVFQkUA"
+      },
+      {
+        "id": 39,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:39:06.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0JGNEMzNjAwQTYyNzMxNjJEMEEA"
+      },
+      {
+        "id": 40,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi",
+        "timestamp": "2025-12-08T14:39:12.785Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSODRFMjU2NzYyOTNFMThFNEQ0AA=="
+      },
+      {
+        "id": 41,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:39:23.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I1RDAwQUYzMDNGODU1OENCNEQA"
+      },
+      {
+        "id": 42,
+        "direction": "out",
+        "type": "text",
+        "text": "Escuta",
+        "timestamp": "2025-12-08T14:39:32.331Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSRTcwQTlBMkU4OUE3MTRFN0YxAA=="
+      },
+      {
+        "id": 43,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:46:47.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0JEQjJGQTMyM0VGRDM0NzA0MTYA"
+      },
+      {
+        "id": 44,
+        "direction": "in",
+        "type": "text",
+        "text": "oiii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:47:02.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0JCQzNENjA2NUQ2MzJBMEI3ODcA"
+      },
+      {
+        "id": 45,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:47:12.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I4QkUwMENCMEFDNDZGNUUwMkIA"
+      },
+      {
+        "id": 46,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:47:17.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I5RUY3NDU5QThFMTU0RTdDQzAA"
+      },
+      {
+        "id": 47,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:47:22.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0IwNEVERUY2RUM5NDdDNEQ5NkYA"
+      },
+      {
+        "id": 48,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T14:47:41.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I0NTM4QUVBRDYwNjdENzhFNzkA"
+      },
+      {
+        "id": 49,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi",
+        "timestamp": "2025-12-08T14:48:33.155Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSMkU3RTIyODJDRjNFNDVFMUJDAA=="
+      },
+      {
+        "id": 50,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:03:06.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I5RjMzQUM2M0JFMEZGRDNBQUMA"
+      },
+      {
+        "id": 51,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:03:53.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0IwN0JERUUxQkRENEU1RjI0NEEA"
+      },
+      {
+        "id": 52,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:04:00.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0JEQzREODVGMTRENzEzRkI3OEIA"
+      },
+      {
+        "id": 53,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:04:02.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0JDRjg1MjVFMzgwMjlCNTUyRDkA"
+      },
+      {
+        "id": 54,
+        "direction": "in",
+        "type": "text",
+        "text": "oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:04:04.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I4MzNDNkM3MUJDREZEN0QwRjIA"
+      },
+      {
+        "id": 55,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:04:04.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0I5RTVBOTk3MTVENEM4MUNGRkMA"
+      },
+      {
+        "id": 56,
+        "direction": "in",
+        "type": "text",
+        "text": "teste",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:24:19.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0IyNkRBRUNBRkFBQjA2QjNFRDAA"
+      },
+      {
+        "id": 57,
+        "direction": "in",
+        "type": "text",
+        "text": "teste",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T15:24:29.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0JBRkQ4ODcxMkU2N0NDM0Y3ODQA"
       }
     ],
     "3": [

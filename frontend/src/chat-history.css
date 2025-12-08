@@ -837,4 +837,100 @@
 .msg-location-link a:hover {
   text-decoration: underline;
 }
+.message-bubble.contact-bubble {
+  background: var(--color-bg-card-alt);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-4);
+  min-width: 220px;
+  max-width: 320px;
+}
+
+.contact-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.contact-icon {
+  font-size: 18px;
+}
+
+.contact-name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.contact-org {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.contact-phones {
+  list-style: none;
+  margin: 4px 0 8px;
+  padding: 0;
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.contact-phones .phone-type {
+  color: var(--color-text-tertiary);
+}
+
+.contact-action-btn {
+  margin-top: 4px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-primary);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.contact-action-btn:hover {
+  background: rgba(52, 211, 153, 0.08);
+}
+@keyframes bot-pulse-bg {
+  0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); }
+  70% { box-shadow: 0 0 0 14px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+
+.chat-history-layout.bot-alert .chat-history-header h1 {
+  animation: bot-pulse-bg 1s ease-out infinite;
+}
+.chat-new-alert {
+  animation: pulseGreen 1.2s infinite;
+}
+
+@keyframes pulseGreen {
+  0% { box-shadow: 0 0 0px rgba(0,255,100,0.0); }
+  50% { box-shadow: 0 0 12px rgba(0,255,100,0.8); }
+ 100% { box-shadow: 0 0 0px rgba(0,255,100,0.0); }
+}
+.chat-new-alert {
+  animation: pulseGreen 1.2s ease-in-out infinite;
+  border-color: #00ff9d !important;
+}
+
+@keyframes pulseGreen {
+  0% { box-shadow: 0 0 0 rgba(0,255,150,0.0); }
+ 50% { box-shadow: 0 0 14px rgba(0,255,150,0.9); }
+100% { box-shadow: 0 0 0 rgba(0,255,150,0.0); }
+}
+.chat-history-unread-badge {
+  background: #00ff9d;
+  color: #03131f;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  margin-left: 8px;
+  min-width: 18px;
+  text-align: center;
+}
 

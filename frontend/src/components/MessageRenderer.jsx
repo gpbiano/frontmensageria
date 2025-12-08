@@ -28,6 +28,7 @@ export default function MessageRenderer({ message, isOwnMessage }) {
 
   const mediaUrl = buildMediaUrl(message.mediaUrl);
   const location = message.location;
+  const isBot = message.isBot || message.fromBot;
 
   let content;
 
@@ -170,6 +171,75 @@ export default function MessageRenderer({ message, isOwnMessage }) {
         </a>
       </div>
     );
+  } else if (message.type === "contact") {
+    const contact = message.contact || {};
+    const phones = Array.isArray(contact.phones) ? contact.phones : [];
+
+    content = (
+      <div style={{ minWidth: 220, maxWidth: 300 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 4,
+          }}
+        >
+          <span style={{ fontSize: "1.1rem" }}>📇</span>
+          <span style={{ fontWeight: 600 }}>
+            {contact.name || message.text || "Contato enviado"}
+          </span>
+        </div>
+
+        {contact.org && (
+          <div
+            style={{
+              fontSize: "0.8rem",
+              opacity: 0.8,
+              marginBottom: 4,
+            }}
+          >
+            {contact.org}
+          </div>
+        )}
+
+        {phones.length > 0 && (
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: "4px 0 8px",
+              fontSize: "0.8rem",
+            }}
+          >
+            {phones.map((p, idx) => (
+              <li key={idx} style={{ marginBottom: 2 }}>
+                <span>{p.phone || p.wa_id}</span>
+                {p.type && (
+                  <span style={{ opacity: 0.7 }}> · {p.type}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <button
+          type="button"
+          style={{
+            marginTop: 4,
+            fontSize: "0.75rem",
+            padding: "4px 10px",
+            borderRadius: 999,
+            border: "1px solid rgba(52,211,153,0.9)",
+            background: "transparent",
+            color: "#34D399",
+            cursor: "pointer",
+          }}
+        >
+          Adicionar à agenda
+        </button>
+      </div>
+    );
   } else {
     // Texto puro ou fallback
     content = <span>{message.text}</span>;
@@ -186,6 +256,11 @@ export default function MessageRenderer({ message, isOwnMessage }) {
       {timeLabel && (
         <div className="message-meta">
           <span>{timeLabel}</span>
+          {isBot && (
+            <span style={{ marginLeft: 6, fontSize: "0.75rem", opacity: 0.8 }}>
+              · 🤖 Bot
+            </span>
+          )}
         </div>
       )}
     </div>

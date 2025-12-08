@@ -17,7 +17,7 @@ import logger from "./logger.js";
 import chatbotRouter from "./chatbot/chatbotRouter.js";
 import {
   getChatbotSettingsForAccount,
-  decideRoute,
+  decideRoute
 } from "./chatbot/rulesEngine.js";
 import { callGenAIBot } from "./chatbot/botEngine.js";
 
@@ -33,7 +33,7 @@ const envFile = `.env.${ENV}`;
 logger.info({ envFile }, "🧾 Carregando arquivo de env");
 
 dotenv.config({
-  path: path.join(process.cwd(), envFile),
+  path: path.join(process.cwd(), envFile)
 });
 
 // ===============================
@@ -56,7 +56,7 @@ logger.info(
     JWT_SECRET_defined: !!JWT_SECRET,
     OPENAI_API_KEY_defined: !!OPENAI_API_KEY,
     OPENAI_MODEL,
-    PORT,
+    PORT
   },
   "✅ Configurações de ambiente carregadas"
 );
@@ -97,7 +97,7 @@ function loadStateFromDisk() {
       const initial = {
         users: [],
         conversations: [],
-        messagesByConversation: {},
+        messagesByConversation: {}
       };
       fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), "utf8");
       return initial;
@@ -109,7 +109,7 @@ function loadStateFromDisk() {
     logger.info(
       {
         conversationsCount: parsed.conversations?.length || 0,
-        DB_FILE,
+        DB_FILE
       },
       "💾 Estado carregado de data.json"
     );
@@ -120,7 +120,7 @@ function loadStateFromDisk() {
     return {
       users: [],
       conversations: [],
-      messagesByConversation: {},
+      messagesByConversation: {}
     };
   }
 }
@@ -155,7 +155,7 @@ function ensureDefaultAdminUser() {
       id: nextId,
       name: "Administrador",
       email,
-      password,
+      password
     });
   }
 
@@ -200,7 +200,7 @@ function findOrCreateConversationByPhone(phone, contactName) {
       status: "open",
       updatedAt: new Date().toISOString(),
       currentMode: "bot",
-      botAttempts: 0,
+      botAttempts: 0
     };
     state.conversations.push(conv);
 
@@ -233,10 +233,17 @@ function addMessageToConversation(conversationId, message) {
 
   const conv = findConversationById(conversationId);
   if (conv) {
-    conv.lastMessage =
-      msgWithId.type === "text"
-        ? msgWithId.text
-        : msgWithId.caption || msgWithId.text || `[${msgWithId.type}]`;
+    if (msgWithId.type === "text" || msgWithId.type === "contact") {
+      // para contato, não sobrescreve com [contact], usa texto se tiver
+      conv.lastMessage =
+        msgWithId.type === "text"
+          ? msgWithId.text
+          : msgWithId.text || msgWithId.contact?.name || "[contato]";
+    } else {
+      conv.lastMessage =
+        msgWithId.caption || msgWithId.text || `[${msgWithId.type}]`;
+    }
+
     conv.updatedAt = msgWithId.timestamp || new Date().toISOString();
 
     if (conv.status === "closed" && msgWithId.direction === "in") {
@@ -256,16 +263,18 @@ function getConversationHistoryForBot(conversationId, maxMessages = 10) {
   const msgs = state.messagesByConversation[conversationId] || [];
   const last = msgs.slice(-maxMessages);
 
-  return last.map((m) => {
-    const role = m.direction === "in" ? "user" : "assistant";
-    const content =
-      m.type === "text" ? m.text || "" : m.caption || m.text || `[${m.type}]`;
+  return last
+    .filter((m) => m.type === "text") // histórico só com texto
+    .map((m) => {
+      const role = m.direction === "in" ? "user" : "assistant";
+      const content =
+        m.type === "text" ? m.text || "" : m.caption || m.text || `[${m.type}]`;
 
-    return {
-      role,
-      content,
-    };
-  });
+      return {
+        role,
+        content
+      };
+    });
 }
 
 // ===============================
@@ -288,16 +297,16 @@ async function sendWhatsAppText(to, text) {
     messaging_product: "whatsapp",
     to,
     type: "text",
-    text: { body: text },
+    text: { body: text }
   };
 
   const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body)
   });
 
   const data = await res.json();
@@ -335,10 +344,13 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
     messaging_product: "whatsapp",
     to,
     type,
-    [type]: mediaObject,
+    [type]: mediaObject
   };
 
-  if (caption && (type === "image" || type === "video" || type === "document")) {
+  if (
+    caption &&
+    (type === "image" || type === "video" || type === "document")
+  ) {
     mediaObject.caption = caption;
   }
 
@@ -346,9 +358,9 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
     method: "POST",
     headers: {
       Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(payload)
   });
 
   const data = await res.json();
@@ -404,8 +416,8 @@ async function downloadWhatsappMedia(mediaObj, logicalType) {
         `https://graph.facebook.com/v22.0/${mediaId}`,
         {
           headers: {
-            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          },
+            Authorization: `Bearer ${WHATSAPP_TOKEN}`
+          }
         }
       );
 
@@ -429,8 +441,8 @@ async function downloadWhatsappMedia(mediaObj, logicalType) {
 
     const mediaRes = await fetch(fileUrl, {
       headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-      },
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`
+      }
     });
 
     if (!mediaRes.ok) {
@@ -487,16 +499,16 @@ app.use(
       req(req) {
         return {
           method: req.method,
-          url: req.url,
+          url: req.url
         };
       },
       res(res) {
         return {
-          statusCode: res.statusCode,
+          statusCode: res.statusCode
         };
-      },
+      }
     },
-    quietReqLogger: true,
+    quietReqLogger: true
   })
 );
 
@@ -516,7 +528,7 @@ app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "GP Labs – WhatsApp Plataforma API",
-    version: "1.0.3",
+    version: "1.0.3"
   });
 });
 
@@ -530,8 +542,8 @@ app.get("/health", (req, res) => {
     conversationsCount: state.conversations.length,
     memory: {
       rss: memory.rss,
-      heapUsed: memory.heapUsed,
-    },
+      heapUsed: memory.heapUsed
+    }
   };
 
   logger.debug(payload, "🔎 Health check");
@@ -581,8 +593,8 @@ app.post("/login", (req, res) => {
     user: {
       id: user.id,
       name: user.name,
-      email: user.email,
-    },
+      email: user.email
+    }
   });
 });
 
@@ -635,7 +647,7 @@ app.post("/conversations/:id/messages", async (req, res, next) => {
       type: "text",
       text,
       timestamp,
-      waMessageId,
+      waMessageId
     });
 
     res.status(201).json(message);
@@ -677,7 +689,7 @@ app.post("/conversations/:id/media", async (req, res, next) => {
       text: caption || "",
       mediaUrl,
       timestamp,
-      waMessageId,
+      waMessageId
     });
 
     res.status(201).json(message);
@@ -759,6 +771,62 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         Number(msg.timestamp) * 1000
       ).toISOString();
 
+      // ===========================
+      // MENSAGENS DE CONTATO
+      // ===========================
+      if (msg.type === "contacts") {
+        const existingMsgs = state.messagesByConversation[conv.id] || [];
+        const alreadyExists = existingMsgs.some(
+          (m) => m.waMessageId === msg.id
+        );
+
+        if (alreadyExists) {
+          logger.warn(
+            { waMessageId: msg.id },
+            "⚠️ Mensagem de contato já processada, ignorando"
+          );
+          continue;
+        }
+
+        const contactObj = msg.contacts?.[0];
+        const contactPayload = {
+          name:
+            contactObj?.name?.formatted_name ||
+            `${contactObj?.name?.first_name || ""} ${
+              contactObj?.name?.last_name || ""
+            }`.trim() ||
+            "Contato sem nome",
+          phones:
+            contactObj?.phones?.map((p) => ({
+              wa_id: p.wa_id,
+              type: p.type,
+              phone: p.phone
+            })) || [],
+          org: contactObj?.org?.company || null
+        };
+
+        addMessageToConversation(conv.id, {
+          direction: "in",
+          type: "contact",
+          contact: contactPayload,
+          text: contactPayload.name,
+          timestamp,
+          waMessageId: msg.id
+        });
+
+        logger.info(
+          {
+            waId,
+            conversationId: conv.id,
+            contactName: contactPayload.name
+          },
+          "📇 Contato recebido e salvo"
+        );
+
+        // para mensagens de contato, não aciona bot/humano
+        continue;
+      }
+
       let type = msg.type;
       let text = "";
       let mediaUrl = null;
@@ -769,25 +837,19 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
       // -------------------------------
       if (type === "text") {
         text = msg.text?.body || "";
-
       } else if (type === "image") {
         text = msg.image?.caption || "";
         mediaUrl = await downloadWhatsappMedia(msg.image, "image");
-
       } else if (type === "video") {
         text = msg.video?.caption || "";
         mediaUrl = await downloadWhatsappMedia(msg.video, "video");
-
       } else if (type === "audio") {
         mediaUrl = await downloadWhatsappMedia(msg.audio, "audio");
-
       } else if (type === "document") {
         text = msg.document?.caption || msg.document?.filename || "";
         mediaUrl = await downloadWhatsappMedia(msg.document, "document");
-
       } else if (type === "sticker") {
         mediaUrl = await downloadWhatsappMedia(msg.sticker, "sticker");
-
       } else if (type === "location") {
         const loc = msg.location;
         if (loc) {
@@ -795,7 +857,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
             latitude: loc.latitude,
             longitude: loc.longitude,
             name: loc.name || null,
-            address: loc.address || null,
+            address: loc.address || null
           };
 
           text =
@@ -831,7 +893,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         mediaUrl,
         location,
         timestamp,
-        waMessageId: msg.id,
+        waMessageId: msg.id
       });
 
       logger.info(
@@ -848,7 +910,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
       const decision = decideRoute({
         accountSettings,
         conversation: conv,
-        messageText: text,
+        messageText: text
       });
 
       logger.info(
@@ -863,7 +925,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
           accountSettings,
           conversation: conv,
           messageText: text,
-          history,
+          history
         });
 
         const botReply = botResult.replyText || "";
@@ -880,7 +942,8 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
             text: botReply,
             timestamp: outTimestamp,
             fromBot: true,
-            waMessageId: waBotMessageId,
+            isBot: true,
+            waMessageId: waBotMessageId
           });
 
           conv.botAttempts = (conv.botAttempts || 0) + 1;
@@ -929,7 +992,7 @@ app.use((err, req, res, next) => {
       err,
       path: req.path,
       method: req.method,
-      body: req.body,
+      body: req.body
     },
     "💥 Erro não tratado"
   );
@@ -947,4 +1010,5 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   logger.info({ port: PORT }, "🚀 API rodando");
 });
+
 
