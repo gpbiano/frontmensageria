@@ -80,11 +80,24 @@ const DB_FILE = path.join(process.cwd(), "data.json");
 
 let state = loadStateFromDisk();
 
+// garante estruturas básicas
 if (!state.users) state.users = [];
 if (!state.conversations) state.conversations = [];
 if (!state.messagesByConversation) state.messagesByConversation = {};
+if (!state.settings) {
+  state.settings = {
+    tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"]
+  };
+}
+if (!state.contacts) state.contacts = [];
 
+// cria contatos a partir das conversas existentes (migração suave)
+ensureContactsFromConversations();
+
+// garante admin padrão
 ensureDefaultAdminUser();
+
+const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24h
 
 // -------------------------------
 function loadStateFromDisk() {
@@ -96,8 +109,12 @@ function loadStateFromDisk() {
       );
       const initial = {
         users: [],
+        contacts: [],
         conversations: [],
-        messagesByConversation: {}
+        messagesByConversation: {},
+        settings: {
+          tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"]
+        }
       };
       fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), "utf8");
       return initial;
@@ -106,9 +123,12 @@ function loadStateFromDisk() {
     const raw = fs.readFileSync(DB_FILE, "utf8");
     const parsed = JSON.parse(raw);
 
+    if (!parsed.contacts) parsed.contacts = [];
+
     logger.info(
       {
         conversationsCount: parsed.conversations?.length || 0,
+        contactsCount: parsed.contacts?.length || 0,
         DB_FILE
       },
       "💾 Estado carregado de data.json"
@@ -119,8 +139,12 @@ function loadStateFromDisk() {
     logger.error({ err }, "❌ Erro ao carregar data.json");
     return {
       users: [],
+      contacts: [],
       conversations: [],
-      messagesByConversation: {}
+      messagesByConversation: {},
+      settings: {
+        tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"]
+      }
     };
   }
 }
@@ -130,6 +154,57 @@ function saveStateToDisk() {
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf8");
   } catch (err) {
     logger.error({ err }, "❌ Erro ao salvar data.json");
+  }
+}
+
+// migra contatos antigos a partir das conversas
+function ensureContactsFromConversations() {
+  if (!state.contacts) state.contacts = [];
+  const byPhone = new Map();
+  let changed = false;
+
+  // indexa contatos já existentes por telefone
+  for (const c of state.contacts) {
+    if (c.phone) byPhone.set(c.phone, c);
+  }
+
+  const convs = state.conversations || [];
+  let nextId =
+    state.contacts.length > 0
+      ? Math.max(...state.contacts.map((c) => c.id || 0)) + 1
+      : 1;
+
+  for (const conv of convs) {
+    const phone = conv.phone;
+    if (!phone) continue;
+
+    let contact = byPhone.get(phone);
+    if (!contact) {
+      contact = {
+        id: nextId++,
+        phone,
+        name: conv.contactName || phone,
+        createdAt: conv.createdAt || new Date().toISOString()
+      };
+      state.contacts.push(contact);
+      byPhone.set(phone, contact);
+      changed = true;
+    }
+
+    if (!conv.contactId) {
+      conv.contactId = contact.id;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    logger.info(
+      {
+        contactsCount: state.contacts.length
+      },
+      "🔗 Contatos migrados/associados às conversas"
+    );
+    saveStateToDisk();
   }
 }
 
@@ -168,6 +243,46 @@ function ensureDefaultAdminUser() {
 }
 
 // ===============================
+// HELPERS – CONTATOS
+// ===============================
+function getNextContactId() {
+  const ids = (state.contacts || []).map((c) => c.id || 0);
+  const max = ids.length ? Math.max(...ids) : 0;
+  return max + 1;
+}
+
+function findOrCreateContact(phone, name) {
+  if (!phone) return null;
+  if (!state.contacts) state.contacts = [];
+
+  let contact = state.contacts.find((c) => c.phone === phone);
+
+  if (!contact) {
+    contact = {
+      id: getNextContactId(),
+      phone,
+      name: name || phone,
+      createdAt: new Date().toISOString()
+    };
+    state.contacts.push(contact);
+    saveStateToDisk();
+
+    logger.info(
+      { contactId: contact.id, phone },
+      "🆕 Contato criado"
+    );
+  } else {
+    // atualiza nome se vier algo melhor
+    if (name && (!contact.name || contact.name === contact.phone)) {
+      contact.name = name;
+      saveStateToDisk();
+    }
+  }
+
+  return contact;
+}
+
+// ===============================
 // HELPERS – CONVERSAS E MENSAGENS
 // ===============================
 function getNextConversationId() {
@@ -187,37 +302,111 @@ function findConversationById(id) {
   return state.conversations.find((c) => c.id === Number(id));
 }
 
-function findOrCreateConversationByPhone(phone, contactName) {
-  let conv = state.conversations.find((c) => c.phone === phone);
+function generateSessionId(phone) {
+  const clean = (phone || "").replace(/\D/g, "").slice(-8);
+  return `S-${clean}-${Date.now()}`;
+}
 
-  if (!conv) {
-    const id = getNextConversationId();
-    conv = {
-      id,
-      contactName: contactName || phone,
-      phone,
-      lastMessage: "",
-      status: "open",
-      updatedAt: new Date().toISOString(),
-      currentMode: "bot",
-      botAttempts: 0
-    };
-    state.conversations.push(conv);
+function createNewConversation(phone, contactName, channel) {
+  const contact = findOrCreateContact(phone, contactName);
 
-    logger.info(
-      { conversationId: id, phone, contactName },
-      "🆕 Nova conversa criada"
-    );
-  } else {
-    if (!conv.currentMode) conv.currentMode = "bot";
-    if (typeof conv.botAttempts !== "number") conv.botAttempts = 0;
-  }
+  const id = getNextConversationId();
+  const sessionId = generateSessionId(phone);
 
-  if (!state.messagesByConversation[conv.id]) {
-    state.messagesByConversation[conv.id] = [];
-  }
+  const conv = {
+    id,
+    sessionId,
+    contactId: contact ? contact.id : null,
+    contactName: contact?.name || contactName || phone,
+    phone,
+    channel: channel || "whatsapp",
+    lastMessage: "",
+    status: "open",
+    updatedAt: new Date().toISOString(),
+    currentMode: "bot",
+    botAttempts: 0,
+    tags: [],
+    notes: ""
+  };
+
+  state.conversations.push(conv);
+  state.messagesByConversation[id] = state.messagesByConversation[id] || [];
+  saveStateToDisk();
+
+  logger.info(
+    { conversationId: id, sessionId, phone, contactName: conv.contactName, channel },
+    "🆕 Nova conversa (sessão) criada"
+  );
 
   return conv;
+}
+
+/**
+ * Localiza a conversa mais recente por telefone.
+ * - Se existir uma sessão aberta e com menos de 24h, reutiliza
+ * - Se estiver encerrada ou com +24h, cria nova sessão
+ */
+function findOrCreateConversationByPhone(phone, contactName, channel) {
+  // garante contato
+  const contact = findOrCreateContact(phone, contactName);
+
+  const convsForPhone = state.conversations.filter((c) => c.phone === phone);
+
+  if (convsForPhone.length === 0) {
+    return createNewConversation(phone, contactName, channel);
+  }
+
+  // pega a mais recente (por updatedAt, depois id)
+  const sorted = [...convsForPhone].sort((a, b) => {
+    const aTime = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+    const bTime = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+    if (bTime !== aTime) return bTime - aTime;
+    return b.id - a.id;
+  });
+
+  const latest = sorted[0];
+  const now = Date.now();
+  const lastUpdated = latest.updatedAt ? Date.parse(latest.updatedAt) : now;
+  const diff = now - lastUpdated;
+
+  // garante vínculo com contato
+  if (contact && latest.contactId !== contact.id) {
+    latest.contactId = contact.id;
+    latest.contactName = contact.name || latest.contactName;
+    saveStateToDisk();
+  }
+
+  // se está encerrada → sempre nova sessão
+  if (latest.status === "closed") {
+    return createNewConversation(phone, contactName, channel);
+  }
+
+  // se passou de 24h → auto-close + nova sessão
+  if (diff > SESSION_TIMEOUT_MS) {
+    latest.status = "closed";
+    latest.autoClosed = true;
+    latest.closedReason = "timeout_24h";
+    latest.updatedAt = new Date().toISOString();
+    saveStateToDisk();
+
+    logger.info(
+      { conversationId: latest.id, phone },
+      "⏱️ Sessão encerrada automaticamente (24h)"
+    );
+
+    return createNewConversation(phone, contactName, channel);
+  }
+
+  // reutiliza sessão aberta
+  if (!latest.currentMode) latest.currentMode = "bot";
+  if (typeof latest.botAttempts !== "number") latest.botAttempts = 0;
+  if (!latest.channel) latest.channel = channel || "whatsapp";
+
+  if (!state.messagesByConversation[latest.id]) {
+    state.messagesByConversation[latest.id] = [];
+  }
+
+  return latest;
 }
 
 function addMessageToConversation(conversationId, message) {
@@ -233,17 +422,10 @@ function addMessageToConversation(conversationId, message) {
 
   const conv = findConversationById(conversationId);
   if (conv) {
-    if (msgWithId.type === "text" || msgWithId.type === "contact") {
-      // para contato, não sobrescreve com [contact], usa texto se tiver
-      conv.lastMessage =
-        msgWithId.type === "text"
-          ? msgWithId.text
-          : msgWithId.text || msgWithId.contact?.name || "[contato]";
-    } else {
-      conv.lastMessage =
-        msgWithId.caption || msgWithId.text || `[${msgWithId.type}]`;
-    }
-
+    conv.lastMessage =
+      msgWithId.type === "text"
+        ? msgWithId.text
+        : msgWithId.caption || msgWithId.text || `[${msgWithId.type}]`;
     conv.updatedAt = msgWithId.timestamp || new Date().toISOString();
 
     if (conv.status === "closed" && msgWithId.direction === "in") {
@@ -263,18 +445,16 @@ function getConversationHistoryForBot(conversationId, maxMessages = 10) {
   const msgs = state.messagesByConversation[conversationId] || [];
   const last = msgs.slice(-maxMessages);
 
-  return last
-    .filter((m) => m.type === "text") // histórico só com texto
-    .map((m) => {
-      const role = m.direction === "in" ? "user" : "assistant";
-      const content =
-        m.type === "text" ? m.text || "" : m.caption || m.text || `[${m.type}]`;
+  return last.map((m) => {
+    const role = m.direction === "in" ? "user" : "assistant";
+    const content =
+      m.type === "text" ? m.text || "" : m.caption || m.text || `[${m.type}]`;
 
-      return {
-        role,
-        content
-      };
-    });
+    return {
+      role,
+      content
+    };
+  });
 }
 
 // ===============================
@@ -347,10 +527,7 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
     [type]: mediaObject
   };
 
-  if (
-    caption &&
-    (type === "image" || type === "video" || type === "document")
-  ) {
+  if (caption && (type === "image" || type === "video" || type === "document")) {
     mediaObject.caption = caption;
   }
 
@@ -528,7 +705,7 @@ app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "GP Labs – WhatsApp Plataforma API",
-    version: "1.0.3"
+    version: "1.0.4"
   });
 });
 
@@ -540,6 +717,7 @@ app.get("/health", (req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     conversationsCount: state.conversations.length,
+    contactsCount: (state.contacts || []).length,
     memory: {
       rss: memory.rss,
       heapUsed: memory.heapUsed
@@ -596,6 +774,13 @@ app.post("/login", (req, res) => {
       email: user.email
     }
   });
+});
+
+// ===============================
+// ROTAS DE CONTATOS (para futuro dash)
+// ===============================
+app.get("/contacts", (req, res) => {
+  res.json(state.contacts || []);
 });
 
 // ===============================
@@ -699,9 +884,10 @@ app.post("/conversations/:id/media", async (req, res, next) => {
   }
 });
 
+// alterar status + tags
 app.patch("/conversations/:id/status", (req, res) => {
   const { id } = req.params;
-  const { status } = req.body || {};
+  const { status, tags } = req.body || {};
 
   const conversation = findConversationById(id);
   if (!conversation) {
@@ -715,6 +901,28 @@ app.patch("/conversations/:id/status", (req, res) => {
   }
 
   conversation.status = status;
+  conversation.updatedAt = new Date().toISOString();
+
+  if (Array.isArray(tags)) {
+    conversation.tags = tags;
+  }
+
+  saveStateToDisk();
+
+  res.json(conversation);
+});
+
+// salvar observações do atendente
+app.patch("/conversations/:id/notes", (req, res) => {
+  const { id } = req.params;
+  const { notes } = req.body || {};
+
+  const conversation = findConversationById(id);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversa não encontrada." });
+  }
+
+  conversation.notes = notes || "";
   conversation.updatedAt = new Date().toISOString();
   saveStateToDisk();
 
@@ -732,10 +940,7 @@ app.get("/webhook/whatsapp", (req, res) => {
   const received = (token || "").trim();
   const expected = (VERIFY_TOKEN || "").trim();
 
-  logger.info(
-    { mode, received, expected },
-    "🌐 GET /webhook/whatsapp"
-  );
+  logger.info({ mode, received, expected }, "🌐 GET /webhook/whatsapp");
 
   if (mode === "subscribe" && received === expected) {
     logger.info("✅ Webhook Verificado com sucesso.");
@@ -764,77 +969,24 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
     for (const msg of messages) {
       const waId = msg.from;
       const profileName = value?.contacts?.[0]?.profile?.name;
+      const channel = "whatsapp";
 
-      const conv = findOrCreateConversationByPhone(waId, profileName);
+      const conv = findOrCreateConversationByPhone(
+        waId,
+        profileName,
+        channel
+      );
 
       const timestamp = new Date(
         Number(msg.timestamp) * 1000
       ).toISOString();
-
-      // ===========================
-      // MENSAGENS DE CONTATO
-      // ===========================
-      if (msg.type === "contacts") {
-        const existingMsgs = state.messagesByConversation[conv.id] || [];
-        const alreadyExists = existingMsgs.some(
-          (m) => m.waMessageId === msg.id
-        );
-
-        if (alreadyExists) {
-          logger.warn(
-            { waMessageId: msg.id },
-            "⚠️ Mensagem de contato já processada, ignorando"
-          );
-          continue;
-        }
-
-        const contactObj = msg.contacts?.[0];
-        const contactPayload = {
-          name:
-            contactObj?.name?.formatted_name ||
-            `${contactObj?.name?.first_name || ""} ${
-              contactObj?.name?.last_name || ""
-            }`.trim() ||
-            "Contato sem nome",
-          phones:
-            contactObj?.phones?.map((p) => ({
-              wa_id: p.wa_id,
-              type: p.type,
-              phone: p.phone
-            })) || [],
-          org: contactObj?.org?.company || null
-        };
-
-        addMessageToConversation(conv.id, {
-          direction: "in",
-          type: "contact",
-          contact: contactPayload,
-          text: contactPayload.name,
-          timestamp,
-          waMessageId: msg.id
-        });
-
-        logger.info(
-          {
-            waId,
-            conversationId: conv.id,
-            contactName: contactPayload.name
-          },
-          "📇 Contato recebido e salvo"
-        );
-
-        // para mensagens de contato, não aciona bot/humano
-        continue;
-      }
 
       let type = msg.type;
       let text = "";
       let mediaUrl = null;
       let location = null;
 
-      // -------------------------------
       // TIPOS DE MENSAGEM
-      // -------------------------------
       if (type === "text") {
         text = msg.text?.body || "";
       } else if (type === "image") {
@@ -867,9 +1019,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         }
       }
 
-      // -------------------------------
       // PREVENÇÃO DE DUPLICADOS
-      // -------------------------------
       const existingMsgs = state.messagesByConversation[conv.id] || [];
       const alreadyExists = existingMsgs.some(
         (m) => m.waMessageId === msg.id
@@ -883,9 +1033,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         continue;
       }
 
-      // -------------------------------
       // SALVAR MENSAGEM
-      // -------------------------------
       addMessageToConversation(conv.id, {
         direction: "in",
         type,
@@ -901,9 +1049,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         "💬 Nova mensagem recebida e salva"
       );
 
-      // -------------------------------
       // DECISÃO BOT / HUMANO
-      // -------------------------------
       const accountId = "default";
       const accountSettings = getChatbotSettingsForAccount(accountId);
 
@@ -942,7 +1088,6 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
             text: botReply,
             timestamp: outTimestamp,
             fromBot: true,
-            isBot: true,
             waMessageId: waBotMessageId
           });
 

@@ -11,7 +11,8 @@ import {
   fetchMessages,
   sendTextMessage,
   sendMediaMessage,
-  updateConversationStatus
+  updateConversationStatus,
+  updateConversationNotes
 } from "./api";
 import ChatPanel from "./components/ChatPanel.jsx";
 
@@ -21,9 +22,11 @@ const QUIET_END_HOUR = 7; // 07h
 
 export default function ChatHistoryPage() {
   const [conversations, setConversations] = useState([]);
-  const [selectedConversationId, setSelectedConversationId] = useState(null);
+  const [selectedConversationId, setSelectedConversationId] =
+    useState(null);
   const [messages, setMessages] = useState([]);
-  const [loadingConversations, setLoadingConversations] = useState(false);
+  const [loadingConversations, setLoadingConversations] =
+    useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("open"); // Abertas por padrão
@@ -45,8 +48,21 @@ export default function ChatHistoryPage() {
   const lastActivityRef = useRef(Date.now());
 
   // configurações de notificação
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [notificationsEnabled, setNotificationsEnabled] =
+    useState(true);
   const [quietHoursEnabled, setQuietHoursEnabled] = useState(false);
+
+  // notas do atendente (sessão atual)
+  const [notesDraft, setNotesDraft] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
+
+  // modal de histórico de chats anteriores
+  const [historyModal, setHistoryModal] = useState({
+    open: false,
+    loading: false,
+    title: "",
+    messages: []
+  });
 
   // ---------------------------------------------
   // HELPERS – HORÁRIO SILENCIOSO / NOTIFICAÇÕES
@@ -64,7 +80,10 @@ export default function ChatHistoryPage() {
     return hour >= QUIET_START_HOUR && hour < QUIET_END_HOUR;
   }
 
-  function playNotification(type, { intensity = "soft", force = false } = {}) {
+  function playNotification(
+    type,
+    { intensity = "soft", force = false } = {}
+  ) {
     if (!notificationsEnabled && !force) return;
     if (!force && isWithinQuietHours()) return;
 
@@ -105,7 +124,10 @@ export default function ChatHistoryPage() {
         setQuietHoursEnabled(parsed.quietHoursEnabled);
       }
     } catch (e) {
-      console.warn("Não foi possível carregar config de notificações:", e);
+      console.warn(
+        "Não foi possível carregar config de notificações:",
+        e
+      );
     }
   }, []);
 
@@ -117,7 +139,10 @@ export default function ChatHistoryPage() {
       });
       localStorage.setItem(NOTIF_KEY, payload);
     } catch (e) {
-      console.warn("Não foi possível salvar config de notificações:", e);
+      console.warn(
+        "Não foi possível salvar config de notificações:",
+        e
+      );
     }
   }, [notificationsEnabled, quietHoursEnabled]);
 
@@ -133,7 +158,10 @@ export default function ChatHistoryPage() {
       lastActivityRef.current = Date.now();
     }
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    );
     window.addEventListener("mousemove", markActivity);
     window.addEventListener("keydown", markActivity);
     window.addEventListener("click", markActivity);
@@ -157,7 +185,9 @@ export default function ChatHistoryPage() {
   const loadConversations = useCallback(
     async (options = { playSoundOnNew: false }) => {
       try {
-        setLoadingConversations((prev) => prev && !options.playSoundOnNew);
+        setLoadingConversations(
+          (prev) => prev && !options.playSoundOnNew
+        );
 
         const data = await fetchConversations(statusFilter);
         const list = Array.isArray(data) ? data : [];
@@ -208,11 +238,13 @@ export default function ChatHistoryPage() {
             const prevUpdatedAt = prevMap.get(conv.id);
             const currentUpdatedAt = conv.updatedAt || null;
 
-            const isNewConv = prevUpdatedAt == null && prevMap.size > 0;
+            const isNewConv =
+              prevUpdatedAt == null && prevMap.size > 0;
             const isUpdatedOtherConv =
               prevUpdatedAt &&
               currentUpdatedAt &&
-              new Date(currentUpdatedAt) > new Date(prevUpdatedAt) &&
+              new Date(currentUpdatedAt) >
+                new Date(prevUpdatedAt) &&
               conv.id !== selectedConversationId;
 
             if (isNewConv || isUpdatedOtherConv) {
@@ -244,7 +276,8 @@ export default function ChatHistoryPage() {
         // NOTIFICAÇÃO – NOVO CHAT
         if (newChatDetected) {
           const { isIdle } = getIdleInfo();
-          const intensity = !isTabActive || isIdle ? "strong" : "soft";
+          const intensity =
+            !isTabActive || isIdle ? "strong" : "soft";
           playNotification("new-chat", { intensity });
         }
 
@@ -296,7 +329,7 @@ export default function ChatHistoryPage() {
   }, [loadConversations]);
 
   // ---------------------------------------------
-  // LOAD MENSAGENS
+  // LOAD MENSAGENS DA CONVERSA ATUAL
   // ---------------------------------------------
   const loadMessages = useCallback(async () => {
     if (!selectedConversationId) return;
@@ -315,7 +348,7 @@ export default function ChatHistoryPage() {
     loadMessages();
   }, [loadMessages]);
 
-  // polling de mensagens da conversa atual
+  // polling da conversa atual
   useEffect(() => {
     if (!selectedConversationId) return;
     const interval = setInterval(loadMessages, 3000);
@@ -384,7 +417,10 @@ export default function ChatHistoryPage() {
 
   const handleSendText = async (text) => {
     if (!selectedConversationId || !text.trim()) return;
-    const created = await sendTextMessage(selectedConversationId, text.trim());
+    const created = await sendTextMessage(
+      selectedConversationId,
+      text.trim()
+    );
     setMessages((prev) => [...prev, created]);
 
     // som de envio (sempre local, feedback rápido)
@@ -412,11 +448,16 @@ export default function ChatHistoryPage() {
     } catch (e) {}
   };
 
-  const handleChangeStatus = async (conversationId, newStatus) => {
+  const handleChangeStatus = async (
+    conversationId,
+    newStatus,
+    extraData
+  ) => {
     try {
       const updated = await updateConversationStatus(
         conversationId,
-        newStatus
+        newStatus,
+        extraData
       );
 
       setConversations((prev) =>
@@ -436,6 +477,57 @@ export default function ChatHistoryPage() {
     } catch (err) {
       console.error("Erro ao alterar status:", err);
     }
+  };
+
+  const handleSaveNotes = async () => {
+    if (!selectedConversationId) return;
+    try {
+      setSavingNotes(true);
+      const updated = await updateConversationNotes(
+        selectedConversationId,
+        notesDraft
+      );
+
+      setConversations((prev) =>
+        prev.map((c) => (c.id === updated.id ? updated : c))
+      );
+    } catch (err) {
+      console.error("Erro ao salvar observação:", err);
+    } finally {
+      setSavingNotes(false);
+    }
+  };
+
+  const handleOpenPreviousSession = async (sessionConv) => {
+    try {
+      setHistoryModal({
+        open: true,
+        loading: true,
+        title:
+          sessionConv.createdAt || sessionConv.updatedAt || "",
+        messages: []
+      });
+
+      const data = await fetchMessages(sessionConv.id);
+
+      setHistoryModal((prev) => ({
+        ...prev,
+        loading: false,
+        messages: Array.isArray(data) ? data : []
+      }));
+    } catch (err) {
+      console.error("Erro ao carregar histórico:", err);
+      setHistoryModal((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleCloseHistoryModal = () => {
+    setHistoryModal({
+      open: false,
+      loading: false,
+      title: "",
+      messages: []
+    });
   };
 
   // ---------------------------------------------
@@ -459,210 +551,392 @@ export default function ChatHistoryPage() {
 
   const selectedConversation = useMemo(
     () =>
-      conversations.find((c) => c.id === selectedConversationId) || null,
+      conversations.find((c) => c.id === selectedConversationId) ||
+      null,
     [conversations, selectedConversationId]
   );
+
+  // quando troca de conversa, sincronizar notas
+  useEffect(() => {
+    if (selectedConversation) {
+      setNotesDraft(selectedConversation.notes || "");
+    } else {
+      setNotesDraft("");
+    }
+  }, [selectedConversation]);
+
+  // chats anteriores: todas as outras conversas do mesmo telefone
+  const previousSessions = useMemo(() => {
+    if (!selectedConversation) return [];
+    return conversations
+      .filter(
+        (c) =>
+          c.phone === selectedConversation.phone &&
+          c.id !== selectedConversation.id
+      )
+      .sort((a, b) => {
+        const da = new Date(a.updatedAt || a.createdAt || 0);
+        const db = new Date(b.updatedAt || b.createdAt || 0);
+        return db - da;
+      });
+  }, [conversations, selectedConversation]);
 
   // ---------------------------------------------
   // RENDER
   // ---------------------------------------------
   return (
-    <div
-      className={
-        "chat-history-layout" + (botAlert ? " bot-alert" : "")
-      }
-    >
-      {/* COLUNA ESQUERDA – CONVERSAS */}
-      <aside className="chat-history-sidebar">
-        <div className="chat-history-header">
-          <div>
-            <h1>Conversas</h1>
-            <p>Atendimentos em tempo real</p>
-          </div>
-
-          <div className="chat-history-notification-controls">
-            <label className="notif-toggle">
-              <input
-                type="checkbox"
-                checked={notificationsEnabled}
-                onChange={(e) =>
-                  setNotificationsEnabled(e.target.checked)
-                }
-              />
-              <span>🔊 Som</span>
-            </label>
-            <label className="notif-toggle">
-              <input
-                type="checkbox"
-                checked={quietHoursEnabled}
-                onChange={(e) =>
-                  setQuietHoursEnabled(e.target.checked)
-                }
-              />
-              <span>🔕 Silêncio</span>
-            </label>
-          </div>
-        </div>
-
-        <div className="chat-history-search">
-          <input
-            placeholder="Buscar por nome, telefone ou mensagem..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-
-        <div className="chat-history-filters">
-          <button
-            className={statusFilter === "open" ? "active" : ""}
-            onClick={() => setStatusFilter("open")}
-          >
-            Abertas
-          </button>
-          <button
-            className={statusFilter === "closed" ? "active" : ""}
-            onClick={() => setStatusFilter("closed")}
-          >
-            Encerradas
-          </button>
-          <button
-            className={statusFilter === "all" ? "active" : ""}
-            onClick={() => setStatusFilter("all")}
-          >
-            Todas
-          </button>
-        </div>
-
-        <div className="chat-history-list">
-          {loadingConversations && (
-            <div className="chat-history-empty">
-              Carregando conversas...
+    <>
+      <div
+        className={
+          "chat-history-layout" + (botAlert ? " bot-alert" : "")
+        }
+      >
+        {/* COLUNA ESQUERDA – CONVERSAS */}
+        <aside className="chat-history-sidebar">
+          <div className="chat-history-header">
+            <div>
+              <h1>Conversas</h1>
+              <p>Atendimentos em tempo real</p>
             </div>
-          )}
 
-          {!loadingConversations &&
-            filteredConversations.length === 0 && (
+            <div className="chat-history-notification-controls">
+              <label className="notif-toggle">
+                <input
+                  type="checkbox"
+                  checked={notificationsEnabled}
+                  onChange={(e) =>
+                    setNotificationsEnabled(e.target.checked)
+                  }
+                />
+                <span>🔊 Som</span>
+              </label>
+              <label className="notif-toggle">
+                <input
+                  type="checkbox"
+                  checked={quietHoursEnabled}
+                  onChange={(e) =>
+                    setQuietHoursEnabled(e.target.checked)
+                  }
+                />
+                <span>🔕 Silêncio</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="chat-history-search">
+            <input
+              placeholder="Buscar por nome, telefone ou mensagem..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          <div className="chat-history-filters">
+            <button
+              className={statusFilter === "open" ? "active" : ""}
+              onClick={() => setStatusFilter("open")}
+            >
+              Abertas
+            </button>
+            <button
+              className={statusFilter === "closed" ? "active" : ""}
+              onClick={() => setStatusFilter("closed")}
+            >
+              Encerradas
+            </button>
+            <button
+              className={statusFilter === "all" ? "active" : ""}
+              onClick={() => setStatusFilter("all")}
+            >
+              Todas
+            </button>
+          </div>
+
+          <div className="chat-history-list">
+            {loadingConversations && (
               <div className="chat-history-empty">
-                Nenhuma conversa encontrada.
+                Carregando conversas...
               </div>
             )}
 
-          {filteredConversations.map((conv) => {
-            const unread = unreadCounts[conv.id] || 0;
+            {!loadingConversations &&
+              filteredConversations.length === 0 && (
+                <div className="chat-history-empty">
+                  Nenhuma conversa encontrada.
+                </div>
+              )}
 
-            return (
-              <button
-                key={conv.id}
-                className={
-                  "chat-history-item" +
-                  (conv.id === selectedConversationId
-                    ? " selected"
-                    : "")
-                }
-                onClick={() => handleSelectConversation(conv.id)}
-              >
-                <div className="chat-history-item-main">
-                  <span className="chat-history-contact-name">
-                    {conv.contactName || conv.phone}
-                  </span>
-                  <span className="chat-history-status">
-                    {conv.status === "open" ? "Aberta" : "Encerrada"}
-                  </span>
+            {filteredConversations.map((conv) => {
+              const unread = unreadCounts[conv.id] || 0;
 
-                  {unread > 0 && (
-                    <span className="chat-history-unread-badge">
-                      {unread}
+              // canal: whatsapp / instagram / facebook / web
+              let channelIcon = null;
+              if (conv.channel === "whatsapp") {
+                channelIcon = "/channels/whatsapp.svg";
+              } else if (conv.channel === "instagram") {
+                channelIcon = "/channels/instagram.svg";
+              } else if (conv.channel === "facebook") {
+                channelIcon = "/channels/facebook.svg";
+              } else if (conv.channel === "web") {
+                channelIcon = "/channels/web.svg";
+              }
+
+              return (
+                <button
+                  key={conv.id}
+                  className={
+                    "chat-history-item" +
+                    (conv.id === selectedConversationId
+                      ? " selected"
+                      : "")
+                  }
+                  onClick={() => handleSelectConversation(conv.id)}
+                >
+                  <div className="chat-history-item-main">
+                    <span className="chat-history-contact-name">
+                      {conv.contactName || conv.phone}
                     </span>
-                  )}
-                </div>
-                <div className="chat-history-phone">
-                  {conv.phone}
-                </div>
-                <div className="chat-history-last-message">
-                  {conv.lastMessage || "Sem mensagens ainda"}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </aside>
 
-      {/* COLUNA CENTRAL + DIREITA */}
-      <section className="chat-history-main">
-        {selectedConversation ? (
-          <div
-            style={{
-              display: "flex",
-              flex: 1,
-              minHeight: 0
-            }}
-          >
-            {/* CHAT (CENTRO) */}
+                    {channelIcon && (
+                      <img
+                        src={channelIcon}
+                        alt={conv.channel}
+                        className="chat-channel-icon"
+                      />
+                    )}
+
+                    <span className="chat-history-status">
+                      {conv.status === "open"
+                        ? "Aberta"
+                        : "Encerrada"}
+                    </span>
+
+                    {unread > 0 && (
+                      <span className="chat-history-unread-badge">
+                        {unread}
+                      </span>
+                    )}
+                  </div>
+                  <div className="chat-history-phone">
+                    {conv.phone}
+                  </div>
+                  <div className="chat-history-last-message">
+                    {conv.lastMessage || "Sem mensagens ainda"}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        {/* COLUNA CENTRAL + DIREITA */}
+        <section className="chat-history-main">
+          {selectedConversation ? (
             <div
               style={{
+                display: "flex",
                 flex: 1,
-                minWidth: 0,
-                height: "100%"
+                minHeight: 0
               }}
             >
-              <ChatPanel
-                conversation={selectedConversation}
-                messages={messages}
-                loadingMessages={loadingMessages}
-                onSendText={handleSendText}
-                onSendMedia={handleSendMedia}
-                onChangeStatus={handleChangeStatus}
-              />
+              {/* CHAT (CENTRO) */}
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: "100%"
+                }}
+              >
+                <ChatPanel
+                  conversation={selectedConversation}
+                  messages={messages}
+                  loadingMessages={loadingMessages}
+                  onSendText={handleSendText}
+                  onSendMedia={handleSendMedia}
+                  onChangeStatus={handleChangeStatus}
+                />
+              </div>
+
+              {/* PAINEL DE CONTATO (DIREITA) */}
+              <aside className="chat-contact-panel">
+                <div className="chat-contact-section">
+                  <div className="chat-contact-label">
+                    Informações do contato
+                  </div>
+                  <div className="chat-contact-name">
+                    {selectedConversation.contactName || "Sem nome"}
+                  </div>
+                  <div className="chat-contact-phone">
+                    {selectedConversation.phone}
+                  </div>
+                  <div className="chat-contact-channel">
+                    <span>Canal de origem:</span>
+                    {selectedConversation.channel && (
+                      <>
+                        {selectedConversation.channel}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="chat-contact-section">
+                  <div className="chat-contact-label">
+                    Última atualização
+                  </div>
+                  <div className="chat-contact-value">
+                    {selectedConversation.updatedAt
+                      ? new Date(
+                          selectedConversation.updatedAt
+                        ).toLocaleString()
+                      : "—"}
+                  </div>
+                </div>
+
+                <div className="chat-contact-section">
+                  <div className="chat-contact-label">
+                    Tags da sessão
+                  </div>
+                  <div className="chat-contact-value">
+                    {selectedConversation.tags &&
+                    selectedConversation.tags.length > 0
+                      ? selectedConversation.tags.join(", ")
+                      : "Nenhuma tag aplicada."}
+                  </div>
+                </div>
+
+                <div className="chat-contact-section">
+                  <div className="chat-contact-label">
+                    Observações do atendente
+                  </div>
+                  <textarea
+                    className="chat-contact-notes-input"
+                    placeholder="Escreva uma anotação sobre este atendimento..."
+                    value={notesDraft}
+                    onChange={(e) =>
+                      setNotesDraft(e.target.value)
+                    }
+                  />
+                  <button
+                    className="chat-save-notes-button"
+                    onClick={handleSaveNotes}
+                    disabled={savingNotes}
+                  >
+                    {savingNotes
+                      ? "Salvando..."
+                      : "Salvar observação"}
+                  </button>
+                </div>
+
+                <div className="chat-contact-section">
+                  <div className="chat-contact-label">
+                    Chats anteriores
+                  </div>
+                  {previousSessions.length === 0 ? (
+                    <div className="chat-contact-value">
+                      Nenhuma sessão anterior para este contato.
+                    </div>
+                  ) : (
+                    <ul className="chat-previous-sessions-list">
+                      {previousSessions.map((s) => (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            className="chat-previous-session-item"
+                            onClick={() =>
+                              handleOpenPreviousSession(s)
+                            }
+                          >
+                            <span>
+                              {new Date(
+                                s.createdAt || s.updatedAt
+                              ).toLocaleString()}
+                            </span>
+                            <span className="chat-previous-session-status">
+                              {s.status === "open"
+                                ? "Aberta"
+                                : "Encerrada"}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </aside>
             </div>
+          ) : (
+            <div className="chat-history-placeholder">
+              <h2>Sem conversa selecionada</h2>
+              <p>
+                Escolha uma conversa na coluna à esquerda para
+                iniciar o atendimento. Novos chats aparecerão
+                automaticamente quando chegarem.
+              </p>
+            </div>
+          )}
+        </section>
+      </div>
 
-            {/* PAINEL DE CONTATO (DIREITA) */}
-            <aside className="chat-contact-panel">
-              <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Informações do contato
+      {/* MODAL DE CHAT ANTERIOR (somente leitura) */}
+      {historyModal.open && (
+        <div className="chat-history-modal-backdrop">
+          <div className="chat-history-modal">
+            <div className="chat-history-modal-header">
+              <h3>Chat anterior</h3>
+              <button onClick={handleCloseHistoryModal}>
+                Fechar
+              </button>
+            </div>
+            <div className="chat-history-modal-subtitle">
+              {historyModal.title &&
+                new Date(historyModal.title).toLocaleString()}
+            </div>
+            <div className="chat-history-modal-body">
+              {historyModal.loading ? (
+                <p>Carregando mensagens...</p>
+              ) : historyModal.messages.length === 0 ? (
+                <p>Sem mensagens nesta sessão.</p>
+              ) : (
+                <div className="chat-history-modal-messages">
+                  {historyModal.messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={
+                        "message-row " +
+                        (msg.direction === "in"
+                          ? "message-row-in"
+                          : "message-row-out")
+                      }
+                    >
+                      <div
+                        className={
+                          msg.direction === "in"
+                            ? "message-bubble-in"
+                            : "message-bubble-out"
+                        }
+                      >
+                        <div className="chat-message-text">
+                          {msg.text ||
+                            msg.body ||
+                            "[mensagem sem texto]"}
+                        </div>
+                        <div className="message-timestamp">
+                          {msg.timestamp
+                            ? new Date(
+                                msg.timestamp
+                              ).toLocaleString()
+                            : ""}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="chat-contact-name">
-                  {selectedConversation.contactName || "Sem nome"}
-                </div>
-                <div className="chat-contact-phone">
-                  {selectedConversation.phone}
-                </div>
-              </div>
-
-              <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Última atualização
-                </div>
-                <div className="chat-contact-value">
-                  {selectedConversation.updatedAt
-                    ? new Date(
-                        selectedConversation.updatedAt
-                      ).toLocaleString()
-                    : "—"}
-                </div>
-              </div>
-
-              <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Tags / Observações
-                </div>
-                <div className="chat-contact-value">
-                  Nenhuma tag cadastrada.
-                </div>
-              </div>
-            </aside>
+              )}
+            </div>
           </div>
-        ) : (
-          <div className="chat-history-placeholder">
-            <h2>Sem conversa selecionada</h2>
-            <p>
-              Escolha uma conversa na coluna à esquerda para iniciar
-              o atendimento. Novos chats aparecerão automaticamente
-              quando chegarem.
-            </p>
-          </div>
-        )}
-      </section>
-    </div>
+        </div>
+      )}
+    </>
   );
 }
+
