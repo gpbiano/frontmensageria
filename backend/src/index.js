@@ -70,7 +70,6 @@ process.on("unhandledRejection", (reason) => {
 
 process.on("uncaughtException", (err) => {
   logger.fatal({ err }, "🚨 Uncaught Exception");
-  // Em produção poderia fazer um shutdown mais elegante
   process.exit(1);
 });
 
@@ -237,7 +236,7 @@ function addMessageToConversation(conversationId, message) {
     conv.lastMessage =
       msgWithId.type === "text"
         ? msgWithId.text
-        : msgWithId.caption || `[${msgWithId.type}]`;
+        : msgWithId.caption || msgWithId.text || `[${msgWithId.type}]`;
     conv.updatedAt = msgWithId.timestamp || new Date().toISOString();
 
     if (conv.status === "closed" && msgWithId.direction === "in") {
@@ -260,7 +259,7 @@ function getConversationHistoryForBot(conversationId, maxMessages = 10) {
   return last.map((m) => {
     const role = m.direction === "in" ? "user" : "assistant";
     const content =
-      m.type === "text" ? m.text || "" : m.caption || `[${m.type}]`;
+      m.type === "text" ? m.text || "" : m.caption || m.text || `[${m.type}]`;
 
     return {
       role,
@@ -270,7 +269,7 @@ function getConversationHistoryForBot(conversationId, maxMessages = 10) {
 }
 
 // ===============================
-// HELPERS – WHATSAPP CLOUD API
+// HELPERS – WHATSAPP CLOUD API (SAÍDA)
 // ===============================
 async function sendWhatsAppText(to, text) {
   if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
@@ -367,23 +366,124 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
 }
 
 // ===============================
+// HELPERS – WHATSAPP CLOUD API (ENTRADA / DOWNLOAD DE MÍDIA)
+// ===============================
+const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+function getExtensionFromMime(mime = "") {
+  if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
+  if (mime.includes("png")) return ".png";
+  if (mime.includes("gif")) return ".gif";
+  if (mime.includes("webp")) return ".webp";
+  if (mime.includes("mp4")) return ".mp4";
+  if (mime.includes("ogg")) return ".ogg";
+  if (mime.includes("aac")) return ".aac";
+  if (mime.includes("mpeg")) return ".mp3";
+  if (mime.includes("pdf")) return ".pdf";
+  if (mime.includes("json")) return ".json";
+  if (mime.includes("zip")) return ".zip";
+  return ".bin";
+}
+
+async function downloadWhatsappMedia(mediaObj, logicalType) {
+  if (!mediaObj || !WHATSAPP_TOKEN) return null;
+
+  const mediaId = mediaObj.id;
+  const mimeType = mediaObj.mime_type || "application/octet-stream";
+
+  if (!mediaId) return null;
+
+  try {
+    let fileUrl = mediaObj.url;
+
+    if (!fileUrl) {
+      const metaRes = await fetch(
+        `https://graph.facebook.com/v22.0/${mediaId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          },
+        }
+      );
+
+      const meta = await metaRes.json();
+
+      if (!metaRes.ok) {
+        logger.error(
+          { status: metaRes.status, meta },
+          "❌ Erro ao buscar metadata da mídia"
+        );
+        return null;
+      }
+
+      fileUrl = meta.url;
+    }
+
+    if (!fileUrl) {
+      logger.warn({ mediaId }, "⚠️ Não foi possível obter URL da mídia");
+      return null;
+    }
+
+    const mediaRes = await fetch(fileUrl, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      },
+    });
+
+    if (!mediaRes.ok) {
+      const text = await mediaRes.text();
+      logger.error(
+        { status: mediaRes.status, text },
+        "❌ Erro ao fazer download da mídia"
+      );
+      return null;
+    }
+
+    const arrayBuffer = await mediaRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    const ext = getExtensionFromMime(mimeType);
+    const filename = `${logicalType || "media"}-${mediaId}-${Date.now()}${ext}`;
+    const filePath = path.join(UPLOADS_DIR, filename);
+
+    fs.writeFileSync(filePath, buffer);
+
+    const publicUrl = `/uploads/${filename}`;
+
+    logger.info(
+      { mediaId, mimeType, publicUrl },
+      "💾 Mídia baixada e salva localmente"
+    );
+
+    return publicUrl;
+  } catch (err) {
+    logger.error({ err }, "❌ Erro inesperado ao baixar mídia");
+    return null;
+  }
+}
+
+// ===============================
 // EXPRESS APP
 // ===============================
 const app = express();
+
+// Corrige problema de 304 Not Modified
+app.set("etag", false);
 
 // Middleware de log HTTP
 app.use(
   pinoHttp({
     logger,
-    // evita imprimir request e response inteiros
-    customSuccessMessage: function (req, res) {
+    customSuccessMessage(req, res) {
       return `${req.method} ${req.url} -> ${res.statusCode}`;
     },
-    customErrorMessage: function (req, res, err) {
+    customErrorMessage(req, res, err) {
       return `❌ ERRO ${req.method} ${req.url} -> ${res.statusCode}`;
     },
     serializers: {
-      // remove campos gigantes desnecessários
       req(req) {
         return {
           method: req.method,
@@ -396,14 +496,15 @@ app.use(
         };
       },
     },
-    // não loga automaticamente req/res completos
     quietReqLogger: true,
   })
 );
 
-
 app.use(cors());
 app.use(express.json());
+
+// Servir uploads locais
+app.use("/uploads", express.static(UPLOADS_DIR));
 
 // Rotas de configuração do chatbot
 app.use("/api", chatbotRouter);
@@ -415,7 +516,7 @@ app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "GP Labs – WhatsApp Plataforma API",
-    version: "1.0.1",
+    version: "1.0.3",
   });
 });
 
@@ -633,177 +734,183 @@ app.get("/webhook/whatsapp", (req, res) => {
   return res.sendStatus(403);
 });
 
-app.get("/webhook/whatsapp", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  logger.info(
-    { mode, token, expected: VERIFY_TOKEN },
-    "🌐 GET /webhook/whatsapp"
-  );
-
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    logger.info("✅ Webhook Verificado com sucesso.");
-    return res.status(200).send(challenge);
-  }
-
-  logger.warn("⚠️ Webhook não autorizado.");
-  return res.sendStatus(403);
-});
-
-
 app.post("/webhook/whatsapp", async (req, res, next) => {
   const body = req.body;
   logger.info({ body }, "📩 Webhook recebido");
 
   try {
-    if (body.object === "whatsapp_business_account") {
-      const entry = body.entry?.[0];
-      const changes = entry?.changes?.[0];
-      const value = changes?.value;
+    if (body.object !== "whatsapp_business_account") {
+      return res.sendStatus(200);
+    }
 
-      const messages = value?.messages;
-      if (messages && messages.length > 0) {
-        for (const msg of messages) {
-          const waId = msg.from;
-          const profileName = value?.contacts?.[0]?.profile?.name;
+    const entry = body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
 
-          const conv = findOrCreateConversationByPhone(waId, profileName);
+    const messages = value?.messages || [];
 
-          const timestamp = new Date(
-            Number(msg.timestamp) * 1000
-          ).toISOString();
+    for (const msg of messages) {
+      const waId = msg.from;
+      const profileName = value?.contacts?.[0]?.profile?.name;
 
-          let type = msg.type;
-          let text = "";
-          let mediaUrl = null;
+      const conv = findOrCreateConversationByPhone(waId, profileName);
 
-          if (type === "text") {
-            text = msg.text?.body || "";
-          } else if (type === "image") {
-            mediaUrl = msg.image?.link || null;
-            text = msg.image?.caption || "";
-          } else if (type === "video") {
-            mediaUrl = msg.video?.link || null;
-            text = msg.video?.caption || "";
-          } else if (type === "document") {
-            mediaUrl = msg.document?.link || null;
-            text =
-              msg.document?.caption || msg.document?.filename || "";
-          } else if (type === "audio") {
-            mediaUrl = msg.audio?.link || null;
-          } else if (type === "sticker") {
-            mediaUrl = msg.sticker?.link || null;
-          }
+      const timestamp = new Date(
+        Number(msg.timestamp) * 1000
+      ).toISOString();
 
-          // PREVENÇÃO DE MENSAGENS DUPLICADAS
-          const existingMsgs = state.messagesByConversation[conv.id] || [];
-          const alreadyExists = existingMsgs.some(
-            (m) => m.waMessageId === msg.id
-          );
+      let type = msg.type;
+      let text = "";
+      let mediaUrl = null;
+      let location = null;
 
-          if (alreadyExists) {
-            logger.warn(
-              { waMessageId: msg.id },
-              "⚠️ Mensagem já processada, ignorando"
-            );
-            continue;
-          }
+      // -------------------------------
+      // TIPOS DE MENSAGEM
+      // -------------------------------
+      if (type === "text") {
+        text = msg.text?.body || "";
 
-          // 1) Salvar mensagem recebida
-          addMessageToConversation(conv.id, {
-            direction: "in",
-            type,
-            text,
-            mediaUrl,
-            timestamp,
-            waMessageId: msg.id,
-          });
+      } else if (type === "image") {
+        text = msg.image?.caption || "";
+        mediaUrl = await downloadWhatsappMedia(msg.image, "image");
 
-          logger.info(
-            { waId, conversationId: conv.id, type },
-            "💬 Nova mensagem recebida e salva"
-          );
+      } else if (type === "video") {
+        text = msg.video?.caption || "";
+        mediaUrl = await downloadWhatsappMedia(msg.video, "video");
 
-          // 2) Decidir se vai para BOT ou HUMANO
-          const accountId = "default"; // por enquanto uma conta única
-          const accountSettings = getChatbotSettingsForAccount(accountId);
+      } else if (type === "audio") {
+        mediaUrl = await downloadWhatsappMedia(msg.audio, "audio");
 
-          const decision = decideRoute({
-            accountSettings,
-            conversation: conv,
-            messageText: text,
-          });
+      } else if (type === "document") {
+        text = msg.document?.caption || msg.document?.filename || "";
+        mediaUrl = await downloadWhatsappMedia(msg.document, "document");
 
-          logger.info(
-            { conversationId: conv.id, decision },
-            "🤖 Decisão de roteamento"
-          );
+      } else if (type === "sticker") {
+        mediaUrl = await downloadWhatsappMedia(msg.sticker, "sticker");
 
-          if (decision.target === "bot" && type === "text") {
-            // 3) Montar histórico para o bot
-            const history = getConversationHistoryForBot(conv.id, 10);
+      } else if (type === "location") {
+        const loc = msg.location;
+        if (loc) {
+          location = {
+            latitude: loc.latitude,
+            longitude: loc.longitude,
+            name: loc.name || null,
+            address: loc.address || null,
+          };
 
-            // 4) Chamar IA
-            const botResult = await callGenAIBot({
-              accountSettings,
-              conversation: conv,
-              messageText: text,
-              history,
-            });
-
-            const botReply = botResult.replyText || "";
-
-            try {
-              // 5) Enviar resposta via WhatsApp
-              const waResp = await sendWhatsAppText(conv.phone, botReply);
-              const waBotMessageId = waResp?.messages?.[0]?.id || null;
-
-              const outTimestamp = new Date().toISOString();
-
-              // 6) Salvar mensagem de resposta do BOT
-              addMessageToConversation(conv.id, {
-                direction: "out",
-                type: "text",
-                text: botReply,
-                timestamp: outTimestamp,
-                fromBot: true,
-                waMessageId: waBotMessageId,
-              });
-
-              // 7) Atualizar tentativas do bot e modo
-              conv.botAttempts = (conv.botAttempts || 0) + 1;
-              conv.currentMode = "bot";
-              saveStateToDisk();
-
-              logger.info(
-                { conversationId: conv.id, waBotMessageId },
-                "🤖 Resposta do bot enviada"
-              );
-            } catch (err) {
-              logger.error(
-                { err },
-                "❌ Erro ao enviar mensagem de texto WhatsApp (bot)"
-              );
-              throw new Error("Erro ao enviar mensagem de texto");
-            }
-          } else {
-            // Vai para humano: marcar modo humano
-            conv.currentMode = "human";
-            saveStateToDisk();
-            logger.info(
-              { conversationId: conv.id },
-              "🧑‍💻 Conversa roteada para humano"
-            );
-          }
+          text =
+            loc.name ||
+            loc.address ||
+            `Localização: lat=${loc.latitude}, long=${loc.longitude}`;
         }
       }
 
-      const statuses = value?.statuses;
-      if (statuses && statuses.length > 0) {
-        logger.info({ statuses }, "📊 Status de mensagens recebido");
+      // -------------------------------
+      // PREVENÇÃO DE DUPLICADOS
+      // -------------------------------
+      const existingMsgs = state.messagesByConversation[conv.id] || [];
+      const alreadyExists = existingMsgs.some(
+        (m) => m.waMessageId === msg.id
+      );
+
+      if (alreadyExists) {
+        logger.warn(
+          { waMessageId: msg.id },
+          "⚠️ Mensagem já processada, ignorando"
+        );
+        continue;
       }
+
+      // -------------------------------
+      // SALVAR MENSAGEM
+      // -------------------------------
+      addMessageToConversation(conv.id, {
+        direction: "in",
+        type,
+        text,
+        mediaUrl,
+        location,
+        timestamp,
+        waMessageId: msg.id,
+      });
+
+      logger.info(
+        { waId, conversationId: conv.id, type },
+        "💬 Nova mensagem recebida e salva"
+      );
+
+      // -------------------------------
+      // DECISÃO BOT / HUMANO
+      // -------------------------------
+      const accountId = "default";
+      const accountSettings = getChatbotSettingsForAccount(accountId);
+
+      const decision = decideRoute({
+        accountSettings,
+        conversation: conv,
+        messageText: text,
+      });
+
+      logger.info(
+        { conversationId: conv.id, decision },
+        "🤖 Decisão de roteamento"
+      );
+
+      if (decision.target === "bot" && type === "text") {
+        const history = getConversationHistoryForBot(conv.id, 10);
+
+        const botResult = await callGenAIBot({
+          accountSettings,
+          conversation: conv,
+          messageText: text,
+          history,
+        });
+
+        const botReply = botResult.replyText || "";
+
+        try {
+          const waResp = await sendWhatsAppText(conv.phone, botReply);
+          const waBotMessageId = waResp?.messages?.[0]?.id || null;
+
+          const outTimestamp = new Date().toISOString();
+
+          addMessageToConversation(conv.id, {
+            direction: "out",
+            type: "text",
+            text: botReply,
+            timestamp: outTimestamp,
+            fromBot: true,
+            waMessageId: waBotMessageId,
+          });
+
+          conv.botAttempts = (conv.botAttempts || 0) + 1;
+          conv.currentMode = "bot";
+          saveStateToDisk();
+
+          logger.info(
+            { conversationId: conv.id, waBotMessageId },
+            "🤖 Resposta do bot enviada"
+          );
+        } catch (err) {
+          logger.error(
+            { err },
+            "❌ Erro ao enviar mensagem de texto WhatsApp (bot)"
+          );
+          // não relança para não quebrar o webhook
+        }
+      } else {
+        conv.currentMode = "human";
+        saveStateToDisk();
+        logger.info(
+          { conversationId: conv.id },
+          "🧑‍💻 Conversa roteada para humano"
+        );
+      }
+    }
+
+    const statuses = value?.statuses;
+    if (statuses && statuses.length > 0) {
+      logger.info({ statuses }, "📊 Status de mensagens recebido");
     }
 
     res.sendStatus(200);
@@ -840,3 +947,4 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   logger.info({ port: PORT }, "🚀 API rodando");
 });
+

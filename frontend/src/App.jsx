@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import ChatHistoryPage from "./ChatHistoryPage";
 import CampaignsPage from "./outbound/CampaignsPage";
 import LoginPage from "./LoginPage";
+import SettingsChannelsPage from "./settings/SettingsChannelsPage.jsx";
 
 import "./App.css";
 import "./chat-history.css";
@@ -25,70 +26,94 @@ export default function App() {
   function handleLogin(data) {
     console.log("🔥 Login confirmado no App.jsx:", data);
 
-    // garante que o token está salvo (LoginPage já salva, mas aqui reforça)
     if (data?.token) {
       localStorage.setItem(AUTH_KEY, data.token);
+      setIsAuthenticated(true);
     }
-
-    setIsAuthenticated(true);
   }
 
   function handleLogout() {
     localStorage.removeItem(AUTH_KEY);
-    localStorage.removeItem("gpLabsUser");
-    localStorage.removeItem("gpLabsRememberMe");
     setIsAuthenticated(false);
   }
 
-  // 🔒 Se NÃO estiver autenticado, mostra somente a tela de login
-  if (!isAuthenticated) {
-    return <LoginPage onLogin={handleLogin} />;
+  function renderContent() {
+    switch (activeSection) {
+      case "outbound":
+        return <CampaignsPage />;
+      case "settings":
+        return <SettingsChannelsPage />;
+      case "inbound":
+      default:
+        // Atendimento (Chats)
+        return <ChatHistoryPage />;
+    }
   }
 
-  // ✅ Se estiver autenticado, mostra o painel
-  return (
-    <div className="app-root">
-      <header className="app-header">
-        <div className="app-header-left">
-          <div className="app-logo">
-            <img
-              src="/gp-labs-logo.png"
-              alt="GP Labs"
-              className="app-logo-img"
-            />
-            <div className="app-logo-text">
-              <span className="app-logo-main">GP LABS</span>
-              <span className="app-logo-sub">Plataforma WhatsApp</span>
-            </div>
-          </div>
+  // Estado não autenticado: só mostra login
+  if (!isAuthenticated) {
+    return (
+      <div className="app-root dark">
+        <LoginPage onLogin={handleLogin} />
+      </div>
+    );
+  }
 
-          <nav className="app-nav">
-            <button
-              className={activeSection === "inbound" ? "active" : ""}
-              onClick={() => setActiveSection("inbound")}
-            >
-              Atendimento
-            </button>
-            <button
-              className={activeSection === "outbound" ? "active" : ""}
-              onClick={() => setActiveSection("outbound")}
-            >
-              Campanhas
-            </button>
-          </nav>
+  return (
+    <div className="app-root dark">
+      {/* HEADER GLOBAL */}
+      <header className="app-header">
+        <div className="logo-area">
+          <div className="logo-mark">GP</div>
+          <div className="logo-text">
+            <span className="logo-main">LABS</span>
+            <span className="logo-sub">Plataforma WhatsApp</span>
+          </div>
         </div>
 
+        <nav className="app-nav">
+          <button
+            className={
+              "nav-item " +
+              (activeSection === "inbound" ? "nav-item--active" : "")
+            }
+            onClick={() => setActiveSection("inbound")}
+          >
+            Atendimento
+          </button>
+          <button
+            className={
+              "nav-item " +
+              (activeSection === "outbound" ? "nav-item--active" : "")
+            }
+            onClick={() => setActiveSection("outbound")}
+          >
+            Campanhas
+          </button>
+          <button
+            className={
+              "nav-item " +
+              (activeSection === "settings" ? "nav-item--active" : "")
+            }
+            onClick={() => setActiveSection("settings")}
+          >
+            Configurações
+          </button>
+        </nav>
+
         <div className="app-header-right">
-          <span className="app-env-badge">Dev • Local</span>
-          <button className="app-logout-btn" onClick={handleLogout}>
+          <span className="env-pill">Dev · Local</span>
+          <span className="version-pill">v1.0.3</span>
+          <span className="user-label">Olá, Administrador</span>
+          <button className="logout-button" onClick={handleLogout}>
             Sair
           </button>
         </div>
       </header>
 
-      <main className="app-main">
-        {activeSection === "inbound" ? <ChatHistoryPage /> : <CampaignsPage />}
-      </main>
+      {/* CONTEÚDO PRINCIPAL */}
+      <main className="app-main">{renderContent()}</main>
     </div>
   );
 }
+
