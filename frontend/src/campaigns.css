@@ -1,0 +1,302 @@
+/* ============================================================
+   ESTILO GLOBAL DA PÁGINA DE CAMPANHAS – GP LABS PREMIUM UI
+   ============================================================ */
+
+.campaigns-page {
+  display: flex;
+  flex-direction: column;
+  padding: 32px 48px;
+  gap: 32px;
+  color: #e5e7eb;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+
+/* ===============================
+   BARRA – NÚMERO CONECTADO
+   =============================== */
+
+.whatsapp-number-card {
+  width: 100%;
+  background: rgba(3, 7, 18, 0.75);
+  border: 1px solid rgba(17, 24, 39, 0.9);
+  border-radius: 18px;
+  padding: 22px 26px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  animation: fadeIn 0.25s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.wn-left h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #f3f4f6;
+}
+
+.wn-number {
+  font-size: 22px;
+  font-weight: 600;
+  color: #22c55e;
+}
+
+.wn-channel {
+  font-size: 14px;
+  color: #9ca3af;
+}
+
+.wn-right {
+  display: flex;
+  gap: 32px;
+}
+
+.wn-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wn-label {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.wn-value {
+  font-size: 14px;
+}
+
+.wn-badge-good {
+  background: rgba(34, 197, 94, 0.15);
+  padding: 2px 12px;
+  border-radius: 999px;
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+
+/* ===============================
+   TÍTULOS E SEÇÕES
+   =============================== */
+
+.page-header h1 {
+  font-size: 32px;
+  font-weight: 600;
+  color: #f9fafb;
+}
+
+.page-header .page-subtitle {
+  font-size: 15px;
+  color: #9ca3af;
+}
+
+
+/* ===============================
+   ABAS INTERNAS
+   =============================== */
+
+.inner-tabs {
+  display: flex;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.inner-tab {
+  padding: 8px 18px;
+  background: rgba(17, 24, 39, 0.7);
+  border-radius: 12px;
+  color: #9ca3af;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: 0.25s;
+}
+
+.inner-tab:hover {
+  color: #d1d5db;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.inner-tab.active {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.4);
+  font-weight: 500;
+}
+
+
+/* ===============================
+   CARD PADRÃO
+   =============================== */
+
+.card {
+  background: rgba(3, 7, 18, 0.8);
+  border-radius: 16px;
+  padding: 28px;
+  border: 1px solid rgba(17, 24, 39, 0.8);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.55);
+}
+
+.card-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.card-subtitle {
+  font-size: 14px;
+  color: #9ca3af;
+  margin-bottom: 22px;
+}
+
+
+/* ===============================
+   FORMULÁRIO – NOVA CAMPANHA
+   =============================== */
+
+.campaign-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.campaign-form-row {
+  display: flex;
+  gap: 22px;
+}
+
+.campaign-form-group {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.campaign-form-group label {
+  font-size: 14px;
+  margin-bottom: 6px;
+  color: #d1d5db;
+}
+
+.campaign-form-group input,
+.campaign-form-group textarea {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(31, 41, 55, 0.9);
+  border-radius: 12px;
+  padding: 12px;
+  color: #e5e7eb;
+  font-size: 14px;
+  transition: 0.22s ease;
+}
+
+.campaign-form-group input:focus,
+.campaign-form-group textarea:focus {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+  outline: none;
+}
+
+.field-hint {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+
+/* BOTÃO */
+
+.btn.btn-primary {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #022c22;
+  border: none;
+  padding: 12px 22px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+  box-shadow: 0 10px 24px rgba(34, 197, 94, 0.35);
+}
+
+.btn.btn-primary:hover {
+  filter: brightness(1.1);
+  transform: translateY(-2px);
+}
+
+
+/* ===============================
+   LISTA DE CAMPANHAS
+   =============================== */
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+.campaigns-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.campaigns-table th,
+.campaigns-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.campaigns-table th {
+  font-weight: 500;
+  color: #9ca3af;
+}
+
+.campaigns-table td {
+  color: #e5e7eb;
+}
+
+.status-pill {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-feito {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.status-projeto {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+}
+
+
+/* ===============================
+   RESPONSIVIDADE
+   =============================== */
+
+@media (max-width: 900px) {
+
+  .campaigns-page {
+    padding: 22px;
+  }
+
+  .campaign-form-row {
+    flex-direction: column;
+  }
+
+  .whatsapp-number-card {
+    flex-direction: column;
+    gap: 14px;
+  }
+}
+/* Garante que a página de campanhas possa rolar */
+.page.campaigns-page {
+  height: 100%;
+  overflow-y: auto;
+  padding-bottom: 40px; /* dá um respiro no final da página */
+}
+

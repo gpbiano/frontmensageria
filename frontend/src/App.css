@@ -759,4 +759,404 @@ body {
 .steps-list li strong {
   font-weight: 600;
 }
+.app-root {
+  height: 100vh;
+  width: 100vw;
+  background: #020617;
+  color: #e5e7eb;
+  display: flex;
+  justify-content: stretch;
+  align-items: stretch;
+}
 
+.app-shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 260px;
+  background: #020817;
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 14px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.sidebar-logo-wrapper {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: radial-gradient(circle at 30% 30%, #22c55e, #14532d);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.sidebar-brand-main {
+  font-size: 0.8rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #e5e7eb;
+}
+
+.sidebar-brand-sub {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+/* Menu lateral */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-nav-item {
+  border: none;
+  background: transparent;
+  color: #cbd5f5;
+  padding: 10px 12px;
+  border-radius: 999px;
+  text-align: left;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-nav-item:hover {
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.sidebar-nav-item.active {
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+  color: #020617;
+}
+
+/* Main */
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  background: #020617;
+}
+
+.env-pill {
+  font-size: 0.7rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  margin-right: 8px;
+}
+
+.env-pill-dev {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.5);
+  color: #4ade80;
+}
+
+.env-pill-version {
+  color: #9ca3af;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar-user {
+  font-size: 0.8rem;
+  color: #e5e7eb;
+}
+
+.topbar-logout-btn {
+  font-size: 0.75rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(248, 113, 113, 0.6);
+  background: transparent;
+  color: #fecaca;
+  cursor: pointer;
+}
+
+.topbar-logout-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.main-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.sidebar-logo-wrapper {
+  width: 50px;
+  height: 50px;
+  border-radius: 999px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0b3b35; /* só aparece se a imagem tiver transparência */
+}
+
+.sidebar-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain; /* ou "cover", se quiser preencher */
+  display: block;
+}
+/* ==== SIDEBAR / LOGO ==== */
+
+.sidebar {
+  width: 260px;
+  background: #050914;
+  border-right: 1px solid #101827;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+/* bolinha do logo */
+.sidebar-logo-wrapper {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: #0f4a3d;          /* verde de fundo */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;             /* corta qualquer sobra da imagem */
+}
+
+/* imagem do logo */
+.sidebar-logo-img {
+  width: 80%;                   /* deixa um respiro dentro da bolinha */
+  height: 80%;
+  object-fit: contain;          /* não distorce */
+  display: block;
+}
+
+/* textos L A B S / Plataforma WhatsApp */
+.sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.sidebar-brand-main {
+  font-size: 12px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: #e5f4ee;
+}
+
+.sidebar-brand-sub {
+  font-size: 11px;
+  color: #9ca3af;
+}
+/* ============================
+   PÁGINA DE CONFIGURAÇÕES
+   ============================ */
+
+.settings-page {
+  padding: 32px 40px;
+  max-width: 1100px;
+  margin: 0 auto;
+  color: #f9fafb;
+}
+
+.settings-title {
+  font-size: 32px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.settings-subtitle {
+  font-size: 14px;
+  color: #9ca3af;
+  margin-bottom: 16px;
+}
+
+.settings-env-info {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-bottom: 24px;
+}
+
+.settings-section {
+  margin-top: 32px;
+}
+
+.settings-section-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.settings-section-description {
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+/* GRID DE CANAIS */
+
+.settings-channels-grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.settings-channel-card {
+  background: #111827;
+  border-radius: 12px;
+  padding: 16px 18px;
+  border: 1px solid #1f2937;
+}
+
+.settings-channel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.settings-channel-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.settings-channel-description {
+  font-size: 13px;
+  color: #d1d5db;
+}
+
+/* Pílulas de status */
+
+.status-pill {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.status-pill-off {
+  background: #4b5563;
+  color: #f9fafb;
+}
+
+.status-pill-on {
+  background: rgba(16, 185, 129, 0.1);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.6);
+}
+
+.status-pill-soon {
+  background: rgba(245, 158, 11, 0.08);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+}
+
+/* Seção de passos do WhatsApp */
+
+.settings-primary-btn {
+  margin-top: 16px;
+  margin-bottom: 16px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid #f97373;
+  background: #111827;
+  color: #fecaca;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-primary-btn:hover {
+  background: #1f2937;
+}
+
+.settings-steps {
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px dashed #374151;
+  background: #020617;
+}
+
+.settings-steps-title {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.settings-steps-description {
+  font-size: 13px;
+  color: #9ca3af;
+  margin-bottom: 8px;
+}
+
+.settings-steps-list {
+  margin-left: 18px;
+  font-size: 13px;
+  color: #e5e7eb;
+}
+.settings-page {
+  padding: 32px 40px;
+  max-width: 1200px; /* antes 1100px */
+  margin: 0 auto;
+  color: #f9fafb;
+}
+/* Libera o scroll nas páginas internas */
+.main-content {
+  overflow-y: auto !important;
+  height: 100%;
+}
+
+/* Evita que elementos dentro prendam o scroll */
+.page,
+.chatbot-page,
+.campaigns-page {
+  min-height: 100vh;
+  padding-bottom: 60px;
+}

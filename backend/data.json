@@ -12,9 +12,9 @@
       "id": 1,
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
-      "lastMessage": "Localização: lat=-17.038692474365, long=-48.301872253418",
-      "status": "open",
-      "updatedAt": "2025-12-08T06:41:02.000Z",
+      "lastMessage": "[image]",
+      "status": "closed",
+      "updatedAt": "2025-12-08T07:11:09.140Z",
       "currentMode": "human",
       "botAttempts": 3
     },
@@ -498,6 +498,26 @@
         },
         "timestamp": "2025-12-08T06:41:02.000Z",
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0EzNjNEQThDOTUwQTZFQjg5MTgA"
+      },
+      {
+        "id": 46,
+        "direction": "in",
+        "type": "text",
+        "text": "Como vc está?",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T07:07:58.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IxNThENjM5QkFGNjFFRUIyMTAA"
+      },
+      {
+        "id": 47,
+        "direction": "in",
+        "type": "image",
+        "text": "",
+        "mediaUrl": "/uploads/image-726111036711398-1765177700635.jpg",
+        "location": null,
+        "timestamp": "2025-12-08T07:08:17.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JGNzkwNDIzMzJGQjI2Mjc5Q0MA"
       }
     ],
     "2": [
