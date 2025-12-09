@@ -207,12 +207,72 @@
       "phone": "556499989978",
       "channel": "whatsapp",
       "lastMessage": "Só um momento",
-      "status": "open",
-      "updatedAt": "2025-12-08T18:55:02.184Z",
+      "status": "closed",
+      "updatedAt": "2025-12-08T22:18:39.415Z",
       "currentMode": "human",
       "botAttempts": 1,
       "tags": [],
       "notes": "eee"
+    },
+    {
+      "id": 15,
+      "sessionId": "S-99989978-1765232360602",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "Obrigado",
+      "status": "closed",
+      "updatedAt": "2025-12-08T22:48:20.839Z",
+      "currentMode": "human",
+      "botAttempts": 1,
+      "tags": [],
+      "notes": "teste"
+    },
+    {
+      "id": 16,
+      "sessionId": "S-99989978-1765236435875",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "oi",
+      "status": "closed",
+      "updatedAt": "2025-12-08T23:54:17.160Z",
+      "currentMode": "bot",
+      "botAttempts": 1,
+      "tags": [],
+      "notes": ""
+    },
+    {
+      "id": 17,
+      "sessionId": "S-99989978-1765240707945",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "Olá! Como posso ajudar você hoje?",
+      "status": "closed",
+      "updatedAt": "2025-12-09T01:54:09.674Z",
+      "currentMode": "bot",
+      "botAttempts": 1,
+      "tags": [],
+      "notes": ""
+    },
+    {
+      "id": 18,
+      "sessionId": "S-99989978-1765251928855",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "Será uma landing page de vendas",
+      "status": "closed",
+      "updatedAt": "2025-12-09T03:48:06.278Z",
+      "currentMode": "human",
+      "botAttempts": 3,
+      "tags": [],
+      "notes": ""
     }
   ],
   "messagesByConversation": {
@@ -1732,6 +1792,164 @@
         "text": "Só um momento",
         "timestamp": "2025-12-08T18:47:02.994Z",
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMzhCMUM2NUEzODFCQzdCMkM2AA=="
+      }
+    ],
+    "15": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T22:19:19.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IzOTgyNjQ2NTU3OUE3NEM3NDEA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-08T22:19:23.877Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRTBERTU0RkE4NzhDRkZEN0UzAA=="
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "Humanos",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T22:19:56.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IyRDI4MEEyNUFDNjgzRTExMDcA"
+      },
+      {
+        "id": 4,
+        "direction": "out",
+        "type": "text",
+        "text": "Obrigado",
+        "timestamp": "2025-12-08T22:20:09.521Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMTJDQzE0MUU3Qjk3OTA1MUZCAA=="
+      }
+    ],
+    "16": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-08T00:02:06.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I0Mzc3RUE2NUUzMzQxODc0QzkA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-08T23:27:19.212Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMjZEQjE3OEVGM0FBNThGQ0VCAA=="
+      },
+      {
+        "id": 3,
+        "direction": "out",
+        "type": "text",
+        "text": "oi",
+        "timestamp": "2025-12-08T23:40:07.123Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSNkQ0NzZGOTJGNEFENkIyRUZCAA=="
+      }
+    ],
+    "17": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Hi Lorena",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-09T00:38:26.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IwRjQ2M0VGM0IxRDA4NzczODMA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-09T00:38:30.519Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSQkE1QkM0ODdFNjE5MzczMThDAA=="
+      }
+    ],
+    "18": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-09T03:45:27.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I4REE3QjNDQkRFN0U1MDY2NzMA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-09T03:45:31.965Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRDQxNjA0RkUxNzA2QzlDN0MzAA=="
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "Quero contratar os serviços de vcs",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-09T03:45:54.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I5RDBEMkY1MzE1MjZEQzVFQ0IA"
+      },
+      {
+        "id": 4,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Ficamos muito felizes com seu interesse em contratar nossos serviços. Para que possamos ajudar da melhor forma, você poderia informar qual serviço específico da GP Labs você deseja contratar? Assim, podemos fornecer todas as informações e orientações necessárias.",
+        "timestamp": "2025-12-09T03:45:57.601Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMUFFNzNDMzIwOTM5NzNDNjlEAA=="
+      },
+      {
+        "id": 5,
+        "direction": "in",
+        "type": "text",
+        "text": "Quero desenvolver meu site, você tem portfolio?",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-09T03:46:23.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1OENBOTc2QzczQ0I3RDdFRjgA"
+      },
+      {
+        "id": 6,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Sim, temos um portfólio com diversos projetos de desenvolvimento de sites que já realizamos para nossos clientes. Posso enviar alguns exemplos para você avaliar? Além disso, gostaria de saber mais sobre o tipo de site que você deseja (institucional, e-commerce, blog, etc.) para indicar os melhores trabalhos relacionados.",
+        "timestamp": "2025-12-09T03:46:27.088Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSQUYxNzE1RkZFM0Y1MUQ0OTJGAA=="
+      },
+      {
+        "id": 7,
+        "direction": "in",
+        "type": "text",
+        "text": "Será uma landing page de vendas",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-09T03:47:00.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I5NTI5MzIyNzhFOTA0MzM0M0IA"
       }
     ]
   },

@@ -51,6 +51,26 @@ export async function fetchConversations(status: string = "open") {
 export async function fetchMessages(conversationId: number) {
   return request(`/conversations/${conversationId}/messages`);
 }
+// ============================
+// NÚMEROS (PHONE NUMBERS)
+// ============================
+
+export async function fetchNumbers() {
+  // GET /outbound/numbers – lê do data.json
+  return request("/outbound/numbers");
+}
+
+/**
+ * Força uma sincronização com a Meta:
+ * chama GET /outbound/numbers/sync no backend,
+ * que consulta o Graph API e atualiza o data.json.
+ */
+export async function syncNumbers() {
+  return request("/outbound/numbers/sync", {
+    method: "POST"
+  });
+}
+
 
 /**
  * ENVIO DE TEXTO
@@ -115,6 +135,48 @@ export async function updateConversationNotes(
   });
 }
 
+// ============================
+// OUTBOUND – Templates & Mídias
+// ============================
+
+export async function fetchTemplates(): Promise<any[]> {
+  try {
+    const data = await request("/templates");
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error("fetchTemplates() erro:", err);
+    return [];
+  }
+}
+
+export async function fetchMediaLibrary(): Promise<any[]> {
+  try {
+    const data = await request("/media-library");
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error("fetchMediaLibrary() erro:", err);
+    return [];
+  }
+}
+
+export async function createMediaItem(payload: {
+  label: string;
+  type: string;
+  url: string;
+}) {
+  try {
+    console.log("createMediaItem() stub – payload:", payload);
+
+    return {
+      id: Date.now(),
+      ...payload,
+      createdAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    console.error("createMediaItem() erro:", err);
+    throw err;
+  }
+}
 // ============================
 // (RESERVADO) CONFIGURAÇÕES / TAGS FUTURO
 // ============================

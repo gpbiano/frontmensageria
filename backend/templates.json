@@ -1,0 +1,66 @@
+{
+  "templates": [
+    {
+      "id": "1622216382490855",
+      "name": "hello_world",
+      "channel": "WhatsApp",
+      "category": "utility",
+      "categoryLabel": "UTILITY",
+      "language": "en_US",
+      "languageLabel": "en_US",
+      "previewType": "text",
+      "previewTypeLabel": "Texto",
+      "status": "approved",
+      "statusLabel": "APPROVED",
+      "createdAt": null,
+      "createdAtFormatted": null,
+      "raw": {
+        "name": "hello_world",
+        "parameter_format": "POSITIONAL",
+        "components": [
+          {
+            "type": "HEADER",
+            "format": "TEXT",
+            "text": "Hello World"
+          },
+          {
+            "type": "BODY",
+            "text": "Welcome and congratulations!! This message demonstrates your ability to send a WhatsApp message notification from the Cloud API, hosted by Meta. Thank you for taking the time to test with us."
+          },
+          {
+            "type": "FOOTER",
+            "text": "WhatsApp Business Platform sample message"
+          }
+        ],
+        "language": "en_US",
+        "status": "APPROVED",
+        "category": "UTILITY",
+        "id": "1622216382490855"
+      }
+    },
+    {
+      "id": "local-1765261860739",
+      "source": "LOCAL",
+      "name": "boas_vindas_formal",
+      "channel": "whatsapp",
+      "category": "marketing",
+      "categoryLabel": "MARKETING",
+      "language": "pt_BR",
+      "languageLabel": "pt_BR",
+      "previewType": "text_button",
+      "previewTypeLabel": "Texto + botão",
+      "body": "Olá *{{nome}}*, seja muito bem vindo (a) a GP Labs.\n\nA partir de agora você tem um mundo de possibilidades com nossos produtos e serviços. \n\nSaiba mais clicando no botão abaixo.\n\nTambém respeitamos sua opinião e caso não queira receber nossas  mensagens escreva sair.",
+      "footer": "",
+      "buttonsType": "url",
+      "buttons": {
+        "label": "Ver Site",
+        "value": "https://gplabs.com.br"
+      },
+      "status": "LOCAL_ONLY",
+      "statusLabel": "Rascunho local",
+      "createdAt": "2025-12-09T06:31:00.739Z",
+      "createdAtFormatted": "09/12/2025"
+    }
+  ],
+  "lastSyncAt": "2025-12-09T06:24:41.015Z"
+}

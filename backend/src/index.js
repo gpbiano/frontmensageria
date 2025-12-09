@@ -15,6 +15,11 @@ import pinoHttp from "pino-http";
 
 import logger from "./logger.js";
 import chatbotRouter from "./chatbot/chatbotRouter.js";
+import outboundRouter from "./outbound/outboundRouter.js";
+import numbersRouter from "./outbound/numbersRouter.js";
+import templatesRouter from "./outbound/templatesRouter.js";
+import assetsRouter from "./outbound/assetsRouter.js";
+
 import {
   getChatbotSettingsForAccount,
   decideRoute
@@ -48,6 +53,9 @@ const JWT_SECRET = process.env.JWT_SECRET || "gplabs-dev-secret";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
+// WABA ID para endpoints de conta (ex: /{WABA_ID}/phone_numbers)
+const WABA_ID = process.env.WABA_ID;
+
 logger.info(
   {
     WHATSAPP_TOKEN_len: WHATSAPP_TOKEN?.length || "N/A",
@@ -56,6 +64,7 @@ logger.info(
     JWT_SECRET_defined: !!JWT_SECRET,
     OPENAI_API_KEY_defined: !!OPENAI_API_KEY,
     OPENAI_MODEL,
+    WABA_ID: WABA_ID || "N/A",
     PORT
   },
   "✅ Configurações de ambiente carregadas"
@@ -267,10 +276,7 @@ function findOrCreateContact(phone, name) {
     state.contacts.push(contact);
     saveStateToDisk();
 
-    logger.info(
-      { contactId: contact.id, phone },
-      "🆕 Contato criado"
-    );
+    logger.info({ contactId: contact.id, phone }, "🆕 Contato criado");
   } else {
     // atualiza nome se vier algo melhor
     if (name && (!contact.name || contact.name === contact.phone)) {
@@ -334,7 +340,13 @@ function createNewConversation(phone, contactName, channel) {
   saveStateToDisk();
 
   logger.info(
-    { conversationId: id, sessionId, phone, contactName: conv.contactName, channel },
+    {
+      conversationId: id,
+      sessionId,
+      phone,
+      contactName: conv.contactName,
+      channel
+    },
     "🆕 Nova conversa (sessão) criada"
   );
 
@@ -527,7 +539,10 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
     [type]: mediaObject
   };
 
-  if (caption && (type === "image" || type === "video" || type === "document")) {
+  if (
+    caption &&
+    (type === "image" || type === "video" || type === "document")
+  ) {
     mediaObject.caption = caption;
   }
 
@@ -695,8 +710,33 @@ app.use(express.json());
 // Servir uploads locais
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-// Rotas de configuração do chatbot
-app.use("/api", chatbotRouter);
+/**
+ * ROTAS PRINCIPAIS
+ * ----------------
+ * /api/chatbot/...            → Configuração do chatbot (aba Chatbot)
+ * /outbound/numbers/...       → Números WABA (sync com Meta)
+ * /outbound/templates/...     → Templates (listar, criar, sync)
+ * /outbound/assets/...        → Arquivos de mídia
+ * /outbound/...               → Campanhas, etc.
+ */
+
+// Rotas de configuração do chatbot (aba Chatbot)
+app.use("/api", chatbotRouter); // gera /api/chatbot/...
+
+// Rotas de NÚMEROS (sync com Meta)
+app.use("/outbound/numbers", numbersRouter); // continua igual
+
+// Rotas de TEMPLATES (listar, criar, sync)
+// → gera /outbound/templates, /outbound/templates/sync...
+app.use("/outbound", templatesRouter);
+
+// Rotas de ARQUIVOS (upload, listar, deletar)
+// → gera /outbound/assets, /outbound/assets/:id...
+app.use("/outbound", assetsRouter);
+
+// Rotas gerais de outbound (campanhas, etc.)
+app.use("/outbound", outboundRouter);
+
 
 // ===============================
 // HEALTH / STATUS
@@ -705,7 +745,9 @@ app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "GP Labs – WhatsApp Plataforma API",
-    version: "1.0.4"
+    version: "1.0.4",
+    wabaId: WABA_ID || null,
+    phoneNumberId: PHONE_NUMBER_ID || null
   });
 });
 
@@ -721,7 +763,9 @@ app.get("/health", (req, res) => {
     memory: {
       rss: memory.rss,
       heapUsed: memory.heapUsed
-    }
+    },
+    wabaId: WABA_ID || null,
+    phoneNumberId: PHONE_NUMBER_ID || null
   };
 
   logger.debug(payload, "🔎 Health check");
@@ -1153,7 +1197,9 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ===============================
 app.listen(PORT, () => {
-  logger.info({ port: PORT }, "🚀 API rodando");
+  logger.info(
+    { port: PORT, WABA_ID, PHONE_NUMBER_ID },
+    "🚀 API rodando"
+  );
 });
-
 
