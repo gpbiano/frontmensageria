@@ -1,172 +1,123 @@
 /* =============================================
-   LAYOUT GERAL DA PÁGINA
+   LOGIN – FUNDO FULLSCREEN + REDE NEURAL
 ============================================= */
 
 .login-page {
-  position: relative;
-  width: 100%;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
   height: 100vh;
+
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px 24px;              /* dá respiro nas bordas */
-  box-sizing: border-box;
-  overflow: hidden;
-  background: radial-gradient(circle at top, #020617 0, #020617 45%, #000 100%);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    sans-serif;
 
-  /* valores padrão do parallax */
-  --parallaxX: 0;
-  --parallaxY: 0;
+  padding: 32px;
+  box-sizing: border-box;
+
+  background: radial-gradient(circle at top left, #020617 0, #020617 60%, #000 100%);
+  overflow: hidden;
+  font-family: "Montserrat", system-ui, -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", sans-serif;
 }
 
-/* =============================================
-   FUNDO – GLOBO FUTURISTA .WEBP (ANIMADO)
-============================================= */
-
-.login-background {
+/* Grid + glow de rede neural (mais visível) */
+.login-page::before {
+  content: "";
   position: absolute;
   inset: 0;
-  z-index: 0;
   pointer-events: none;
-  overflow: hidden;
-}
+  opacity: 0.22;
 
-/* camada que se mexe com o parallax */
-.login-background-layer {
-  position: absolute;
-  inset: -10%;
-  transform: translate3d(
-    calc(var(--parallaxX) * -20px),
-    calc(var(--parallaxY) * -14px),
-    0
-  );
-  transition: transform 0.35s ease-out;
-}
-
-/* imagem do globo em si */
-.login-background-layer img {
-  position: absolute;
-  right: -22%;          /* mais à direita, tipo Cloudflare */
-  top: 50%;
-  width: 140vh;
-  opacity: 0.3;         /* mais visível */
-  transform: translateY(-50%);
-  filter: blur(0.6px) drop-shadow(0 0 60px rgba(34, 197, 94, 0.55));
-  user-select: none;
-  pointer-events: none;
-  animation: globeRotate 40s linear infinite;
-  mask-image: radial-gradient(circle, black 72%, transparent 100%);
-}
-
-/* animação de rotação */
-@keyframes globeRotate {
-  0% {
-    transform: translateY(-50%) rotate(0deg);
-  }
-  100% {
-    transform: translateY(-50%) rotate(360deg);
-  }
+  background-image:
+      /* grid */
+      linear-gradient(to right, rgba(30, 64, 78, 0.32) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(30, 64, 78, 0.32) 1px, transparent 1px),
+      /* “nuvens” */
+      radial-gradient(circle at 18% 25%, rgba(56, 189, 248, 0.22) 0, transparent 50%),
+      radial-gradient(circle at 82% 80%, rgba(34, 197, 94, 0.20) 0, transparent 55%);
+  background-size:
+      70px 70px,
+      70px 70px,
+      auto,
+      auto;
 }
 
 /* =============================================
-   CARD PRINCIPAL CENTRALIZADO
+   CARD CENTRAL
 ============================================= */
 
 .login-card {
   position: relative;
-  z-index: 2;
   width: 100%;
-  max-width: 1120px;              /* limite máximo */
-  margin: 0 auto;                 /* garante centro horizontal */
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  border-radius: 40px;            /* bordas bem arredondadas */
+  max-width: 1180px;
+  display: flex;
 
-  /* efeito glass premium */
-  background: radial-gradient(
-    circle at top left,
-    rgba(15, 23, 42, 0.92),
-    rgba(2, 6, 23, 0.92)
-  );
-  backdrop-filter: blur(22px) saturate(170%);
-  -webkit-backdrop-filter: blur(22px) saturate(170%);
-
-  /* borda e brilho suave */
-  border: 1px solid rgba(148, 163, 184, 0.32);
-  box-shadow:
-    0 32px 90px rgba(0, 0, 0, 0.85),
-    0 0 0 1px rgba(15, 23, 42, 0.9),
-    0 0 40px rgba(34, 197, 94, 0.18);
-
+  border-radius: 32px;
   overflow: hidden;
 
-  /* parallax sutil no card */
-  transform: translate3d(
-    calc(var(--parallaxX) * 8px),
-    calc(var(--parallaxY) * 6px),
-    0
-  );
-  transition: transform 0.18s ease-out, box-shadow 0.22s ease-out;
-}
-
-/* leve “respirada” quando o mouse está na tela */
-.login-page:hover .login-card {
+  background: radial-gradient(circle at top, #020617 0, #020617 70%, #000 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
   box-shadow:
-    0 40px 110px rgba(0, 0, 0, 0.9),
-    0 0 0 1px rgba(15, 23, 42, 0.9),
-    0 0 46px rgba(34, 197, 94, 0.26);
+    0 24px 60px rgba(0, 0, 0, 0.8),
+    0 0 0 1px rgba(15, 23, 42, 0.85);
 }
 
 /* =============================================
-   COLUNA ESQUERDA – BRANDING
+   BRANDING – COLUNA ESQUERDA (VERSÃO ESCURA)
 ============================================= */
 
 .login-brand {
-  padding: 32px 32px 26px 32px;
-  background: radial-gradient(
-    circle at top left,
-    rgba(34, 197, 94, 0.95),
-    rgba(22, 163, 74, 0.92),
-    rgba(6, 95, 70, 0.96)
-  );
-  color: #ecfdf5;
+  width: 40%;
+  min-width: 330px;
+
+  padding: 40px 36px 30px;
+
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+
+  /* versão escura, puxando para #14532d / #166534 */
+  background:
+    radial-gradient(circle at top left, #16a34a 0, #166534 38%, #14532d 65%, #052e16 100%);
+  color: #e5e7eb;
 }
 
-.login-brand-header {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.login-logo-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
+/* CÍRCULO DO LOGO (glow + gradiente) */
 .login-logo-ring {
-  width: 46px;
-  height: 46px;
+  width: 72px;
+  height: 72px;
   border-radius: 999px;
-  background: radial-gradient(circle, #22c55e, #16a34a 60%, #14532d 100%);
+
+  padding: 4px; /* borda interna para o logo respirar */
+
   display: flex;
   align-items: center;
   justify-content: center;
+
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.10), rgba(20, 83, 45, 0.98));
   box-shadow:
-    0 0 0 1px rgba(15, 23, 42, 0.95),
-    0 12px 32px rgba(0, 0, 0, 0.7);
+    0 0 0 1px rgba(250, 250, 250, 0.06),
+    0 12px 26px rgba(15, 118, 110, 0.55);
+
+  overflow: visible; /* garante que o glow não seja cortado */
 }
 
+/* IMAGEM DO LOGO DENTRO DO CÍRCULO */
 .login-logo-img {
-  width: 32px;
-  height: 32px;
+  width: 50px;
+  height: 50px;
+
+  border-radius: 999px;
   object-fit: contain;
+
+  background: transparent;
+  box-shadow: none; /* glow fica só no círculo, não na imagem */
 }
+
+
+
+/* ---------------- TITULOS ---------------- */
 
 .login-brand-title {
   display: flex;
@@ -177,124 +128,185 @@
   font-size: 12px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  opacity: 0.9;
+  color: #bbf7d0;
+  opacity: 0.95;
 }
 
 .login-brand-product {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
+  margin-top: 2px;
 }
 
 .login-brand-tagline {
   font-size: 13px;
   opacity: 0.9;
+  margin-top: 2px;
 }
 
-.login-brand-main {
-  margin-top: 14px;
-}
+/* ---------------- CONTEÚDO ---------------- */
 
 .login-brand-main h1 {
   font-size: 32px;
-  margin: 0 0 10px;
+  margin-bottom: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
-.login-brand-description {
-  margin: 0 0 14px;
-  font-size: 15px;
-  max-width: 26rem;
+.login-brand-main p {
+  font-size: 14px;
+  line-height: 1.5;
+  opacity: 0.94;
+  margin-bottom: 14px;
 }
 
+/* Lista com checks animados */
 .login-brand-highlights {
   list-style: none;
   padding: 0;
-  margin: 0 0 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  margin: 6px 0 0;
   font-size: 14px;
+  color: #dcfce7;
 }
 
 .login-brand-highlights li {
+  position: relative;
+  padding-left: 30px;
+  margin-bottom: 10px;
+}
+
+/* esconde o primeiro caractere “✓” do texto */
+.login-brand-highlights li::first-letter {
+  color: transparent;
+}
+
+/* círculo + check custom + animação */
+.login-brand-highlights li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+
   display: flex;
   align-items: center;
-  gap: 7px;
-}
-
-.login-check {
-  display: inline-flex;
-  align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.2);
-  font-size: 11px;
-}
 
-.login-brand-footnote {
   font-size: 12px;
-  max-width: 25rem;
-  opacity: 0.9;
+  color: #bbf7d0;
+  background: rgba(6, 95, 70, 0.96);
+  box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.6);
+
+  animation: login-check-pulse 2.8s ease-in-out infinite;
 }
 
+/* pequeno stagger nas animações */
+.login-brand-highlights li:nth-child(2)::before {
+  animation-delay: 0.25s;
+}
+.login-brand-highlights li:nth-child(3)::before {
+  animation-delay: 0.5s;
+}
+.login-brand-highlights li:nth-child(4)::before {
+  animation-delay: 0.75s;
+}
+
+/* Rodapé com © 2025 GP Labs fixo no final */
 .login-brand-footer {
-  margin-top: 18px;
+  margin-top: auto;
+  padding-top: 28px;
+
   font-size: 12px;
-  opacity: 0.9;
+  color: #e5e7eb;
+  opacity: 0.55;
 }
 
 /* =============================================
-   COLUNA DIREITA – FORMULÁRIO
+   FORMULÁRIO – COLUNA DIREITA
 ============================================= */
 
 .login-form-wrapper {
-  background: radial-gradient(circle at top right, #0b1120 0, #020617 55%);
-  padding: 32px 34px 26px 34px;
+  flex: 1;
+  padding: 40px 44px 30px;
+
+  position: relative;
+  overflow: hidden;
+
   color: #e5e7eb;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+
+  /* gradiente base (será animado via ::before) */
+  background: radial-gradient(circle at top right, #020617 0, #020617 65%, #020617 100%);
 }
 
-.login-form-header {
-  margin-bottom: 18px;
+/* Gradiente animado suave (glow de rede neural) */
+.login-form-wrapper::before {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  pointer-events: none;
+  z-index: 0;
+
+  background: radial-gradient(circle at 0% 0%, rgba(56, 189, 248, 0.09) 0, transparent 55%),
+              radial-gradient(circle at 100% 100%, rgba(34, 197, 94, 0.12) 0, transparent 55%);
+  opacity: 0.9;
+
+  transform: translate3d(0, 0, 0);
+  animation: login-gradient-move 18s ease-in-out infinite alternate;
 }
 
-.login-env-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
+/* conteúdo acima do glow */
+.login-form-header,
+.login-form,
+.login-meta-info {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------------- HEADER ---------------- */
+
+.login-form-header h2 {
+  margin: 0 0 6px;
+  font-size: 24px;
+  font-weight: 600;
 }
 
 .login-env-badge {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
+  padding: 6px 12px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 500;
-  background: rgba(22, 163, 74, 0.15);
+
+  background: rgba(22, 163, 74, 0.18);
+  border: 1px solid rgba(34, 197, 94, 0.45);
   color: #4ade80;
-  border: 1px solid rgba(34, 197, 94, 0.5);
+
+  margin-bottom: 10px;
 }
 
-.login-env-hint {
-  font-size: 11px;
-  color: #9ca3af;
-}
-
-.login-form-header h2 {
-  font-size: 22px;
-  margin: 2px 0 4px;
-}
-
-.login-form-subtitle {
+.login-form-header p {
   margin: 0;
-  font-size: 14px;
+  font-size: 13px;
   color: #9ca3af;
 }
+
+/* ---------------- ERRO ---------------- */
+
+.login-error {
+  margin: 10px 0;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(220, 38, 38, 0.16);
+  border: 1px solid rgba(248, 113, 113, 0.75);
+  color: #fecaca;
+  font-size: 12px;
+}
+
+/* ---------------- FORM ---------------- */
 
 .login-form {
   display: flex;
@@ -306,25 +318,22 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  font-size: 13px;
 }
 
-.login-field-label {
-  font-size: 13px;
-  color: #e5e7eb;
+.login-field label {
+  color: #d1d5db;
 }
 
 .login-field input {
   border-radius: 999px;
-  border: 1px solid #1f2937;
+  border: 1px solid rgba(148, 163, 184, 0.35);
   background: rgba(15, 23, 42, 0.96);
-  padding: 10px 14px;
+  color: #f9fafb;
+
+  padding: 12px 16px;
   font-size: 14px;
-  color: #e5e7eb;
   outline: none;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    background 0.15s ease;
 }
 
 .login-field input::placeholder {
@@ -333,154 +342,148 @@
 
 .login-field input:focus {
   border-color: #22c55e;
-  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.6);
-  background: #020617;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.3);
 }
 
-/* Erro */
-.login-error {
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.65);
-  color: #fecaca;
-  border-radius: 10px;
-  padding: 8px 10px;
-  font-size: 13px;
-  margin-bottom: 6px;
-}
+/* ---------------- OPÇÕES ---------------- */
 
-/* Opções inferior (checkbox + link) */
 .login-options {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
   margin-top: 4px;
+  font-size: 12px;
+  color: #9ca3af;
 }
 
 .login-remember {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
-  color: #e5e7eb;
 }
 
-.login-remember input[type="checkbox"] {
-  width: 15px;
-  height: 15px;
-  border-radius: 4px;
-  border: 1px solid #4b5563;
-  background: #020617;
+.login-remember input {
+  width: 14px;
+  height: 14px;
   accent-color: #22c55e;
 }
 
-/* Link "Esqueci minha senha" */
 .login-link-button {
   border: none;
-  background: transparent;
+  background: none;
   color: #60a5fa;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   padding: 0;
-  text-decoration: none;
-  transition: color 0.15s ease;
 }
 
 .login-link-button:hover {
-  color: #93c5fd;
   text-decoration: underline;
 }
 
-/* Botão Entrar */
+/* ---------------- BOTÃO ENTRAR ---------------- */
+
 .login-submit {
-  margin-top: 8px;
-  border-radius: 999px;
+  margin-top: 6px;
   border: none;
-  padding: 11px 16px;
-  font-size: 15px;
+  border-radius: 999px;
+  padding: 14px 18px;
+
+  font-size: 14px;
   font-weight: 600;
-  cursor: pointer;
-  background: linear-gradient(90deg, #22c55e, #16a34a);
+
+  background: linear-gradient(to right, #22c55e, #16a34a);
   color: #022c22;
-  box-shadow:
-    0 12px 30px rgba(34, 197, 94, 0.55),
-    0 0 0 1px rgba(6, 95, 70, 0.6);
+
+  box-shadow: 0 16px 36px rgba(34, 197, 94, 0.45);
+  cursor: pointer;
+
   transition:
     transform 0.12s ease,
     box-shadow 0.12s ease,
-    filter 0.12s ease,
-    opacity 0.12s ease;
+    filter 0.12s ease;
 }
 
 .login-submit:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow:
-    0 18px 40px rgba(34, 197, 94, 0.7),
-    0 0 0 1px rgba(6, 95, 70, 0.7);
-  filter: brightness(1.02);
+  transform: translateY(-2px);
+  box-shadow: 0 22px 52px rgba(34, 197, 94, 0.65);
+  filter: brightness(1.04);
 }
 
 .login-submit:disabled {
-  opacity: 0.7;
+  opacity: 0.65;
   cursor: default;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.7);
+  box-shadow: none;
 }
 
-.login-security-hint {
-  margin-top: 6px;
-  font-size: 11px;
-  color: #6b7280;
-}
+/* ---------------- META INFO ---------------- */
 
 .login-meta-info {
-  margin-top: 12px;
+  margin-top: 20px;
   font-size: 12px;
   color: #6b7280;
+  opacity: 0.85;
+}
+
+/* =============================================
+   ANIMAÇÕES
+============================================= */
+
+@keyframes login-check-pulse {
+  0% {
+    transform: translateY(-50%) scale(1);
+    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.6);
+  }
+  40% {
+    transform: translateY(-50%) scale(1.12);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.25);
+  }
+  100% {
+    transform: translateY(-50%) scale(1);
+    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.6);
+  }
+}
+
+@keyframes login-gradient-move {
+  0% {
+    transform: translate3d(-6%, -4%, 0);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translate3d(4%, 3%, 0);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(7%, 6%, 0);
+    opacity: 0.85;
+  }
 }
 
 /* =============================================
    RESPONSIVO
 ============================================= */
 
-@media (max-width: 1024px) {
-  .login-card {
-    grid-template-columns: minmax(0, 1fr);
-    border-radius: 26px;
+@media (max-width: 880px) {
+  .login-page {
+    padding: 16px;
   }
 
-  .login-background-layer img {
-    right: -30%;
-    width: 90vh;
-    opacity: 0.26;
+  .login-card {
+    flex-direction: column;
+    max-width: 500px;
+    border-radius: 28px;
   }
 
   .login-brand {
-    padding: 24px 22px 20px 22px;
+    width: 100%;
+    padding: 26px 22px 18px;
   }
 
   .login-form-wrapper {
-    padding: 24px 22px 22px 22px;
-  }
-}
-
-@media (max-width: 720px) {
-  .login-page {
-    padding: 18px 12px;
-  }
-
-  .login-background-layer img {
-    right: -40%;
-    top: 55%;
-    width: 80vh;
-    opacity: 0.26;
+    padding: 24px 22px 20px;
   }
 
   .login-brand-main h1 {
     font-size: 26px;
   }
-
-  .login-brand-description {
-    font-size: 14px;
-  }
 }
-
