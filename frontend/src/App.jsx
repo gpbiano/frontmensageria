@@ -2,6 +2,8 @@
 import { useEffect, useState } from "react";
 
 import ChatHistoryPage from "./ChatHistoryPage.jsx";
+
+// OUTBOUND
 import CampaignsPage from "./outbound/CampaignsPage.jsx";
 import TemplatesPage from "./outbound/TemplatesPage.jsx";
 import MediaLibrary from "./outbound/MediaLibrary.jsx";
@@ -11,14 +13,17 @@ import NumbersPage from "./outbound/NumbersPage.jsx";
 import BlacklistPage from "./outbound/BlacklistPage.jsx";
 import FilesPage from "./outbound/FilesPage.jsx";
 
-import GlobalHeader from "./components/GlobalHeader.jsx";
-
 // CHATBOT
 import ChatbotPage from "./chatbot/ChatbotPage.jsx";
 
 // SETTINGS
 import SettingsChannelsPage from "./settings/SettingsChannelsPage.jsx";
+
+// AUTH
 import LoginPage from "./LoginPage.jsx";
+
+// LAYOUT
+import GlobalHeader from "./components/GlobalHeader.jsx";
 
 // CSS GLOBAL
 import "./App.css";
@@ -34,7 +39,7 @@ export default function App() {
   const [campaignsOpen, setCampaignsOpen] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // auto login se tiver token
+  // Auto login se tiver token salvo
   useEffect(() => {
     const token = localStorage.getItem(AUTH_KEY);
     if (token) {
@@ -51,10 +56,12 @@ export default function App() {
 
   function handleLogout() {
     localStorage.removeItem(AUTH_KEY);
+    localStorage.removeItem("gpLabsUser");
+    localStorage.removeItem("gpLabsRememberMe");
     setIsAuthenticated(false);
   }
 
-  // Navegação
+  // Navegação principal
   function selectInbound() {
     setActiveSection("inbound");
   }
@@ -77,23 +84,19 @@ export default function App() {
     setActiveSection("settings");
   }
 
+  // Se não estiver logado, mostra só a tela de login
   if (!isAuthenticated) {
     return <LoginPage onLogin={handleLogin} />;
   }
 
   return (
     <div className="app-shell">
-      {/* HEADER GLOBAL – ocupa todo o topo */}
-      <GlobalHeader
-        appCompanyName="GP Labs"
-        holdingName="GP Holding Participações Ltda."
-        clientCompanyName="GP Labs"
-        userName="Genivaldo Peres"
-      />
+      {/* HEADER GLOBAL – topo inteiro */}
+      <GlobalHeader onLogout={handleLogout} />
 
       {/* LAYOUT PRINCIPAL: SIDEBAR + CONTEÚDO */}
       <div className="app-main">
-        {/* SIDEBAR (sem cabeçalho interno, só menu + footer) */}
+        {/* SIDEBAR */}
         <aside className="sidebar">
           <nav className="sidebar-menu">
             {/* Atendimento */}
@@ -116,7 +119,7 @@ export default function App() {
               <span className="sidebar-item-label">Chatbot</span>
             </button>
 
-            {/* Campanhas */}
+            {/* Campanhas (grupo colapsável) */}
             <div className="sidebar-group">
               <button
                 className={
@@ -180,7 +183,7 @@ export default function App() {
                     }
                     onClick={() => selectCampaignTab("blacklist")}
                   >
-                    BlackList
+                    Blacklist
                   </button>
 
                   <button
@@ -207,22 +210,13 @@ export default function App() {
             </button>
           </nav>
 
-          {/* FOOTER DA SIDEBAR */}
+          {/* FOOTER – apenas versão, discreta */}
           <div className="sidebar-footer">
-            <div className="sidebar-footer-info">
-              <div className="sidebar-footer-title">
-                GP Labs Plataforma WhatsApp
-              </div>
-              <div className="sidebar-footer-version">
-                Versão 1.0.4 • Ambiente DEV
-              </div>
-            </div>
-
-
+            <span className="sidebar-version">Versão 1.0.4</span>
           </div>
         </aside>
 
-        {/* CONTEÚDO DAS PÁGINAS */}
+        {/* CONTEÚDO PRINCIPAL */}
         <main className="main-content">
           {activeSection === "inbound" && <ChatHistoryPage />}
 
@@ -245,4 +239,3 @@ export default function App() {
     </div>
   );
 }
-

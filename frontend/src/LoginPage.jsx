@@ -5,12 +5,35 @@ import "./LoginPage.css";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
 
 export default function LoginPage({ onLogin }) {
+  /* =========================
+     STATES
+  ========================== */
   const [email, setEmail] = useState("admin@gplabs.com.br");
   const [password, setPassword] = useState("gplabs123");
   const [rememberMe, setRememberMe] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
+  /* =========================
+     PARALLAX STATE
+  ========================== */
+  const [parallax, setParallax] = useState({ x: 0, y: 0 });
+
+  function handleMouseMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / rect.width;
+    const relY = (e.clientY - rect.top) / rect.height;
+
+    // converte para range -1 a 1
+    const x = (relX - 0.5) * 2;
+    const y = (relY - 0.5) * 2;
+
+    setParallax({ x, y });
+  }
+
+  /* =========================
+     LOGIN SUBMIT
+  ========================== */
   async function handleSubmit(e) {
     e.preventDefault();
     console.log("🔐 Enviando login...", { email, password: "********" });
@@ -22,113 +45,169 @@ export default function LoginPage({ onLogin }) {
 
     setIsSubmitting(true);
     setError("");
+    setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/login`, {
+      const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ email, password })
       });
 
-      const data = await res.json().catch(() => ({}));
-
-      console.log("🔐 Resposta do /login:", res.status, data);
+      const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || "Não foi possível fazer login.");
-        return;
+        throw new Error(data?.message || "Erro ao conectar ao servidor.");
       }
 
-      // salva no navegador
-      localStorage.setItem("gpLabsAuthToken", data.token);
-      localStorage.setItem("gpLabsUser", JSON.stringify(data.user || {}));
-      if (rememberMe) {
-        localStorage.setItem("gpLabsRememberMe", "true");
-      } else {
-        localStorage.removeItem("gpLabsRememberMe");
+      if (data?.token) {
+        localStorage.setItem("gpLabsAuthToken", data.token);
       }
 
-      // avisa o App.jsx que deu certo
-      if (onLogin) {
-        onLogin(data);
-      }
+      onLogin?.(data);
     } catch (err) {
-      console.error("❌ Erro ao chamar /login:", err);
-      setError("Erro ao conectar ao servidor. Tente novamente.");
+      setError(err.message || "Não foi possível entrar. Tente novamente.");
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
   }
 
+  /* =========================
+     RENDER
+  ========================== */
+
   return (
-    <div className="login-page">
+    <div
+      className="login-page"
+      onMouseMove={handleMouseMove}
+      /* variáveis para o CSS */
+      style={{
+        "--parallaxX": parallax.x,
+        "--parallaxY": parallax.y
+      }}
+    >
+      {/* FUNDO FUTURISTA COM PARALLAX */}
+ <div className="login-background">
+  <div className="login-background-layer">
+    <img src="/globe-green.webp" alt="Globo futurista" />
+  </div>
+</div>
+
+
+      {/* CARD PRINCIPAL */}
       <div className="login-card">
-        {/* Coluna esquerda – branding */}
+        {/* ================================================
+            COLUNA ESQUERDA — BRANDING
+        ================================================= */}
         <div className="login-brand">
-          <div className="login-brand-header">
+          <header className="login-brand-header">
             <div className="login-logo-wrapper">
-              <img
-                src="/gp-labs-logo.png"
-                alt="GP Labs"
-                className="login-logo-img"
-              />
+              <div className="login-logo-ring">
+                <img
+                  src="/gp-labs-logo.png"
+                  alt="GP Labs"
+                  className="login-logo-img"
+                />
+              </div>
+
               <div className="login-brand-title">
                 <span className="login-brand-company">GP LABS</span>
-                <span className="login-brand-product">Plataforma WhatsApp</span>
+                <span className="login-brand-product">
+                  Plataforma WhatsApp
+                </span>
+                <span className="login-brand-tagline">
+                  Central de campanhas, atendimento e chatbot.
+                </span>
               </div>
             </div>
-          </div>
+          </header>
 
-          <div className="login-brand-main">
+          <main className="login-brand-main">
             <h1>Cliente On-line</h1>
-            <p>
+
+            <p className="login-brand-description">
               Centralize o atendimento WhatsApp, campanhas e relatórios em um
-              único painel profissional.
+              único painel profissional, com experiência premium de operação.
             </p>
 
             <ul className="login-brand-highlights">
-              <li>✔ Histórico completo de conversas</li>
-              <li>✔ Envio de campanhas e templates</li>
-              <li>✔ Integração oficial WhatsApp Cloud API</li>
+              <li>
+                <span className="login-check">✓</span> Histórico completo de conversas
+              </li>
+              <li>
+                <span className="login-check">✓</span> Envio de campanhas, templates e mídia
+              </li>
+              <li>
+                <span className="login-check">✓</span> Integração oficial WhatsApp Cloud API
+              </li>
             </ul>
-          </div>
 
-          <div className="login-brand-footer">
-            <span>© {new Date().getFullYear()} GP Holding Participações</span>
-          </div>
+            <p className="login-brand-footnote">
+              Otimizada para equipes que precisam de velocidade, segurança e
+              performance em alto volume.
+            </p>
+          </main>
+
+          <footer className="login-brand-footer">
+            © 2025 GP Holding Participações
+          </footer>
         </div>
 
-        {/* Coluna direita – formulário */}
+        {/* ================================================
+            COLUNA DIREITA — FORMULÁRIO
+        ================================================= */}
         <div className="login-form-wrapper">
-          <div className="login-form-header">
-            <span className="login-env-badge">Dev • Local</span>
+          <header className="login-form-header">
+            <div className="login-env-wrapper">
+              <span className="login-env-badge">Dev · Local</span>
+              <span className="login-env-hint">
+                Ambiente de desenvolvimento — uso interno GP Labs
+              </span>
+            </div>
+
             <h2>Entrar na plataforma</h2>
-            <p>Acesse com suas credenciais de operador.</p>
-          </div>
+
+            <p className="login-form-subtitle">
+              Acesse com suas credenciais de operador para continuar.
+            </p>
+          </header>
+
+          {error && <div className="login-error">{error}</div>}
 
           <form className="login-form" onSubmit={handleSubmit}>
-            <label className="login-field">
-              <span>E-mail</span>
+            {/* Campo EMAIL */}
+            <div className="login-field">
+              <label className="login-field-label" htmlFor="email">
+                E-mail
+              </label>
               <input
+                id="email"
                 type="email"
-                placeholder="voce@empresa.com"
+                autoComplete="email"
+                placeholder="seu@email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
-            </label>
+            </div>
 
-            <label className="login-field">
-              <span>Senha</span>
+            {/* Campo SENHA */}
+            <div className="login-field">
+              <label className="login-field-label" htmlFor="password">
+                Senha
+              </label>
               <input
+                id="password"
                 type="password"
-                placeholder="••••••••"
+                autoComplete="current-password"
+                placeholder="********"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
-            </label>
+            </div>
 
-            {error && <div className="login-error">{error}</div>}
-
+            {/* OPÇÕES INFERIORES */}
             <div className="login-options">
               <label className="login-remember">
                 <input
@@ -136,35 +215,33 @@ export default function LoginPage({ onLogin }) {
                   checked={rememberMe}
                   onChange={(e) => setRememberMe(e.target.checked)}
                 />
-                <span>Manter conectado</span>
+                Manter conectado
               </label>
 
               <button
                 type="button"
                 className="login-link-button"
-                onClick={() =>
-                  alert("Fluxo de recuperação de senha será implementado em breve.")
-                }
+                onClick={() => alert("Fluxo de recuperação de senha em desenvolvimento.")}
               >
                 Esqueci minha senha
               </button>
             </div>
 
-            <button
-              type="submit"
-              className="login-submit"
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? "Entrando..." : "Entrar"}
+            {/* BOTÃO SUBMIT */}
+            <button type="submit" className="login-submit" disabled={loading}>
+              {loading ? "Entrando..." : "Entrar"}
             </button>
-          </form>
 
-          <div className="login-meta-info">
-            <span>Versão 1.0.1 • GP Labs – Dev App WhatsApp</span>
-          </div>
+            <p className="login-security-hint">
+              Suas credenciais são criptografadas em trânsito via HTTPS.
+            </p>
+
+            <p className="login-meta-info">
+              Versão 1.0.4 · GP Labs – Dev App WhatsApp
+            </p>
+          </form>
         </div>
       </div>
     </div>
   );
 }
-

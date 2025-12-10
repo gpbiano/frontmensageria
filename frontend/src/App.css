@@ -1,9 +1,23 @@
 /* ============================================================
    APP SHELL + LAYOUT GERAL
 ============================================================ */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;           /* garante altura cheia */
+  background: #020617;
+}
 
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    sans-serif;
+}
+
+/* se existir algum header antigo, some com ele */
 .app-header {
-  display: none !important; /* esconde qualquer header antigo */
+  display: none !important;
 }
 
 .app-shell {
@@ -13,6 +27,8 @@
   height: 100vh;
   background: #020617;
   color: #e5e7eb;
+  font-size: 15px;          /* base maior para leitura */
+  line-height: 1.5;
 }
 
 /* Linha abaixo do header: sidebar + conteúdo */
@@ -66,7 +82,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: 15px; /* antes 13px */
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease,
     transform 0.1s ease;
@@ -88,7 +104,7 @@
 }
 
 .sidebar-item-chevron {
-  font-size: 11px;
+  font-size: 12px; /* antes 11px */
   opacity: 0.7;
 }
 
@@ -110,7 +126,7 @@
   border: none;
   text-align: left;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: 14px; /* antes 12px */
   color: #9ca3af;
   border-radius: 6px;
   cursor: pointer;
@@ -127,18 +143,16 @@
   color: #34d399;
 }
 
-/* Rodapé da sidebar – nome + versão + botão sair */
+/* Rodapé da sidebar – hoje só versão (sem botão sair) */
 .sidebar-footer {
   margin-top: auto;
-  padding: 10px 14px 14px;
-  border-top: 1px solid rgba(15, 23, 42, 0.9);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 14px 16px;
+  border-top: 1px solid rgba(15, 23, 42, 0.8);
+  text-align: center;
 }
 
 .sidebar-footer-info {
-  font-size: 11px;
+  font-size: 12px; /* antes 11px */
   color: rgba(148, 163, 184, 0.9);
 }
 
@@ -151,12 +165,22 @@
   opacity: 0.7;
 }
 
+.sidebar-version {
+  font-size: 11px;
+  color: #6b7280;
+  opacity: 0.9;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+/* Botão sair (mantido só se usar em outro lugar) */
 .sidebar-logout {
   align-self: flex-start;
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 999px;
   padding: 6px 16px;
-  font-size: 12px;
+  font-size: 14px; /* antes 12px */
   font-weight: 500;
   cursor: pointer;
   background: #111827;
@@ -171,10 +195,6 @@
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
   transform: translateY(-1px);
 }
-
-/* (Removemos logo-mark / logo-text / logo-title / logo-subtitle e sidebar-header,
-   porque o header global já cuida da identidade visual no topo.) */
-
 
 /* ============================================================
    PÁGINA DE NÚMEROS (OUTBOUND)
@@ -201,13 +221,13 @@
 
 .numbers-page .page-subtitle {
   margin: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md); /* maior que sm */
   color: var(--color-text-secondary);
 }
 
 .numbers-page .page-meta {
   margin-top: 8px;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   color: var(--color-text-tertiary);
 }
 
@@ -217,7 +237,7 @@
   border-radius: var(--radius-full);
   border: none;
   cursor: pointer;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md); /* antes sm */
   font-weight: 500;
   background: var(--color-primary);
   color: #020617;
@@ -247,7 +267,7 @@
 
 .numbers-card h2 {
   margin: 0 0 8px;
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl); /* antes lg */
 }
 
 .numbers-subtitle {
@@ -274,7 +294,7 @@
 .numbers-table th {
   font-weight: 500;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -302,9 +322,9 @@
 .quality-pill {
   display: inline-flex;
   align-items: center;
-  padding: 2px 10px;
+  padding: 3px 12px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 13px; /* antes 12px */
   font-weight: 500;
   border: 1px solid var(--color-border-light);
   background: rgba(15, 23, 42, 0.6);
@@ -323,7 +343,6 @@
 
 .quality-red {
   border-color: #ef4444;
-  color: #ef4444;
 }
 
 /* ============================================================
@@ -331,6 +350,9 @@
 ============================================================ */
 
 .topbar {
+  position: sticky;          /* fica colado no topo quando logado */
+  top: 0;
+  z-index: 40;               /* acima do conteúdo */
   display: flex;
   flex-direction: column;
   background: var(--color-bg-elevated, #020617);
@@ -380,8 +402,8 @@
 }
 
 .topbar-logo {
-  width: 32px;
-  height: 32px;
+  width: 34px;   /* leve aumento */
+  height: 34px;
   border-radius: 999px;
   background: #000; /* fundo pra trás do logo */
   display: flex;
@@ -398,13 +420,13 @@
 }
 
 .topbar-app-title {
-  font-size: 14px;
+  font-size: 16px; /* antes 14px */
   font-weight: 600;
   color: var(--color-text-primary, #e5e7eb);
 }
 
 .topbar-app-subtitle {
-  font-size: 11px;
+  font-size: 13px; /* antes 11px */
   color: var(--color-text-secondary, #9ca3af);
 }
 
@@ -416,8 +438,8 @@
 }
 
 .icon-btn {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: 999px;
   border: 1px solid var(--color-border, #1f2937);
   background: rgba(15, 23, 42, 0.95);
@@ -425,7 +447,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 18px; /* antes 16px */
   transition: background 0.15s ease, transform 0.1s ease,
     box-shadow 0.15s ease;
 }
@@ -441,8 +463,8 @@
   border: 1px solid var(--color-border, #1f2937);
   background: transparent;
   color: var(--color-text-secondary, #cbd5f5);
-  font-size: 12px;
-  padding: 6px 12px;
+  font-size: 13px; /* antes 12px */
+  padding: 7px 13px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -462,21 +484,21 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px 4px 4px;
+  padding: 5px 12px 5px 5px;
   border-radius: 999px;
   background: rgba(15, 23, 42, 0.9);
   border: 1px solid var(--color-border, #1f2937);
 }
 
 .user-avatar {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 999px;
   background: linear-gradient(135deg, #22c55e, #16a34a);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 13px; /* antes 12px */
   font-weight: 600;
   color: #022c22;
 }
@@ -488,50 +510,54 @@
 }
 
 .user-name {
-  font-size: 12px;
+  font-size: 13px; /* antes 12px */
   color: var(--color-text-primary, #e5e7eb);
 }
 
 .user-company {
-  font-size: 10px;
+  font-size: 11px; /* antes 10px */
   color: var(--color-text-tertiary, #64748b);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 /* ===============================
    DROPDOWN DO USUÁRIO
 =============================== */
 
-/* Container que agrupa o trigger e o menu */
 .user-menu {
   position: relative;
   display: inline-block;
 }
 
-/* Quando passa o mouse, mostra o dropdown */
-.user-menu:hover .user-dropdown {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-}
-
-/* Dropdown escondido inicialmente */
+/* dropdown fechado por padrão */
 .user-dropdown {
   position: absolute;
   right: 0;
-  top: calc(100% + 6px);
-  min-width: 170px;
-  background: #0f172a;
-  border: 1px solid #1e293b;
-  border-radius: 10px;
-  padding: 6px 0;
+  top: 110%;
+  min-width: 200px;
+  background: #020617;
+  border-radius: 12px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.8);
+  padding: 8px 0;
   opacity: 0;
-  transform: translateY(-6px);
+  transform: translateY(4px);
   pointer-events: none;
-  transition: all 0.18s ease;
-  box-shadow: 0 8px 20px rgba(0,0,0,0.35);
-  z-index: 999;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  z-index: 50;
+}
+
+/* quando o menu está aberto (classe controlada pelo React) */
+.user-dropdown.open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* evita regras antigas de hover atrapalhando */
+.user-menu:hover .user-dropdown {
+  /* intencionalmente vazio – controle é só pela classe .open */
 }
 
 /* Itens do dropdown */
@@ -542,13 +568,13 @@
   border: none;
   color: #e5e7eb;
   text-align: left;
-  font-size: 13px;
+  font-size: 14px; /* antes 13px */
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .dropdown-item:hover {
-  background: rgba(255,255,255,0.06);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* Botão sair */
@@ -559,6 +585,7 @@
 .dropdown-item.logout:hover {
   background: rgba(239, 68, 68, 0.15);
 }
+
 /* ===============================
    TEMPLATES PAGE — FIX VISIBILITY
 =============================== */
@@ -585,7 +612,7 @@
   color: #020617 !important;
   padding: 8px 16px !important;
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 14px !important; /* antes 13px */
   font-weight: 600;
   border: 1px solid rgba(34, 197, 94, 0.4);
   transition: all 0.15s ease;
@@ -630,6 +657,7 @@
   visibility: visible !important;
   opacity: 1 !important;
 }
+
 /* ===============================
    Página de Arquivos (Assets)
 =============================== */
@@ -659,12 +687,12 @@
 
 .assets-storage-top h2 {
   margin: 0 0 4px;
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-xl); /* antes base */
 }
 
 .assets-storage-subtitle {
   margin: 0;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   color: var(--color-text-secondary);
 }
 
@@ -677,7 +705,7 @@
 }
 
 .assets-storage-percent {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   padding: 2px 8px;
   border-radius: 999px;
   background: rgba(34, 197, 94, 0.12);
@@ -700,7 +728,7 @@
 
 .assets-storage-hint {
   margin: 8px 0 0;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   color: var(--color-text-tertiary);
 }
 
@@ -730,7 +758,7 @@
   background: transparent;
   border: none;
   outline: none;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md); /* antes sm */
   color: var(--color-text-primary);
 }
 
@@ -745,7 +773,7 @@
   border: 1px solid var(--color-border);
   background: rgba(15, 23, 42, 0.9);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   padding: 4px 10px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
@@ -783,7 +811,7 @@
 .assets-table th {
   font-weight: 500;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -800,7 +828,7 @@
 }
 
 .assets-url-link {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   color: #38bdf8;
   text-decoration: none;
 }
@@ -827,12 +855,12 @@
 
 .selected-file-hint {
   margin-top: 6px;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   color: var(--color-text-secondary);
 }
 
 .assets-modal-hint {
   margin-top: 10px;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm); /* antes xs */
   color: var(--color-text-tertiary);
 }
