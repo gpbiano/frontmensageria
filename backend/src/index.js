@@ -723,7 +723,7 @@ app.use("/uploads", express.static(UPLOADS_DIR));
  * /api/chatbot/...            → Configuração do chatbot (aba Chatbot)
  * /api/human/...              → Rotas específicas do atendimento humano
  * /outbound/numbers/...       → Números WABA (sync com Meta)
- * /outbound/templates/...     → Templates (listar, criar, sync)
+ * /outbound/templates/...     → Templates (listar, sync)
  * /outbound/assets/...        → Arquivos de mídia
  * /outbound/...               → Campanhas, etc.
  */
@@ -735,16 +735,16 @@ app.use("/api", chatbotRouter); // gera /api/chatbot/...
 app.use("/api/human", humanRouter);
 
 // Rotas de NÚMEROS (sync com Meta)
-app.use("/outbound/numbers", numbersRouter); // continua igual
+app.use("/outbound/numbers", numbersRouter); // /outbound/numbers e /outbound/numbers/sync
 
-// Rotas de TEMPLATES (listar, criar, sync)
-app.use("/outbound", templatesRouter);
+// Rotas de TEMPLATES (listar, sync com Meta)
+app.use("/outbound/templates", templatesRouter); // /outbound/templates e /outbound/templates/sync
 
-// Rotas de ARQUIVOS (upload, listar, deletar)
-app.use("/outbound", assetsRouter);
+// Rotas de ARQUIVOS (biblioteca de mídia / assets)
+app.use("/outbound/assets", assetsRouter); // /outbound/assets...
 
 // Rotas gerais de outbound (campanhas, etc.)
-app.use("/outbound", outboundRouter);
+app.use("/outbound", outboundRouter); // /outbound/... (campanhas, etc.)
 
 // ===============================
 // HEALTH / STATUS
@@ -1210,5 +1210,3 @@ app.listen(PORT, () => {
     "🚀 API rodando"
   );
 });
-
-

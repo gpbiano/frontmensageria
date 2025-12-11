@@ -1,76 +1,22 @@
 // frontend/src/api.ts
 // Central de chamadas da API da plataforma GP Labs
 
+import {
+  Conversation,
+  ConversationStatus,
+  LoginResponse,
+  MediaItem,
+  Message,
+  PhoneNumberRecord,
+  Template
+} from "./types";
+
 // Observação: mantemos compatibilidade com duas envs possíveis
 // VITE_API_BASE (padrão da doc) e VITE_API_BASE_URL (fallback).
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
   import.meta.env.VITE_API_BASE_URL ||
   "http://localhost:3010";
-
-// ============================
-// TIPAGENS GERAIS
-// ============================
-
-export type ConversationStatus = "open" | "closed";
-
-export interface Conversation {
-  id: number;
-  status: ConversationStatus;
-  currentMode?: "bot" | "human";
-  botAttempts?: number;
-  updatedAt?: string;
-  [key: string]: any;
-}
-
-export interface Message {
-  id?: string | number;
-  waMessageId?: string;
-  from?: "agent" | "customer" | "bot";
-  text?: string;
-  type?: string;
-  mediaUrl?: string;
-  createdAt?: string;
-  [key: string]: any;
-}
-
-export interface PhoneNumberRecord {
-  name: string;
-  displayNumber: string; // ex.: "MEX +52 15595000623"
-  quality?: string; // "Alta" | "Média" | "Baixa"...
-  limitPerDay?: number;
-  connected?: boolean;
-  updatedAt?: string;
-  [key: string]: any;
-}
-
-export interface LoginResponse {
-  token: string;
-  user?: {
-    id?: string | number;
-    email?: string;
-    name?: string;
-    [key: string]: any;
-  };
-}
-
-export interface Template {
-  id: string | number;
-  name: string;
-  category?: string;
-  language?: string;
-  status?: string;
-  [key: string]: any;
-}
-
-export interface MediaItem {
-  id: string | number;
-  label: string;
-  type: string;
-  url: string;
-  createdAt?: string;
-  [key: string]: any;
-}
 
 // ============================
 // HELPER GENÉRICO DE FETCH
@@ -80,12 +26,20 @@ async function request<T = any>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("gpLabsAuthToken")
+      : null;
+
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers || {})
+  };
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    },
-    ...options
+    ...options,
+    headers
   });
 
   if (!res.ok) {
@@ -96,10 +50,10 @@ async function request<T = any>(
     );
   }
 
-  // se não houver corpo JSON, retornamos null
   try {
     return (await res.json()) as T;
   } catch {
+    // se não houver corpo JSON, retornamos null
     return null as T;
   }
 }
@@ -112,6 +66,8 @@ export async function login(
   email: string,
   password: string
 ): Promise<LoginResponse> {
+  // aqui não precisamos do token; o helper ainda tenta pegar do localStorage,
+  // mas o backend simplesmente ignora o header se vier.
   return request<LoginResponse>("/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
@@ -141,7 +97,7 @@ export async function fetchMessages(
 // ============================
 
 /**
- * Lista de números conectados (lê de numbers.json no backend)
+ * Lista de números conectados
  * GET /outbound/numbers
  */
 export async function fetchNumbers(): Promise<PhoneNumberRecord[]> {
@@ -151,7 +107,6 @@ export async function fetchNumbers(): Promise<PhoneNumberRecord[]> {
 /**
  * Força sincronização com a Meta:
  * POST /outbound/numbers/sync
- * Backend consulta Graph API e atualiza numbers.json.
  */
 export async function syncNumbers(): Promise<any> {
   return request<any>("/outbound/numbers/sync", {
@@ -203,16 +158,13 @@ export async function updateConversationStatus(
   status: ConversationStatus,
   extraData?: { tags?: string[] }
 ): Promise<Conversation> {
-  return request<Conversation>(
-    `/conversations/${conversationId}/status`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({
-        status,
-        ...(extraData || {})
-      })
-    }
-  );
+  return request<Conversation>(`/conversations/${conversationId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status,
+      ...(extraData || {})
+    })
+  });
 }
 
 /**
@@ -222,20 +174,20 @@ export async function updateConversationNotes(
   conversationId: number,
   notes: string
 ): Promise<Conversation> {
-  return request<Conversation>(
-    `/conversations/${conversationId}/notes`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ notes })
-    }
-  );
+  return request<Conversation>(`/conversations/${conversationId}/notes`, {
+    method: "PATCH",
+    body: JSON.stringify({ notes })
+  });
 }
 
 // ============================
 // OUTBOUND – Templates & Mídias
-// (baseado nos routers outbound/templates & outbound/assets) 
 // ============================
 
+/**
+ * Lista templates de mensagem aprovados
+ * GET /outbound/templates
+ */
 export async function fetchTemplates(): Promise<Template[]> {
   try {
     const data = await request<any>("/outbound/templates");
@@ -246,6 +198,46 @@ export async function fetchTemplates(): Promise<Template[]> {
   }
 }
 
+/**
+ * Força sincronização de templates com a Meta
+ * POST /outbound/templates/sync
+ */
+export async function syncTemplates(): Promise<any> {
+  return request<any>("/outbound/templates/sync", {
+    method: "POST"
+  });
+}
+
+/**
+ * Cria um novo template na WABA via backend.
+ * payload deve ter obrigatoriamente: name, category, language, components
+ *
+ * O backend responde:
+ * { success: true, template: Template }
+ *
+ * Aqui já devolvemos diretamente o Template para simplificar o uso no front.
+ */
+export async function createTemplate(payload: {
+  name: string;
+  category: string;
+  language: string;
+  components: any[];
+}): Promise<Template> {
+  const data = await request<{ success: boolean; template: Template }>(
+    "/outbound/templates",
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+
+  return data.template;
+}
+
+/**
+ * Lista biblioteca de mídia (assets)
+ * GET /outbound/assets
+ */
 export async function fetchMediaLibrary(): Promise<MediaItem[]> {
   try {
     const data = await request<any>("/outbound/assets");
@@ -282,8 +274,5 @@ export async function createMediaItem(payload: {
 // ============================
 // (RESERVADO) CONFIGURAÇÕES / TAGS FUTURO
 // ============================
-// Quando criarmos as rotas de configurações (tags, grupos etc.),
-// podemos centralizar aqui, ex:
-//
 // export async function fetchSettings() { ... }
 // export async function saveTags(tags: string[]) { ... }

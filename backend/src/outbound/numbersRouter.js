@@ -11,21 +11,19 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Compatibilidade: aceita tanto WABA_ID quanto WHATSAPP_WABA_ID
-const WABA_ID = process.env.WABA_ID || process.env.WHATSAPP_WABA_ID;
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-
+// Caminho do data.json
 const DB_FILE = path.join(process.cwd(), "data.json");
+
+/* ============================================================
+   CARREGAR E SALVAR DB
+============================================================ */
 
 function loadDB() {
   try {
     const raw = fs.readFileSync(DB_FILE, "utf-8");
     return JSON.parse(raw);
   } catch (err) {
-    logger.warn(
-      { err },
-      "⚠️ data.json não encontrado ao carregar em numbersRouter, usando objeto vazio."
-    );
+    logger.warn({ err }, "⚠️ data.json não encontrado — usando objeto vazio.");
     return {};
   }
 }
@@ -34,42 +32,47 @@ function saveDB(data) {
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
   } catch (err) {
-    logger.error({ err }, "❌ Erro ao salvar data.json em numbersRouter");
+    logger.error({ err }, "❌ Erro ao salvar data.json");
   }
 }
 
 /* ============================================================
-   NÚMEROS – ESPELHO DA META
-   ============================================================ */
+   GET /outbound/numbers
+============================================================ */
 
-/**
- * GET /outbound/numbers
- * (montado no index.js como app.use("/outbound/numbers", numbersRouter);)
- *
- * Aqui a rota real é GET /  → lista números salvos em data.json.
- */
 router.get("/", (req, res) => {
   try {
     const db = loadDB();
-    const numbers = db.numbers || [];
-    return res.json(numbers);
+    return res.json(db.numbers || []);
   } catch (err) {
     logger.error({ err }, "❌ Erro ao carregar números");
     return res.status(500).json({ error: "Erro ao carregar números." });
   }
 });
 
-/**
- * POST /outbound/numbers/sync
- *
- * Consulta o Graph API da Meta e salva os números em data.json,
- * espelhando a tela de phone numbers.
- */
-router.post("/sync", async (req, res) => {
+/* ============================================================
+   FUNÇÃO DE SYNC → usada por GET e POST
+   (lê as ENV *dentro* da função!)
+============================================================ */
+
+async function handleSync(req, res) {
+  // Lê as variáveis de ambiente na hora da requisição
+  const WABA_ID = process.env.WABA_ID || process.env.WHATSAPP_WABA_ID;
+  const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+
   if (!WABA_ID || !WHATSAPP_TOKEN) {
-    return res.status(500).json({
-      error:
-        "WABA_ID/WHATSAPP_WABA_ID ou WHATSAPP_TOKEN não configurados nas variáveis de ambiente."
+    logger.warn(
+      {
+        WABA_ID: !!WABA_ID,
+        WHATSAPP_TOKEN: !!WHATSAPP_TOKEN
+      },
+      "⚠️ Sync chamado sem WABA_ID ou WHATSAPP_TOKEN configurados."
+    );
+
+    return res.status(200).json({
+      success: false,
+      error: "WABA_ID ou WHATSAPP_TOKEN não configurados.",
+      numbers: loadDB().numbers || []
     });
   }
 
@@ -77,6 +80,7 @@ router.post("/sync", async (req, res) => {
     const url = new URL(
       `https://graph.facebook.com/v22.0/${WABA_ID}/phone_numbers`
     );
+
     url.searchParams.set(
       "fields",
       [
@@ -90,38 +94,105 @@ router.post("/sync", async (req, res) => {
       ].join(",")
     );
 
-    const graphRes = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`
-      }
-    });
+    logger.info({ url: url.toString() }, "🔄 Consultando Meta phone_numbers");
 
-    const graphJson = await graphRes.json();
+    /* -------------------------------------------
+       1) CHAMADA À META
+    -------------------------------------------- */
+    let graphRes;
+    let rawText;
 
-    if (!graphRes.ok) {
-      logger.error(
-        { status: graphRes.status, graphJson },
-        "❌ Erro ao consultar phone_numbers na Meta"
-      );
-      return res.status(502).json({
-        error: "Falha ao consultar a API do WhatsApp (Meta).",
-        details: graphJson
+    try {
+      graphRes = await fetch(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`
+        }
+      });
+      rawText = await graphRes.text();
+    } catch (err) {
+      logger.error({ err }, "❌ Falha de rede ao consultar Meta");
+
+      return res.status(200).json({
+        success: false,
+        error: "Falha de comunicação com o servidor da Meta.",
+        details: err?.message,
+        numbers: loadDB().numbers || []
       });
     }
 
+    /* -------------------------------------------
+       2) PARSE DO JSON
+    -------------------------------------------- */
+    let graphJson = {};
+    try {
+      graphJson = rawText ? JSON.parse(rawText) : {};
+    } catch (err) {
+      logger.error(
+        { err, rawText },
+        "❌ JSON inválido retornado pela Meta"
+      );
+
+      return res.status(200).json({
+        success: false,
+        error: "Meta retornou conteúdo inválido.",
+        details: err?.message,
+        numbers: loadDB().numbers || []
+      });
+    }
+
+    /* -------------------------------------------
+       3) META RESPONDEU ERRO HTTP
+    -------------------------------------------- */
+    if (!graphRes.ok) {
+      logger.error(
+        { status: graphRes.status, graphJson },
+        "❌ Meta retornou erro 4xx/5xx"
+      );
+
+      return res.status(200).json({
+        success: false,
+        error: "Erro ao consultar API da Meta.",
+        details: graphJson,
+        numbers: loadDB().numbers || []
+      });
+    }
+
+    /* -------------------------------------------
+       4) TRANSFORMAR PARA O FORMATO DO FRONT
+    -------------------------------------------- */
     const now = new Date().toISOString();
-    const numbers = (graphJson.data || []).map((n) => ({
-      id: n.id,
-      name: n.verified_name || n.display_phone_number,
-      channel: "WhatsApp",
-      number: n.display_phone_number,
-      displayPhoneNumber: n.display_phone_number,
-      quality: n.quality_rating || "UNKNOWN",
-      limit: n.messaging_limit_tier || null,
-      status: n.code_verification_status || n.name_status || "UNKNOWN",
-      raw: n,
-      lastSyncAt: now
-    }));
+
+    const numbers = (graphJson.data || []).map((n) => {
+      const tier = n.messaging_limit_tier || null;
+
+      let limitPerDay = null;
+      if (tier === "TIER_1") limitPerDay = 1000;
+      if (tier === "TIER_2") limitPerDay = 10000;
+      if (tier === "TIER_3") limitPerDay = 100000;
+      if (tier === "TIER_4") limitPerDay = 250000;
+
+      const status =
+        n.code_verification_status || n.name_status || "UNKNOWN";
+
+      const connected =
+        status === "VERIFIED" ||
+        status === "APPROVED" ||
+        status === "CONNECTED";
+
+      return {
+        id: n.id,
+        name: n.verified_name || n.display_phone_number,
+        channel: "WhatsApp",
+        number: n.display_phone_number,
+        displayNumber: n.display_phone_number,
+        quality: n.quality_rating || "UNKNOWN",
+        limitPerDay,
+        status,
+        connected,
+        raw: n,
+        updatedAt: now
+      };
+    });
 
     const db = loadDB();
     db.numbers = numbers;
@@ -129,7 +200,7 @@ router.post("/sync", async (req, res) => {
 
     logger.info(
       { count: numbers.length },
-      "✅ Números sincronizados com sucesso"
+      "✅ Sync de números concluído com sucesso"
     );
 
     return res.json({
@@ -138,12 +209,29 @@ router.post("/sync", async (req, res) => {
       numbers
     });
   } catch (err) {
-    logger.error({ err }, "❌ Erro inesperado ao sincronizar números");
-    return res
-      .status(500)
-      .json({ error: "Erro interno ao sincronizar números." });
+    logger.error(
+      { err, message: err?.message, stack: err?.stack },
+      "❌ Erro inesperado no sync"
+    );
+
+    return res.status(200).json({
+      success: false,
+      error: "Erro interno inesperado.",
+      details: err?.message,
+      numbers: loadDB().numbers || []
+    });
   }
-});
+}
+
+/* ============================================================
+   ACEITAR GET e POST para /sync
+============================================================ */
+
+router.get("/sync", handleSync);
+router.post("/sync", handleSync);
+
+/* ============================================================
+   EXPORT DEFAULT
+============================================================ */
 
 export default router;
-

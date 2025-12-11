@@ -1,21 +1,26 @@
+// frontend/src/pages/outbound/NumbersPage.tsx
+
 import { useEffect, useState } from "react";
-import { fetchNumbers, syncNumbers } from "../../api.js";
+import { fetchNumbers, syncNumbers } from "../../api";
+import type { PhoneNumberRecord } from "../../types";
 import "../../styles/outbound.css";
 
 export default function NumbersPage() {
-  const [numbers, setNumbers] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const [numbers, setNumbers] = useState<PhoneNumberRecord[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [syncing, setSyncing] = useState<boolean>(false);
 
   async function load() {
     setLoading(true);
     try {
-      const res = await fetchNumbers();
-      setNumbers(res || []);
+      const data = await fetchNumbers();
+      setNumbers(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Erro ao carregar números:", err);
+      setNumbers([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   async function handleSync() {
@@ -25,8 +30,9 @@ export default function NumbersPage() {
       await load();
     } catch (err) {
       console.error("Erro ao sincronizar números:", err);
+    } finally {
+      setSyncing(false);
     }
-    setSyncing(false);
   }
 
   useEffect(() => {
@@ -37,7 +43,9 @@ export default function NumbersPage() {
     <div className="page-content">
       <div className="page-header">
         <h1>Números</h1>
-        <p className="page-subtitle">Gerencie os números conectados à sua conta WhatsApp Business.</p>
+        <p className="page-subtitle">
+          Gerencie os números conectados à sua conta WhatsApp Business.
+        </p>
 
         <button
           className="btn-primary"
@@ -77,20 +85,28 @@ export default function NumbersPage() {
                 </td>
               </tr>
             ) : (
-              numbers.map((n, i) => (
-                <tr key={i}>
+              numbers.map((n) => (
+                <tr key={n.displayNumber || n.name}>
                   <td className="cell-bold">{n.name}</td>
                   <td>WhatsApp</td>
                   <td>{n.displayNumber}</td>
                   <td>
-                    <span className={`quality-dot ${n.quality?.toLowerCase()}`} />
+                    <span
+                      className={`quality-dot ${
+                        n.quality ? n.quality.toLowerCase() : ""
+                      }`}
+                    />
                     {n.quality}
                   </td>
-                  <td>{n.limitPerDay} / 24hs</td>
+                  <td>
+                    {n.limitPerDay
+                      ? `${n.limitPerDay} / 24hs`
+                      : "–"}
+                  </td>
                   <td className={n.connected ? "status-ok" : "status-error"}>
                     {n.connected ? "Conectado" : "Desconectado"}
                   </td>
-                  <td>{n.updatedAt}</td>
+                  <td>{n.updatedAt || "—"}</td>
                 </tr>
               ))
             )}

@@ -333,6 +333,21 @@
       "botAttempts": 1,
       "tags": [],
       "notes": ""
+    },
+    {
+      "id": 23,
+      "sessionId": "S-99989978-1765456693775",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "Olá! Como posso ajudar você hoje?",
+      "status": "open",
+      "updatedAt": "2025-12-11T12:38:17.441Z",
+      "currentMode": "bot",
+      "botAttempts": 1,
+      "tags": [],
+      "notes": ""
     }
   ],
   "messagesByConversation": {
@@ -2180,6 +2195,27 @@
         "fromBot": true,
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRTJDNTg2QzlEMzFDOTM3ODAyAA=="
       }
+    ],
+    "23": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-11T12:38:15.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IwNTNBODIzMkE3Q0QyOTE0MjQA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-11T12:38:17.441Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSNzdCOEU1NTI0NTBGMzI2MDBFAA=="
+      }
     ]
   },
   "settings": {
@@ -2214,6 +2250,52 @@
       "phone": "5511911911160",
       "name": "Genivaldo Peres",
       "createdAt": "2025-12-10T16:10:55.388Z"
+    }
+  ],
+  "numbers": [
+    {
+      "id": "890327707503654",
+      "name": "GP Labs",
+      "channel": "WhatsApp",
+      "number": "+55 64 9249-1682",
+      "displayNumber": "+55 64 9249-1682",
+      "quality": "GREEN",
+      "limitPerDay": null,
+      "status": "VERIFIED",
+      "connected": true,
+      "raw": {
+        "id": "890327707503654",
+        "display_phone_number": "+55 64 9249-1682",
+        "verified_name": "GP Labs",
+        "quality_rating": "GREEN",
+        "code_verification_status": "VERIFIED",
+        "messaging_limit_tier": "TIER_1K",
+        "name_status": "PENDING_REVIEW"
+      },
+      "updatedAt": "2025-12-11T02:53:34.566Z"
+    }
+  ],
+  "templates": [
+    {
+      "id": "2399241960478475",
+      "name": "gplabs_teste_001",
+      "category": "UTILITY",
+      "language": "pt_BR",
+      "status": "PENDING",
+      "quality": null,
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Olá Genivaldo, sua solicitação está em andamento."
+        }
+      ],
+      "updatedAt": "2025-12-11T11:27:10.241Z",
+      "createdFromPlatform": true,
+      "raw": {
+        "id": "2399241960478475",
+        "status": "PENDING",
+        "category": "UTILITY"
+      }
     }
   ]
 }

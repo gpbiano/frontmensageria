@@ -10,6 +10,10 @@ import ChatHumanHistoryPage from "./pages/human/ChatHumanHistoryPage.jsx";
 import ChatbotHistoryPage from "./pages/chatbot/ChatbotHistoryPage.jsx";
 import ChatbotConfigPage from "./pages/chatbot/ChatbotConfigPage.jsx";
 
+// Outbound
+import NumbersPage from "./pages/outbound/NumbersPage";
+import TemplatesPage from "./pages/outbound/TemplatesPage";
+
 // CSS global da app
 import "./styles/App.css";
 
@@ -154,8 +158,7 @@ function PlatformShell({ onLogout }) {
                   <div className="sidebar-subitems">
                     {section.items.map((item) => {
                       const isItemActive =
-                        mainSection === section.id &&
-                        subSection === item.id;
+                        mainSection === section.id && subSection === item.id;
 
                       return (
                         <button
@@ -232,8 +235,29 @@ function SectionRenderer({ main, sub }) {
     );
   }
 
-  // Campanhas
+  // ===============================
+  // CAMPANHAS
+  // ===============================
   if (main === "campanhas") {
+    // Números
+    if (sub === "numeros") {
+      return (
+        <div className="page-full">
+          <NumbersPage />
+        </div>
+      );
+    }
+
+    // Templates – sempre a página de templates (ela cuida do "criar")
+    if (sub === "templates") {
+      return (
+        <div className="page-full">
+          <TemplatesPage />
+        </div>
+      );
+    }
+
+    // Demais itens
     return (
       <Placeholder
         title={`Campanhas · ${subSectionLabel(sub)}`}

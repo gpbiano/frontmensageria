@@ -1,3 +1,7 @@
+/* ===============================
+   BASE – OUTBOUND (campanhas)
+================================ */
+
 .page-content {
   padding: 32px;
   color: #e5e7eb;
@@ -27,6 +31,10 @@
 .btn-primary:hover {
   background: #16a34a;
 }
+
+/* ===============================
+   NÚMEROS
+================================ */
 
 .numbers-table-card {
   margin-top: 30px;
@@ -75,9 +83,15 @@
   border-radius: 50%;
 }
 
-.quality-dot.alta { background: #22c55e; }
-.quality-dot.media { background: #eab308; }
-.quality-dot.baixa { background: #ef4444; }
+.quality-dot.alta {
+  background: #22c55e;
+}
+.quality-dot.media {
+  background: #eab308;
+}
+.quality-dot.baixa {
+  background: #ef4444;
+}
 
 .status-ok {
   color: #22c55e;
@@ -87,4 +101,301 @@
 .status-error {
   color: #ef4444;
   font-weight: 600;
+}
+
+/* ===============================
+   TEMPLATES – LAYOUT
+================================ */
+
+.templates-layout {
+  display: flex;
+  flex-direction: column;
+}
+
+.templates-columns {
+  display: grid;
+  grid-template-columns: 2fr 1.5fr;
+  gap: 24px;
+  margin-top: 24px;
+}
+
+/* ===============================
+   TEMPLATES – TABELA
+================================ */
+
+.templates-table-card {
+  background: #0a0f1c;
+  padding: 20px;
+  border-radius: 18px;
+}
+
+.templates-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.templates-table th {
+  text-align: left;
+  padding: 12px 10px;
+  background: #111827;
+  color: #9ca3af;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.templates-table td {
+  padding: 10px 10px;
+  border-bottom: 1px solid #1f2937;
+  font-size: 14px;
+}
+
+.templates-row {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.templates-row:hover {
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.templates-row-active {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+/* ===============================
+   TEMPLATES – PREVIEW
+================================ */
+
+.template-preview-card {
+  background: #0a0f1c;
+  padding: 20px;
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.template-preview-header h3 {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.template-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Pills / badges */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pill-soft {
+  background: rgba(148, 163, 184, 0.2);
+  color: #e5e7eb;
+}
+
+.pill-status {
+  background: rgba(37, 99, 235, 0.2);
+  color: #bfdbfe;
+}
+
+.pill-quality {
+  background: rgba(22, 163, 74, 0.2);
+  color: #bbf7d0;
+}
+
+.pill-flow {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fed7aa;
+}
+
+/* Phone preview */
+
+.phone-preview {
+  margin-top: 16px;
+  background: radial-gradient(circle at top, #111827 0, #020617 60%, #000 100%);
+  border-radius: 24px;
+  padding: 14px;
+  display: flex;
+  justify-content: center;
+}
+
+.phone-header {
+  font-size: 11px;
+  text-align: center;
+  margin-bottom: 8px;
+  opacity: 0.7;
+}
+
+.phone-screen {
+  background: #020617;
+  border-radius: 20px;
+  padding: 12px;
+  width: 260px;
+  min-height: 240px;
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9);
+}
+
+.phone-bubble-template {
+  background: #047857;
+  border-radius: 12px;
+  padding: 10px;
+  color: #ecfdf5;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.phone-body-section + .phone-footer-section {
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.phone-header-section {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.phone-buttons {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.phone-button {
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.4);
+  padding: 6px 10px;
+  font-size: 12px;
+  background: rgba(15, 23, 42, 0.2);
+  color: #ecfdf5;
+  text-align: center;
+}
+
+.phone-button-flow {
+  border-color: rgba(249, 115, 22, 0.7);
+}
+
+/* Variáveis {{1}} no corpo */
+
+.body-variable {
+  background: rgba(15, 23, 42, 0.3);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+/* ===============================
+   RESPONSIVO BÁSICO
+================================ */
+
+@media (max-width: 1024px) {
+  .templates-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .phone-screen {
+    width: 100%;
+  }
+}
+.templates-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.templates-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.templates-table-card,
+.template-preview-card {
+  margin-top: 8px;
+  background: #020617;
+  padding: 20px;
+  border-radius: 18px;
+  border: 1px solid #111827;
+}
+
+.templates-row {
+  cursor: pointer;
+}
+
+.templates-row:hover {
+  background: #020617;
+}
+
+.templates-row-active {
+  background: #0f172a;
+}
+
+.template-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.template-create-form label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.template-create-form input,
+.template-create-form select,
+.template-create-form textarea {
+  background: #020617;
+  border-radius: 10px;
+  border: 1px solid #1f2937;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: #e5e7eb;
+  outline: none;
+}
+
+.template-create-form textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.template-create-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 14px;
+  border: 1px solid #4b5563;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  border-color: #9ca3af;
+}
+
+.template-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #f87171;
 }
