@@ -1,187 +1,147 @@
 // backend/src/outbound/numbersRouter.js
 import express from "express";
+import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-import fetch from "node-fetch";
+import { fileURLToPath } from "url";
 import logger from "../logger.js";
 
 const router = express.Router();
 
-// Arquivo local para cache dos números
-const NUMBERS_FILE = path.join(process.cwd(), "numbers.json");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// intervalo de auto-atualização (ms)
-const AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000; // 10 minutos
+// Compatibilidade: aceita tanto WABA_ID quanto WHATSAPP_WABA_ID
+const WABA_ID = process.env.WABA_ID || process.env.WHATSAPP_WABA_ID;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 
-// ------------------------
-// Helpers de arquivo local
-// ------------------------
-function loadNumbersFromDisk() {
+const DB_FILE = path.join(process.cwd(), "data.json");
+
+function loadDB() {
   try {
-    if (!fs.existsSync(NUMBERS_FILE)) {
-      return { numbers: [], lastSyncAt: null };
-    }
-
-    const raw = fs.readFileSync(NUMBERS_FILE, "utf8");
-    if (!raw.trim()) {
-      return { numbers: [], lastSyncAt: null };
-    }
-
-    const parsed = JSON.parse(raw);
-
-    if (!Array.isArray(parsed.numbers)) {
-      return { numbers: [], lastSyncAt: null };
-    }
-
-    return {
-      numbers: parsed.numbers,
-      lastSyncAt: parsed.lastSyncAt || null
-    };
+    const raw = fs.readFileSync(DB_FILE, "utf-8");
+    return JSON.parse(raw);
   } catch (err) {
-    logger.error({ err }, "❌ Erro ao carregar numbers.json");
-    return { numbers: [], lastSyncAt: null };
+    logger.warn(
+      { err },
+      "⚠️ data.json não encontrado ao carregar em numbersRouter, usando objeto vazio."
+    );
+    return {};
   }
 }
 
-function saveNumbersToDisk(numbers, lastSyncAt = null) {
+function saveDB(data) {
   try {
-    const payload = {
-      numbers,
-      lastSyncAt: lastSyncAt || new Date().toISOString()
-    };
-
-    fs.writeFileSync(NUMBERS_FILE, JSON.stringify(payload, null, 2), "utf8");
-
-    logger.info(
-      { count: numbers.length, lastSyncAt: payload.lastSyncAt },
-      "💾 Números salvos em numbers.json"
-    );
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
   } catch (err) {
-    logger.error({ err }, "❌ Erro ao salvar numbers.json");
+    logger.error({ err }, "❌ Erro ao salvar data.json em numbersRouter");
   }
 }
 
-// ------------------------
-// Helper pra ler env SEMPRE na hora de usar
-// ------------------------
-function getMetaConfig() {
-  const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-  const WABA_ID = process.env.WABA_ID;
+/* ============================================================
+   NÚMEROS – ESPELHO DA META
+   ============================================================ */
 
-  logger.info(
-    { hasToken: !!WHATSAPP_TOKEN, hasWabaId: !!WABA_ID },
-    "🔎 Verificando configuração da Meta (numbersRouter)"
-  );
-
-  return { WHATSAPP_TOKEN, WABA_ID };
-}
-
-// ------------------------
-// Função que fala com a Meta
-// ------------------------
-async function syncNumbersFromMeta() {
-  const { WHATSAPP_TOKEN, WABA_ID } = getMetaConfig();
-
-  if (!WHATSAPP_TOKEN || !WABA_ID) {
-    logger.error(
-      { hasToken: !!WHATSAPP_TOKEN, WABA_ID },
-      "❌ WHATSAPP_TOKEN ou WABA_ID ausente."
-    );
-    throw new Error("Configuração da Meta incompleta");
-  }
-
-  const url = `https://graph.facebook.com/v22.0/${WABA_ID}/phone_numbers?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status&limit=1000`;
-
-  logger.info({ url, WABA_ID }, "🔄 Iniciando sincronização de números com a Meta");
-
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${WHATSAPP_TOKEN}`
-    }
-  });
-
-  const data = await res.json().catch(() => null);
-
-  if (!res.ok) {
-    logger.error(
-      { status: res.status, data },
-      "❌ Erro ao consultar /phone_numbers na Meta"
-    );
-    throw new Error("Falha ao consultar números na Meta");
-  }
-
-  const items = (data && data.data) || [];
-
-  const normalized = items.map((item) => ({
-    id: item.id,
-    wabaId: WABA_ID,
-    verifiedName: item.verified_name || null,
-    displayPhoneNumber: item.display_phone_number || "",
-    qualityRating: item.quality_rating || null,
-    codeVerificationStatus: item.code_verification_status || null
-  }));
-
-  saveNumbersToDisk(normalized);
-  logger.info({ count: normalized.length }, "✅ Números sincronizados com sucesso");
-
-  return normalized;
-}
-
-// ------------------------
-// GET /outbound/numbers
-// Auto-sync se o cache for antigo
-// ------------------------
-router.get("/", async (req, res, next) => {
+/**
+ * GET /outbound/numbers
+ * (montado no index.js como app.use("/outbound/numbers", numbersRouter);)
+ *
+ * Aqui a rota real é GET /  → lista números salvos em data.json.
+ */
+router.get("/", (req, res) => {
   try {
-    let { numbers, lastSyncAt } = loadNumbersFromDisk();
-
-    const now = Date.now();
-    const lastSyncTime = lastSyncAt ? Date.parse(lastSyncAt) : 0;
-    const diff = now - lastSyncTime;
-
-    // Se nunca sincronizou ou passou do intervalo, sincroniza automaticamente
-    if (!lastSyncAt || diff > AUTO_SYNC_INTERVAL_MS) {
-      try {
-        const synced = await syncNumbersFromMeta();
-        numbers = synced;
-        lastSyncAt = new Date().toISOString();
-      } catch (err) {
-        // Se der erro na Meta, só loga e devolve o cache antigo
-        logger.error({ err }, "⚠️ Erro no auto-sync, devolvendo cache local");
-      }
-    }
-
-    res.json({
-      numbers,
-      lastSyncAt
-    });
+    const db = loadDB();
+    const numbers = db.numbers || [];
+    return res.json(numbers);
   } catch (err) {
-    next(err);
+    logger.error({ err }, "❌ Erro ao carregar números");
+    return res.status(500).json({ error: "Erro ao carregar números." });
   }
 });
 
-// ------------------------
-// POST /outbound/numbers/sync
-// Força sincronização manual (botão “Sincronizar com a Meta”)
-// ------------------------
-router.post("/sync", async (req, res, next) => {
+/**
+ * POST /outbound/numbers/sync
+ *
+ * Consulta o Graph API da Meta e salva os números em data.json,
+ * espelhando a tela de phone numbers.
+ */
+router.post("/sync", async (req, res) => {
+  if (!WABA_ID || !WHATSAPP_TOKEN) {
+    return res.status(500).json({
+      error:
+        "WABA_ID/WHATSAPP_WABA_ID ou WHATSAPP_TOKEN não configurados nas variáveis de ambiente."
+    });
+  }
+
   try {
-    const { WHATSAPP_TOKEN, WABA_ID } = getMetaConfig();
-    if (!WHATSAPP_TOKEN || !WABA_ID) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Configuração da Meta incompleta. Verifique WHATSAPP_TOKEN e WABA_ID no .env do backend."
+    const url = new URL(
+      `https://graph.facebook.com/v22.0/${WABA_ID}/phone_numbers`
+    );
+    url.searchParams.set(
+      "fields",
+      [
+        "id",
+        "display_phone_number",
+        "verified_name",
+        "quality_rating",
+        "code_verification_status",
+        "messaging_limit_tier",
+        "name_status"
+      ].join(",")
+    );
+
+    const graphRes = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`
+      }
+    });
+
+    const graphJson = await graphRes.json();
+
+    if (!graphRes.ok) {
+      logger.error(
+        { status: graphRes.status, graphJson },
+        "❌ Erro ao consultar phone_numbers na Meta"
+      );
+      return res.status(502).json({
+        error: "Falha ao consultar a API do WhatsApp (Meta).",
+        details: graphJson
       });
     }
 
-    const numbers = await syncNumbersFromMeta();
-    res.json({
-      ok: true,
-      count: numbers.length
+    const now = new Date().toISOString();
+    const numbers = (graphJson.data || []).map((n) => ({
+      id: n.id,
+      name: n.verified_name || n.display_phone_number,
+      channel: "WhatsApp",
+      number: n.display_phone_number,
+      displayPhoneNumber: n.display_phone_number,
+      quality: n.quality_rating || "UNKNOWN",
+      limit: n.messaging_limit_tier || null,
+      status: n.code_verification_status || n.name_status || "UNKNOWN",
+      raw: n,
+      lastSyncAt: now
+    }));
+
+    const db = loadDB();
+    db.numbers = numbers;
+    saveDB(db);
+
+    logger.info(
+      { count: numbers.length },
+      "✅ Números sincronizados com sucesso"
+    );
+
+    return res.json({
+      success: true,
+      count: numbers.length,
+      numbers
     });
   } catch (err) {
-    next(err);
+    logger.error({ err }, "❌ Erro inesperado ao sincronizar números");
+    return res
+      .status(500)
+      .json({ error: "Erro interno ao sincronizar números." });
   }
 });
 

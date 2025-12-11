@@ -1,115 +1,166 @@
 // frontend/src/components/ChatPanel.jsx
 import { useEffect, useRef, useState } from "react";
-import MessageRenderer from "./MessageRenderer.jsx";
 
+// Paleta simples de emojis para o atendente
+const EMOJI_PALETTE = [
+  "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "😎",
+  "🙂", "😉", "🤩", "🥳", "😇", "😅", "😢", "😭",
+  "😡", "👍", "👎", "🙏", "👏", "💪", "✨", "🔥",
+  "❤️", "💚", "💙", "💛", "🧡", "🤍", "🤝", "✅"
+];
+
+/**
+ * Painel principal do chat (coluna central)
+ *
+ * Props:
+ * - conversation: objeto da conversa selecionada
+ * - messages: array de mensagens
+ * - loadingMessages: boolean
+ * - onSendText(text: string)
+ * - onSendMedia({ type, mediaUrl, caption })
+ * - onChangeStatus(conversationId, newStatus)
+ */
 export default function ChatPanel({
   conversation,
   messages,
   loadingMessages,
   onSendText,
-  onSendMedia,
+  onSendMedia, // reservado pro futuro
   onChangeStatus
 }) {
-  const [input, setInput] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [showEmoji, setShowEmoji] = useState(false);
 
-  const messagesRef = useRef(null);
+  const bottomRef = useRef(null);
+  const textareaRef = useRef(null);
 
-  // Auto-scroll para última mensagem
+  const isClosed = conversation?.status === "closed";
+
+  // Auto-scroll para a última mensagem
   useEffect(() => {
-    if (!messagesRef.current) return;
-    messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-  }, [messages]);
+    if (!bottomRef.current) return;
+    bottomRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, loadingMessages]);
 
-  const handleSubmit = async (e) => {
+  // Ao trocar de conversa: limpa rascunho e fecha emojis
+  useEffect(() => {
+    setDraft("");
+    setShowEmoji(false);
+  }, [conversation?.id]);
+
+  // Helpers de formatação -------------------------
+  function formatMessageText(msg) {
+    return (
+      msg?.text?.body ??
+      msg?.text ??
+      msg?.body ??
+      msg?.message ??
+      msg?.content ??
+      ""
+    );
+  }
+
+  function formatTimestamp(msg) {
+    const raw =
+      msg.timestamp ??
+      msg.createdAt ??
+      msg.sentAt ??
+      msg.updatedAt ??
+      null;
+
+    if (!raw) return "";
+
+    let date;
+    if (typeof raw === "number") {
+      // segundos vs ms
+      date = raw > 10_000_000_000 ? new Date(raw) : new Date(raw * 1000);
+    } else {
+      date = new Date(raw);
+    }
+
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString();
+  }
+
+  // Ações ----------------------------------------
+  function handleSubmit(e) {
     e.preventDefault();
-    const text = input.trim();
-    if (!text) return;
-
-    try {
-      setIsSending(true);
-      await onSendText(text);
-      setInput("");
-    } catch (err) {
-      console.error("Erro ao enviar mensagem de texto:", err);
-    } finally {
-      setIsSending(false);
+    const text = draft.trim();
+    if (!text || !conversation || isClosed) return;
+    if (onSendText) {
+      onSendText(text);
     }
-  };
+    setDraft("");
+    setShowEmoji(false);
+  }
 
-  const handleAttach = async (type) => {
-    setShowAttachMenu(false);
-
-    const mediaUrl = window.prompt(
-      "Cole a URL pública da mídia para enviar:"
-    );
-    if (!mediaUrl) return;
-
-    const caption = window.prompt("Legenda (opcional):") || undefined;
-
-    try {
-      await onSendMedia({
-        type,
-        mediaUrl,
-        caption
-      });
-    } catch (err) {
-      console.error("Erro ao enviar mídia:", err);
+  function handleEmojiClick(emoji) {
+    setDraft((prev) => prev + emoji);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
     }
-  };
+  }
 
-  const handleCloseConversation = () => {
-    if (!conversation) return;
-    const confirmClose = window.confirm(
-      "Deseja encerrar este atendimento? A conversa irá para o histórico."
-    );
-    if (!confirmClose) return;
+  function handleStatusChange(e) {
+    const newStatus = e.target.value;
+    if (!conversation || !onChangeStatus) return;
+    if (conversation.status === newStatus) return;
+    onChangeStatus(conversation.id, newStatus);
+  }
+
+  function handleCloseClick() {
+    if (!conversation || !onChangeStatus) return;
+    if (conversation.status === "closed") return;
     onChangeStatus(conversation.id, "closed");
-  };
+  }
 
-  if (!conversation) return null;
+  const headerName =
+    conversation?.contactName ||
+    conversation?.phone ||
+    "Contato sem nome";
+  const headerPhone = conversation?.phone || "—";
 
-  const status = conversation.status || "open";
-
+  // Render ---------------------------------------
   return (
     <div className="chat-panel">
-      {/* HEADER */}
-      <header className="chat-header chat-panel-header">
+      {/* HEADER DO CHAT */}
+      <header className="chat-panel-header">
         <div className="chat-panel-header-left">
           <div className="chat-panel-avatar">
-            {conversation.contactName
-              ? conversation.contactName.charAt(0).toUpperCase()
-              : "U"}
+            {headerName.toString().charAt(0).toUpperCase()}
           </div>
           <div>
-            <div className="chat-header-name">
-              {conversation.contactName || conversation.phone || "Contato"}
-            </div>
-            <div className="chat-header-phone">{conversation.phone}</div>
+            <div className="chat-header-name">{headerName}</div>
+            <div className="chat-header-phone">{headerPhone}</div>
           </div>
         </div>
 
         <div className="chat-panel-header-right">
           <div className="chat-panel-status-wrapper">
-            <span>Status:</span>
+            <span style={{ fontSize: 12, marginRight: 6 }}>Status:</span>
             <select
-              className="chat-status-select"
-              value={status}
-              onChange={(e) =>
-                onChangeStatus(conversation.id, e.target.value)
-              }
+              value={conversation?.status || "open"}
+              onChange={handleStatusChange}
+              disabled={!conversation}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#e5e7eb",
+                fontSize: 12,
+                outline: "none",
+                cursor: "pointer"
+              }}
             >
               <option value="open">Aberta</option>
               <option value="closed">Encerrada</option>
             </select>
           </div>
 
-          {status === "open" && (
+          {conversation?.status !== "closed" && (
             <button
               type="button"
-              onClick={handleCloseConversation}
               className="chat-panel-close-btn"
+              onClick={handleCloseClick}
             >
               Encerrar atendimento
             </button>
@@ -117,138 +168,106 @@ export default function ChatPanel({
         </div>
       </header>
 
-      {/* MENSAGENS */}
-      <div ref={messagesRef} className="chat-messages">
+      {/* LISTA DE MENSAGENS */}
+      <div className="chat-messages">
         {loadingMessages && (
-          <div className="chat-messages-empty">
+          <div className="chat-history-empty">
             Carregando mensagens...
           </div>
         )}
 
-        {!loadingMessages && messages.length === 0 && (
-          <div className="chat-messages-empty">
+        {!loadingMessages && (!messages || messages.length === 0) && (
+          <div className="chat-history-empty">
             Nenhuma mensagem nesta conversa ainda.
           </div>
         )}
 
-        {messages.map((msg) => {
-          const isOutbound = msg.direction === "out";
-          const bubbleClass = isOutbound
-            ? "message-bubble-out"
-            : "message-bubble-in";
+        {messages?.map((msg) => {
+          const key = msg.id || msg._id || msg.timestamp;
+          const isInbound = msg.direction === "in";
+          const isBot = msg.isBot || msg.fromBot;
+
+          const rowClass = isInbound
+            ? "message-row message-row-in"
+            : "message-row message-row-out";
+          const bubbleClass = isInbound
+            ? "message-bubble-in"
+            : "message-bubble-out";
+
+          const text = formatMessageText(msg);
+          const ts = formatTimestamp(msg);
 
           return (
-            <div
-              key={msg.id}
-              className={
-                "message-row " + (isOutbound ? "message-row-out" : "message-row-in")
-              }
-            >
+            <div key={key} className={rowClass}>
               <div className={bubbleClass}>
-                <MessageRenderer message={msg} outbound={isOutbound} />
-                {msg.timestamp && (
-                  <div className="message-timestamp">
-                    {new Date(msg.timestamp).toLocaleString()}
-                  </div>
-                )}
+                <div className="chat-message-text">
+                  {text || "[mensagem sem texto]"}
+                </div>
+                <div className="message-timestamp">
+                  {ts}
+                  {isBot ? " · Bot" : " · Humano"}
+                </div>
               </div>
             </div>
           );
         })}
+
+        <div ref={bottomRef} />
       </div>
 
-      {/* COMPOSER */}
+      {/* COMPOSER / INPUT */}
       <form className="chat-composer" onSubmit={handleSubmit}>
-        <div className="chat-composer-left">
-          <div className="chat-composer-attach-wrapper">
-            <button
-              type="button"
-              onClick={() => setShowAttachMenu((v) => !v)}
-              className="chat-composer-icon-btn"
-              title="Anexar mídia"
-            >
-              📎
-            </button>
-
-            {showAttachMenu && (
-              <div className="attach-menu">
-                <button
-                  type="button"
-                  onClick={() => handleAttach("image")}
-                >
-                  Imagem
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAttach("video")}
-                >
-                  Vídeo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAttach("audio")}
-                >
-                  Áudio
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAttach("document")}
-                >
-                  Documento / PDF
-                </button>
-              </div>
-            )}
+        {/* Emoji picker flutuando acima do input */}
+        {showEmoji && !isClosed && (
+          <div className="chat-emoji-picker">
+            {EMOJI_PALETTE.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                className="chat-emoji-item"
+                onClick={() => handleEmojiClick(emoji)}
+              >
+                {emoji}
+              </button>
+            ))}
           </div>
-        </div>
+        )}
 
-        <div className="chat-composer-center">
-          <textarea
-            className="chat-composer-textarea"
-            rows={1}
-            placeholder="Digite uma mensagem..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit(e);
-              }
-            }}
-          />
-          <div className="chat-composer-hint">
-            Enter para enviar · Shift + Enter para quebrar linha
-          </div>
-        </div>
+        {/* Botão de emoji */}
+        <button
+          type="button"
+          className="chat-composer-emoji-btn"
+          onClick={() => !isClosed && setShowEmoji((v) => !v)}
+          disabled={isClosed}
+          title="Inserir emoji"
+        >
+          😊
+        </button>
 
-        <div className="chat-composer-right">
-          <button
-            type="button"
-            className="chat-composer-icon-btn"
-            title="Gravar áudio (em breve)"
-            onClick={() =>
-              alert(
-                "Gravação de áudio nativa ainda será implementada. Use o botão de anexo para enviar arquivos de áudio."
-              )
-            }
-          >
-            🎙️
-          </button>
+        {/* Textarea */}
+        <textarea
+          ref={textareaRef}
+          className="chat-composer-textarea"
+          placeholder={
+            isClosed
+              ? "Atendimento encerrado. Não é possível enviar novas mensagens."
+              : "Digite uma mensagem..."
+          }
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={isClosed}
+          rows={1}
+        />
 
-          <button
-            type="submit"
-            disabled={!input.trim() || isSending || status === "closed"}
-            className={
-              "chat-composer-send" +
-              (input.trim() && !isSending && status === "open"
-                ? " chat-composer-send--active"
-                : "")
-            }
-          >
-            {isSending ? "Enviando..." : "Enviar"}
-          </button>
-        </div>
+        {/* Botão enviar */}
+        <button
+          type="submit"
+          className="chat-composer-send"
+          disabled={isClosed || !draft.trim()}
+        >
+          Enviar
+        </button>
       </form>
     </div>
   );
 }
-

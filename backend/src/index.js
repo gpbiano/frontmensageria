@@ -14,7 +14,14 @@ import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 
 import logger from "./logger.js";
+
+// Módulo Chatbot (configurações + regras + GenAI)
 import chatbotRouter from "./chatbot/chatbotRouter.js";
+
+// Módulo de atendimento humano (histórico, storage, rotas específicas)
+import humanRouter from "./human/humanRouter.js";
+
+// Módulo Outbound (campanhas, números, templates, assets)
 import outboundRouter from "./outbound/outboundRouter.js";
 import numbersRouter from "./outbound/numbersRouter.js";
 import templatesRouter from "./outbound/templatesRouter.js";
@@ -714,6 +721,7 @@ app.use("/uploads", express.static(UPLOADS_DIR));
  * ROTAS PRINCIPAIS
  * ----------------
  * /api/chatbot/...            → Configuração do chatbot (aba Chatbot)
+ * /api/human/...              → Rotas específicas do atendimento humano
  * /outbound/numbers/...       → Números WABA (sync com Meta)
  * /outbound/templates/...     → Templates (listar, criar, sync)
  * /outbound/assets/...        → Arquivos de mídia
@@ -723,20 +731,20 @@ app.use("/uploads", express.static(UPLOADS_DIR));
 // Rotas de configuração do chatbot (aba Chatbot)
 app.use("/api", chatbotRouter); // gera /api/chatbot/...
 
+// Rotas específicas para atendimento humano (seu módulo human/)
+app.use("/api/human", humanRouter);
+
 // Rotas de NÚMEROS (sync com Meta)
 app.use("/outbound/numbers", numbersRouter); // continua igual
 
 // Rotas de TEMPLATES (listar, criar, sync)
-// → gera /outbound/templates, /outbound/templates/sync...
 app.use("/outbound", templatesRouter);
 
 // Rotas de ARQUIVOS (upload, listar, deletar)
-// → gera /outbound/assets, /outbound/assets/:id...
 app.use("/outbound", assetsRouter);
 
 // Rotas gerais de outbound (campanhas, etc.)
 app.use("/outbound", outboundRouter);
-
 
 // ===============================
 // HEALTH / STATUS
@@ -1202,4 +1210,5 @@ app.listen(PORT, () => {
     "🚀 API rodando"
   );
 });
+
 

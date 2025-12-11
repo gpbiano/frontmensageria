@@ -1,0 +1,249 @@
+/* ===============================
+   RESET BÁSICO + ALTURA TOTAL
+================================ */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #020617;
+  color: #e5e7eb;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    sans-serif;
+}
+
+/* Remove scroll lateral desnecessário */
+* {
+  box-sizing: border-box;
+}
+
+/* ===============================
+   LAYOUT GERAL DA APLICAÇÃO
+================================ */
+
+.app-shell {
+  min-height: 100vh;          /* ocupa a tela toda */
+  display: flex;
+  flex-direction: column;
+  background: #020617;
+  color: #e5e7eb;
+}
+
+/* ===============================
+   HEADER SUPERIOR
+================================ */
+
+.app-header {
+  height: 64px;
+  flex-shrink: 0;
+  padding: 0 32px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: radial-gradient(circle at top left, #022c22, #020617 55%, #000);
+}
+
+.app-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-logo-circle {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  text-transform: uppercase;
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.app-header-title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-pill-btn {
+  padding: 6px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.9);
+  color: #e5e7eb;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease,
+    color 0.15s ease, transform 0.08s ease;
+}
+
+.header-pill-btn:hover {
+  background: rgba(15, 23, 42, 1);
+  border-color: rgba(148, 163, 184, 0.8);
+  transform: translateY(-1px);
+}
+
+.header-logout {
+  border-color: rgba(248, 113, 113, 0.6);
+  color: #fecaca;
+}
+
+/* ===============================
+   CORPO: SIDEBAR + MAIN
+================================ */
+
+.app-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;       /* permite o filho usar height:100% */
+}
+
+/* SIDEBAR LATERAL */
+
+.app-sidebar {
+  width: 260px;
+  border-right: 1px solid rgba(15, 23, 42, 0.9);
+  background: radial-gradient(
+      circle at top left,
+      rgba(34, 197, 94, 0.18),
+      #020617 60%
+    )
+    fixed;
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Título das seções (Atendimento / Chatbot etc.) */
+.sidebar-section {
+  margin-bottom: 6px;
+}
+
+.sidebar-item-header {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #e5e7eb;
+  padding: 8px 10px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-item-header:hover {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.sidebar-item-header-active {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #022c22;
+}
+
+.sidebar-item-chevron {
+  font-size: 11px;
+  opacity: 0.8;
+  transition: transform 0.18s ease;
+}
+
+.sidebar-item-chevron.open {
+  transform: rotate(180deg);
+}
+
+.sidebar-subitems {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 6px;
+  margin-bottom: 4px;
+}
+
+.sidebar-link {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  text-align: left;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-link:hover {
+  background: rgba(15, 23, 42, 0.95);
+  color: #e5e7eb;
+}
+
+.sidebar-link-active {
+  background: rgba(34, 197, 94, 0.18);
+  color: #bbf7d0;
+}
+
+/* ===============================
+   MAIN AREA
+================================ */
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;          /* <- ESSENCIAL pro filho ocupar 100% */
+  padding: 24px 28px;
+  display: flex;
+}
+
+/* Quando a página precisa ocupar tudo (Chat, Histórico etc.) */
+.page-full {
+  flex: 1;
+  display: flex;
+  min-height: 0;          /* junto com chat-history-layout height:100% */
+}
+
+/* Placeholders de telas */
+.page-placeholder,
+.lobby-placeholder {
+  flex: 1;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.9);
+  background: radial-gradient(
+      circle at top left,
+      rgba(34, 197, 94, 0.18),
+      rgba(15, 23, 42, 0.98)
+    );
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  color: #e5e7eb;
+}
+
+.page-placeholder h2,
+.lobby-placeholder h2 {
+  font-size: 22px;
+  margin: 0 0 8px;
+}
+
+.page-placeholder p,
+.lobby-placeholder p {
+  font-size: 14px;
+  opacity: 0.9;
+}
+
