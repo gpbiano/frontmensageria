@@ -342,9 +342,54 @@
       "phone": "556499989978",
       "channel": "whatsapp",
       "lastMessage": "Olá! Em que posso ajudar você hoje?",
-      "status": "open",
-      "updatedAt": "2025-12-11T16:47:35.869Z",
+      "status": "closed",
+      "updatedAt": "2025-12-11T18:02:04.617Z",
       "currentMode": "bot",
+      "botAttempts": 2,
+      "tags": [],
+      "notes": ""
+    },
+    {
+      "id": 24,
+      "sessionId": "S-99477939-1765493711675",
+      "contactId": 2,
+      "contactName": "Adriano Ferreira",
+      "phone": "556499477939",
+      "channel": "whatsapp",
+      "lastMessage": "[sticker]",
+      "status": "closed",
+      "updatedAt": "2025-12-11T22:55:54.476Z",
+      "currentMode": "human",
+      "botAttempts": 1,
+      "tags": [],
+      "notes": ""
+    },
+    {
+      "id": 25,
+      "sessionId": "S-99989978-1765503275677",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "Olá! Como posso ajudar você hoje?",
+      "status": "closed",
+      "updatedAt": "2025-12-12T01:35:19.522Z",
+      "currentMode": "bot",
+      "botAttempts": 1,
+      "tags": [],
+      "notes": ""
+    },
+    {
+      "id": 26,
+      "sessionId": "S-99989978-1765503708340",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "Oi",
+      "status": "closed",
+      "updatedAt": "2025-12-12T10:19:21.355Z",
+      "currentMode": "human",
       "botAttempts": 2,
       "tags": [],
       "notes": ""
@@ -2234,6 +2279,134 @@
         "timestamp": "2025-12-11T16:47:35.869Z",
         "fromBot": true,
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSNjAzMUEwRTJDNkNFNDI5NEJGAA=="
+      }
+    ],
+    "24": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oii",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-11T22:55:09.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0E0NTY0RkQ0NzQ2MjJDODYzMzIA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-11T22:55:14.732Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSRjlBMzk5OUJGREMzRTAzMUZBAA=="
+      },
+      {
+        "id": 3,
+        "direction": "out",
+        "type": "text",
+        "text": "😁",
+        "timestamp": "2025-12-11T22:55:27.129Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSNTY1NDUxMjVBQUZENTA2QjlCAA=="
+      },
+      {
+        "id": 4,
+        "direction": "in",
+        "type": "text",
+        "text": "Falar com atendente",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-11T22:55:29.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0EyRTU0QUU3QzUzMTE1OUY1NjQA"
+      },
+      {
+        "id": 5,
+        "direction": "in",
+        "type": "sticker",
+        "text": "",
+        "mediaUrl": "/uploads/sticker-2801894636679180-1765493740099.webp",
+        "location": null,
+        "timestamp": "2025-12-11T22:55:36.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0E5RjUxOUIwMjQwNjhCMjc1NDcA"
+      }
+    ],
+    "25": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "OI",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T01:34:33.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1OEVEMkYzMjQwNjgzRjZBOTkA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-12T01:34:38.617Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSNUY3MUIxOEEzMkI4OENCMzZEAA=="
+      }
+    ],
+    "26": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T01:41:46.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1MkE5N0MyMUVENzI4QTlEMkEA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-12T01:41:50.918Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSOTU5NjM2NTMxMTJCN0U1NzUyAA=="
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "Quero saber o que e a gp",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T01:41:59.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IzNzlEMzk2MDRCRjJCMjJDQzgA"
+      },
+      {
+        "id": 4,
+        "direction": "out",
+        "type": "text",
+        "text": "Claro! A GP Labs é uma empresa especializada em soluções tecnológicas, oferecendo produtos e serviços inovadores para facilitar o dia a dia das pessoas e empresas. Posso ajudar com alguma informação específica sobre a GP Labs?",
+        "timestamp": "2025-12-12T01:42:04.403Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSQzJEQjUzNjY5MzU5RTI0OTNEAA=="
+      },
+      {
+        "id": 5,
+        "direction": "in",
+        "type": "text",
+        "text": "Falar com humano",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T01:42:12.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IwMjlFNEYxRTcyMkEzNEJEREYA"
+      },
+      {
+        "id": 6,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi",
+        "timestamp": "2025-12-12T01:42:25.257Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMzY4MDYwQjVFQTBERTdGNzQ5AA=="
       }
     ]
   },

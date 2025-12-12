@@ -11,8 +11,18 @@ import ChatbotHistoryPage from "./pages/chatbot/ChatbotHistoryPage.jsx";
 import ChatbotConfigPage from "./pages/chatbot/ChatbotConfigPage.jsx";
 
 // Outbound
-import NumbersPage from "./pages/outbound/NumbersPage";
-import TemplatesPage from "./pages/outbound/TemplatesPage";
+import NumbersPage from "./pages/outbound/NumbersPage.jsx";
+import TemplatesPage from "./pages/outbound/TemplatesPage.jsx";
+
+// ✅ Campanhas
+// ATENÇÃO: seu arquivo legacy ainda é CampaignsPage.jsx, então importamos ele e apelidamos como Legacy
+import CampaignsLegacyPage from "./pages/outbound/campaigns/CampaignsPage.jsx";
+import CampaignCreateWizard from "./pages/outbound/campaigns/CampaignCreateWizard.jsx";
+import CampaignsAnalyticsPage from "./pages/outbound/campaigns/CampaignsAnalyticsPage.jsx";
+import CampaignReport from "./pages/outbound/campaigns/CampaignReport.jsx";
+
+// ✅ Arquivos (Assets)
+import AssetsPage from "./pages/outbound/AssetsPage.jsx";
 
 // CSS global da app
 import "./styles/App.css";
@@ -27,15 +37,11 @@ export default function App() {
 
   useEffect(() => {
     const token = localStorage.getItem(AUTH_KEY);
-    if (token) {
-      setIsAuthenticated(true);
-    }
+    if (token) setIsAuthenticated(true);
   }, []);
 
   function handleLogin(data) {
-    if (data?.token) {
-      localStorage.setItem(AUTH_KEY, data.token);
-    }
+    if (data?.token) localStorage.setItem(AUTH_KEY, data.token);
     setIsAuthenticated(true);
   }
 
@@ -44,9 +50,7 @@ export default function App() {
     setIsAuthenticated(false);
   }
 
-  if (!isAuthenticated) {
-    return <LoginPage onLogin={handleLogin} />;
-  }
+  if (!isAuthenticated) return <LoginPage onLogin={handleLogin} />;
 
   return <PlatformShell onLogout={handleLogout} />;
 }
@@ -77,7 +81,8 @@ const MENU = [
     label: "Campanhas",
     items: [
       { id: "reportes", label: "Reportes" },
-      { id: "campanhas", label: "Campanhas" },
+      { id: "campanhas", label: "Campanhas" }, // ✅ LISTA (legacy)
+      { id: "nova", label: "Criar campanha" }, // ✅ WIZARD
       { id: "templates", label: "Templates" },
       { id: "numeros", label: "Números" },
       { id: "arquivos", label: "Arquivos" },
@@ -95,8 +100,9 @@ const MENU = [
    SHELL DA PLATAFORMA
 ========================================================== */
 function PlatformShell({ onLogout }) {
-  const [mainSection, setMainSection] = useState(null);
-  const [subSection, setSubSection] = useState(null);
+  // ✅ Default para não cair “em branco” nem entrar direto em campanhas
+  const [mainSection, setMainSection] = useState("atendimento");
+  const [subSection, setSubSection] = useState("conversas");
   const [openSection, setOpenSection] = useState("atendimento");
 
   function handleHeaderClick(sectionId) {
@@ -107,6 +113,12 @@ function PlatformShell({ onLogout }) {
     setMainSection(sectionId);
     setSubSection(itemId);
     setOpenSection(sectionId);
+  }
+
+  function goTo(main, sub) {
+    setMainSection(main);
+    setSubSection(sub);
+    setOpenSection(main);
   }
 
   return (
@@ -146,9 +158,7 @@ function PlatformShell({ onLogout }) {
                 >
                   <span>{section.label}</span>
                   <span
-                    className={
-                      "sidebar-item-chevron" + (isOpen ? " open" : "")
-                    }
+                    className={"sidebar-item-chevron" + (isOpen ? " open" : "")}
                   >
                     ▾
                   </span>
@@ -167,9 +177,7 @@ function PlatformShell({ onLogout }) {
                             "sidebar-link" +
                             (isItemActive ? " sidebar-link-active" : "")
                           }
-                          onClick={() =>
-                            handleItemClick(section.id, item.id)
-                          }
+                          onClick={() => handleItemClick(section.id, item.id)}
                         >
                           {item.label}
                         </button>
@@ -184,11 +192,7 @@ function PlatformShell({ onLogout }) {
 
         {/* MAIN */}
         <main className="app-main">
-          {!mainSection || !subSection ? (
-            <LobbyPlaceholder />
-          ) : (
-            <SectionRenderer main={mainSection} sub={subSection} />
-          )}
+          <SectionRenderer main={mainSection} sub={subSection} goTo={goTo} />
         </main>
       </div>
     </div>
@@ -198,8 +202,8 @@ function PlatformShell({ onLogout }) {
 /* ==========================================================
    RENDER DE SEÇÕES
 ========================================================== */
-function SectionRenderer({ main, sub }) {
-  // Atendimento → Conversas (chat ao vivo)
+function SectionRenderer({ main, sub, goTo }) {
+  // Atendimento → Conversas
   if (main === "atendimento" && sub === "conversas") {
     return (
       <div className="page-full">
@@ -208,7 +212,17 @@ function SectionRenderer({ main, sub }) {
     );
   }
 
-  // Atendimento → Histórico de Chats (humano)
+  // Atendimento → Grupos (placeholder por enquanto)
+  if (main === "atendimento" && sub === "grupos") {
+    return (
+      <Placeholder
+        title="Atendimento · Grupos"
+        text="Em breve: suporte a grupos (WhatsApp Groups) e histórico dedicado."
+      />
+    );
+  }
+
+  // Atendimento → Histórico de Chats
   if (main === "atendimento" && sub === "historico") {
     return (
       <div className="page-full">
@@ -239,7 +253,60 @@ function SectionRenderer({ main, sub }) {
   // CAMPANHAS
   // ===============================
   if (main === "campanhas") {
-    // Números
+    if (sub === "reportes") {
+      return (
+        <div className="page-full">
+          <CampaignsAnalyticsPage />
+        </div>
+      );
+    }
+
+    // ✅ LISTA (legacy)
+    if (sub === "campanhas") {
+      return (
+        <div className="page-full">
+          <CampaignsLegacyPage />
+        </div>
+      );
+    }
+
+    // ✅ WIZARD
+    if (sub === "nova") {
+      return (
+        <div className="page-full">
+          {/* o Wizard atual não recebe props; saída controlada pelo menu */}
+          <CampaignCreateWizard />
+          <div style={{ marginTop: 12 }}>
+            <button
+              className="cmp-btn"
+              onClick={() => goTo("campanhas", "campanhas")}
+              title="Voltar para Campanhas"
+            >
+              Voltar para Campanhas
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ✅ Arquivos (Assets)
+    if (sub === "arquivos") {
+      return (
+        <div className="page-full">
+          <AssetsPage />
+        </div>
+      );
+    }
+
+    // ✅ Report (opcional)
+    if (sub === "report") {
+      return (
+        <div className="page-full">
+          <CampaignReport />
+        </div>
+      );
+    }
+
     if (sub === "numeros") {
       return (
         <div className="page-full">
@@ -248,7 +315,6 @@ function SectionRenderer({ main, sub }) {
       );
     }
 
-    // Templates – sempre a página de templates (ela cuida do "criar")
     if (sub === "templates") {
       return (
         <div className="page-full">
@@ -257,7 +323,6 @@ function SectionRenderer({ main, sub }) {
       );
     }
 
-    // Demais itens
     return (
       <Placeholder
         title={`Campanhas · ${subSectionLabel(sub)}`}
@@ -266,7 +331,6 @@ function SectionRenderer({ main, sub }) {
     );
   }
 
-  // Configurações
   if (main === "configuracoes") {
     return (
       <Placeholder
@@ -287,15 +351,6 @@ function SectionRenderer({ main, sub }) {
 /* ==========================================================
    AUXILIARES
 ========================================================== */
-function LobbyPlaceholder() {
-  return (
-    <div className="lobby-placeholder">
-      <h2>Bem-vindo 👋</h2>
-      <p>Selecione uma opção no menu lateral para começar.</p>
-    </div>
-  );
-}
-
 function Placeholder({ title, text }) {
   return (
     <div className="page-placeholder">
@@ -325,6 +380,8 @@ function subSectionLabel(sub) {
       return "Reportes";
     case "campanhas":
       return "Campanhas";
+    case "nova":
+      return "Criar campanha";
     case "templates":
       return "Templates";
     case "numeros":

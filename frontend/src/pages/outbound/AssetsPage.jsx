@@ -1,34 +1,28 @@
-// frontend/src/outbound/AssetsPage.jsx
+// frontend/src/pages/outbound/AssetsPage.jsx
 import { useEffect, useState } from "react";
+import "../../styles/assets.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
-const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1 MB
+import {
+  fetchMediaLibrary, // ✅ nome correto da API
+  uploadAsset,
+  deleteAsset
+} from "../../api";
 
 export default function AssetsPage() {
   const [assets, setAssets] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState("");
-  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
 
-  // ===========================
-  // LOAD
-  // ===========================
   async function loadAssets() {
+    setLoading(true);
+    setErr("");
+
     try {
-      setLoading(true);
-      setError("");
-
-      const resp = await fetch(`${API_BASE}/outbound/assets`);
-      if (!resp.ok) {
-        throw new Error("Erro ao carregar arquivos");
-      }
-
-      const data = await resp.json();
-      setAssets(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
-      setError("Não foi possível carregar os arquivos. Tente novamente.");
+      const res = await fetchMediaLibrary();
+      setAssets(Array.isArray(res) ? res : []);
+    } catch (e) {
+      console.error(e);
+      setErr("Erro ao carregar arquivos.");
     } finally {
       setLoading(false);
     }
@@ -38,226 +32,98 @@ export default function AssetsPage() {
     loadAssets();
   }, []);
 
-  // ===========================
-  // UPLOAD
-  // ===========================
-  function handleFileChange(e) {
-    const selected = e.target.files?.[0];
-    if (!selected) {
-      setFile(null);
-      return;
-    }
-
-    if (selected.size > MAX_FILE_SIZE) {
-      alert("Arquivo maior que 1 MB. Escolha um arquivo menor.");
-      e.target.value = "";
-      setFile(null);
-      return;
-    }
-
-    setFile(selected);
-  }
-
-  async function handleUpload(e) {
-    e.preventDefault();
-
-    if (!file) {
-      alert("Selecione um arquivo para enviar.");
-      return;
-    }
+  async function handleUpload(file) {
+    if (!file) return;
 
     try {
-      setUploading(true);
-      setError("");
-
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const resp = await fetch(`${API_BASE}/outbound/assets`, {
-        method: "POST",
-        body: formData
-      });
-
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        console.error("Erro ao fazer upload", data);
-        throw new Error(data.error || "Erro ao enviar arquivo");
-      }
-
-      const saved = await resp.json();
-      // adiciona no topo da lista
-      setAssets((prev) => [saved, ...(prev || [])]);
-      setFile(null);
-      const input = document.getElementById("file-input");
-      if (input) input.value = "";
-
-      alert("Arquivo enviado com sucesso ✅");
-    } catch (err) {
-      console.error(err);
-      setError(err.message || "Erro ao enviar arquivo.");
+      await uploadAsset(file);
+      loadAssets();
+    } catch (e) {
       alert("Erro ao enviar arquivo.");
-    } finally {
-      setUploading(false);
     }
   }
 
-  // ===========================
-  // DELETE
-  // ===========================
   async function handleDelete(id) {
-    if (!window.confirm("Tem certeza que deseja apagar este arquivo?")) {
-      return;
-    }
+    if (!window.confirm("Deseja remover este arquivo?")) return;
 
     try {
-      const resp = await fetch(`${API_BASE}/outbound/assets/${id}`, {
-        method: "DELETE"
-      });
-
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        console.error("Erro ao apagar arquivo", data);
-        throw new Error(data.error || "Erro ao apagar arquivo");
-      }
-
-      setAssets((prev) => prev.filter((a) => a.id !== id));
-    } catch (err) {
-      console.error(err);
-      alert("Erro ao apagar arquivo.");
+      await deleteAsset(id);
+      loadAssets();
+    } catch (e) {
+      alert("Erro ao excluir arquivo.");
     }
   }
 
-  // helper pra montar URL absoluta
-  function getPublicUrl(asset) {
-    if (!asset?.url) return "-";
-    const base = API_BASE.replace(/\/$/, "");
-    return `${base}${asset.url}`;
+  function copyLink(url) {
+    navigator.clipboard.writeText(url);
+    alert("Link copiado!");
   }
 
-  function formatSize(bytes) {
-    if (!bytes && bytes !== 0) return "-";
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  function formatDate(iso) {
-    if (!iso) return "-";
-    try {
-      return new Date(iso).toLocaleString();
-    } catch {
-      return iso;
-    }
-  }
-
-  // ===========================
-  // RENDER
-  // ===========================
   return (
-    <div className="page arquivos-page">
-      <header className="page-header">
-        <div>
-          <h1>Arquivos</h1>
-          <p className="page-subtitle">
-            Biblioteca de arquivos utilizados em campanhas (imagens, PDFs,
-            vídeos, etc.). Envie arquivos de até 1 MB e use a URL gerada nas
-            mensagens da sua conta GP Labs.
-          </p>
-        </div>
-      </header>
+    <div className="assets-page">
+      <div className="assets-header">
+        <h1>Arquivos</h1>
 
-      <section className="card upload-card">
-        <h2>Enviar novo arquivo</h2>
-        <p className="card-subtitle">
-          Você pode arrastar e soltar o arquivo ou escolher do seu dispositivo.
-          Tamanho máximo: <strong>1 MB</strong>. Formatos comuns aceitos:
-          imagens (JPG, PNG), documentos (PDF) e vídeos leves (MP4).
-        </p>
+        <label className="assets-upload-btn">
+          + Carregar novo ativo
+          <input
+            type="file"
+            hidden
+            onChange={(e) => handleUpload(e.target.files?.[0])}
+          />
+        </label>
+      </div>
 
-        <form className="upload-form" onSubmit={handleUpload}>
-          <div className="upload-row">
-            <input id="file-input" type="file" onChange={handleFileChange} />
-            <button
-              type="submit"
-              className="primary-btn"
-              disabled={uploading}
-            >
-              {uploading ? "Enviando..." : "Carregar arquivo"}
-            </button>
-          </div>
-          {file && (
-            <p className="upload-hint">
-              Selecionado: <strong>{file.name}</strong> (
-              {formatSize(file.size)})
-            </p>
-          )}
-        </form>
-      </section>
-
-      <section className="card assets-table-card">
-        <h2>Arquivos já enviados</h2>
-
-        {error && <p className="error-text">{error}</p>}
-
-        {loading ? (
-          <p>Carregando arquivos...</p>
-        ) : !assets || assets.length === 0 ? (
-          <p className="empty-text">
-            Nenhum arquivo enviado ainda. Use o formulário acima para subir sua
-            primeira mídia.
-          </p>
-        ) : (
-          <table className="templates-table">
-            <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Tipo</th>
-                <th>Tamanho</th>
-                <th>Data de upload</th>
-                <th>URL</th>
-                <th className="col-acoes">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {assets.map((asset) => {
-                const url = getPublicUrl(asset);
-                return (
-                  <tr key={asset.id}>
-                    <td>{asset.name}</td>
-                    <td>{asset.type || "-"}</td>
-                    <td>{formatSize(asset.size)}</td>
-                    <td>{formatDate(asset.uploadedAt)}</td>
+      {loading ? (
+        <div className="card">Carregando arquivos…</div>
+      ) : err ? (
+        <div className="card error">{err}</div>
+      ) : (
+        <div className="card">
+          {assets.length === 0 ? (
+            <div style={{ opacity: 0.7 }}>Nenhum arquivo enviado ainda.</div>
+          ) : (
+            <table className="assets-table">
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Tipo</th>
+                  <th>Tamanho</th>
+                  <th>URL</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {assets.map((a) => (
+                  <tr key={a.id}>
+                    <td>{a.name || a.label || "-"}</td>
+                    <td>{a.type}</td>
                     <td>
-                      {url === "-" ? (
-                        "-"
-                      ) : (
-                        <a
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="link-small"
-                        >
-                          Abrir
-                        </a>
-                      )}
+                      {a.size
+                        ? `${(a.size / 1024).toFixed(1)} KB`
+                        : "-"}
                     </td>
-                    <td className="col-acoes">
+                    <td className="mono">
+                      <a href={a.url} target="_blank" rel="noreferrer">
+                        {a.url}
+                      </a>
+                    </td>
+                    <td className="actions">
+                      <button onClick={() => copyLink(a.url)}>Copiar</button>
                       <button
-                        type="button"
-                        className="icon-table-btn danger"
-                        title="Excluir"
-                        onClick={() => handleDelete(asset.id)}
+                        className="danger"
+                        onClick={() => handleDelete(a.id)}
                       >
-                        🗑️
+                        Excluir
                       </button>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 }

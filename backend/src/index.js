@@ -27,6 +27,9 @@ import numbersRouter from "./outbound/numbersRouter.js";
 import templatesRouter from "./outbound/templatesRouter.js";
 import assetsRouter from "./outbound/assetsRouter.js";
 
+// ✅ Campanhas (novo router dedicado)
+import campaignsRouter from "./outbound/campaignsRouter.js";
+
 import {
   getChatbotSettingsForAccount,
   decideRoute
@@ -725,7 +728,8 @@ app.use("/uploads", express.static(UPLOADS_DIR));
  * /outbound/numbers/...       → Números WABA (sync com Meta)
  * /outbound/templates/...     → Templates (listar, sync)
  * /outbound/assets/...        → Arquivos de mídia
- * /outbound/...               → Campanhas, etc.
+ * /outbound/campaigns/...     → ✅ Campanhas (wizard 3 passos)
+ * /outbound/...               → Rotas gerais outbound
  */
 
 // Rotas de configuração do chatbot (aba Chatbot)
@@ -743,8 +747,11 @@ app.use("/outbound/templates", templatesRouter); // /outbound/templates e /outbo
 // Rotas de ARQUIVOS (biblioteca de mídia / assets)
 app.use("/outbound/assets", assetsRouter); // /outbound/assets...
 
-// Rotas gerais de outbound (campanhas, etc.)
-app.use("/outbound", outboundRouter); // /outbound/... (campanhas, etc.)
+// ✅ Rotas de CAMPANHAS (novo módulo)
+app.use("/outbound/campaigns", campaignsRouter); // /outbound/campaigns...
+
+// Rotas gerais de outbound (seu router agregador)
+app.use("/outbound", outboundRouter); // /outbound/... (outros endpoints)
 
 // ===============================
 // HEALTH / STATUS
@@ -810,11 +817,9 @@ app.post("/login", (req, res) => {
     return res.status(401).json({ error: "Senha incorreta." });
   }
 
-  const token = jwt.sign(
-    { id: user.id, email: user.email },
-    JWT_SECRET,
-    { expiresIn: "8h" }
-  );
+  const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, {
+    expiresIn: "8h"
+  });
 
   logger.info({ email: user.email }, "✅ Login realizado");
 
@@ -847,9 +852,7 @@ app.get("/conversations", (req, res) => {
     conversations = conversations.filter((c) => c.status === status);
   }
 
-  conversations.sort(
-    (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
-  );
+  conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
   res.json(conversations);
 });
@@ -1023,15 +1026,9 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
       const profileName = value?.contacts?.[0]?.profile?.name;
       const channel = "whatsapp";
 
-      const conv = findOrCreateConversationByPhone(
-        waId,
-        profileName,
-        channel
-      );
+      const conv = findOrCreateConversationByPhone(waId, profileName, channel);
 
-      const timestamp = new Date(
-        Number(msg.timestamp) * 1000
-      ).toISOString();
+      const timestamp = new Date(Number(msg.timestamp) * 1000).toISOString();
 
       let type = msg.type;
       let text = "";
@@ -1073,15 +1070,10 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
 
       // PREVENÇÃO DE DUPLICADOS
       const existingMsgs = state.messagesByConversation[conv.id] || [];
-      const alreadyExists = existingMsgs.some(
-        (m) => m.waMessageId === msg.id
-      );
+      const alreadyExists = existingMsgs.some((m) => m.waMessageId === msg.id);
 
       if (alreadyExists) {
-        logger.warn(
-          { waMessageId: msg.id },
-          "⚠️ Mensagem já processada, ignorando"
-        );
+        logger.warn({ waMessageId: msg.id }, "⚠️ Mensagem já processada, ignorando");
         continue;
       }
 
@@ -1111,10 +1103,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         messageText: text
       });
 
-      logger.info(
-        { conversationId: conv.id, decision },
-        "🤖 Decisão de roteamento"
-      );
+      logger.info({ conversationId: conv.id, decision }, "🤖 Decisão de roteamento");
 
       if (decision.target === "bot" && type === "text") {
         const history = getConversationHistoryForBot(conv.id, 10);
@@ -1156,15 +1145,11 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
             { err },
             "❌ Erro ao enviar mensagem de texto WhatsApp (bot)"
           );
-          // não relança para não quebrar o webhook
         }
       } else {
         conv.currentMode = "human";
         saveStateToDisk();
-        logger.info(
-          { conversationId: conv.id },
-          "🧑‍💻 Conversa roteada para humano"
-        );
+        logger.info({ conversationId: conv.id }, "🧑‍💻 Conversa roteada para humano");
       }
     }
 
@@ -1205,8 +1190,5 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ===============================
 app.listen(PORT, () => {
-  logger.info(
-    { port: PORT, WABA_ID, PHONE_NUMBER_ID },
-    "🚀 API rodando"
-  );
+  logger.info({ port: PORT, WABA_ID, PHONE_NUMBER_ID }, "🚀 API rodando");
 });

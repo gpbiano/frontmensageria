@@ -18,6 +18,8 @@ const API_BASE =
   import.meta.env.VITE_API_BASE_URL ||
   "http://localhost:3010";
 
+const AUTH_KEY = "gpLabsAuthToken";
+
 // ============================
 // HELPER GENÉRICO DE FETCH
 // ============================
@@ -27,9 +29,7 @@ async function request<T = any>(
   options: RequestInit = {}
 ): Promise<T> {
   const token =
-    typeof window !== "undefined"
-      ? localStorage.getItem("gpLabsAuthToken")
-      : null;
+    typeof window !== "undefined" ? localStorage.getItem(AUTH_KEY) : null;
 
   const headers: HeadersInit = {
     "Content-Type": "application/json",
@@ -59,6 +59,46 @@ async function request<T = any>(
 }
 
 // ============================
+// HELPER PARA FORM-DATA (UPLOAD)
+// ============================
+
+async function requestForm<T = any>(
+  path: string,
+  formData: FormData,
+  options: RequestInit = {}
+): Promise<T> {
+  const token =
+    typeof window !== "undefined" ? localStorage.getItem(AUTH_KEY) : null;
+
+  // ⚠️ Não setar Content-Type aqui. O browser define boundary automaticamente.
+  const headers: HeadersInit = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers || {})
+  };
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    ...options,
+    headers,
+    body: formData
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.error("Erro na API (FORM):", res.status, text);
+    throw new Error(
+      `Erro na API (${res.status}) em ${path}: ${text || "sem corpo"}`
+    );
+  }
+
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return null as T;
+  }
+}
+
+// ============================
 // AUTENTICAÇÃO
 // ============================
 
@@ -66,8 +106,6 @@ export async function login(
   email: string,
   password: string
 ): Promise<LoginResponse> {
-  // aqui não precisamos do token; o helper ainda tenta pegar do localStorage,
-  // mas o backend simplesmente ignora o header se vier.
   return request<LoginResponse>("/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
@@ -86,9 +124,7 @@ export async function fetchConversations(
   return request<Conversation[]>(`/conversations${qs}`);
 }
 
-export async function fetchMessages(
-  conversationId: number
-): Promise<Message[]> {
+export async function fetchMessages(conversationId: number): Promise<Message[]> {
   return request<Message[]>(`/conversations/${conversationId}/messages`);
 }
 
@@ -181,7 +217,7 @@ export async function updateConversationNotes(
 }
 
 // ============================
-// OUTBOUND – Templates & Mídias
+// OUTBOUND – Templates
 // ============================
 
 /**
@@ -210,12 +246,6 @@ export async function syncTemplates(): Promise<any> {
 
 /**
  * Cria um novo template na WABA via backend.
- * payload deve ter obrigatoriamente: name, category, language, components
- *
- * O backend responde:
- * { success: true, template: Template }
- *
- * Aqui já devolvemos diretamente o Template para simplificar o uso no front.
  */
 export async function createTemplate(payload: {
   name: string;
@@ -234,22 +264,65 @@ export async function createTemplate(payload: {
   return data.template;
 }
 
+// ============================
+// OUTBOUND – ASSETS (Arquivos)
+// ============================
+
 /**
- * Lista biblioteca de mídia (assets)
+ * Lista assets
  * GET /outbound/assets
  */
-export async function fetchMediaLibrary(): Promise<MediaItem[]> {
+export async function fetchAssets(): Promise<MediaItem[]> {
   try {
     const data = await request<any>("/outbound/assets");
     return Array.isArray(data) ? (data as MediaItem[]) : [];
   } catch (err) {
-    console.error("fetchMediaLibrary() erro:", err);
+    console.error("fetchAssets() erro:", err);
     return [];
   }
 }
 
 /**
- * Stub local para criação de item de mídia.
+ * Alias (compatibilidade com páginas antigas)
+ */
+export async function fetchMediaLibrary(): Promise<MediaItem[]> {
+  return fetchAssets();
+}
+
+/**
+ * Upload de asset
+ * POST /outbound/assets/upload (field: file)
+ *
+ * ⚠️ Mantemos fallback /outbound/assets só por garantia,
+ * mas o endpoint “correto” é /upload (igual router que montamos).
+ */
+export async function uploadAsset(file: File): Promise<MediaItem> {
+  const fd = new FormData();
+  fd.append("file", file);
+
+  try {
+    return await requestForm<MediaItem>("/outbound/assets/upload", fd);
+  } catch (e) {
+    // fallback (caso você tenha outro router antigo aceitando POST /outbound/assets)
+    return await requestForm<MediaItem>("/outbound/assets", fd);
+  }
+}
+
+/**
+ * Delete de asset
+ * DELETE /outbound/assets/:id
+ */
+export async function deleteAsset(
+  assetId: string | number
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/outbound/assets/${encodeURIComponent(String(assetId))}`,
+    { method: "DELETE" }
+  );
+}
+
+/**
+ * (Opcional) Stub local para criação de item de mídia (mantido)
  * No futuro, deve chamar POST /outbound/assets.
  */
 export async function createMediaItem(payload: {
@@ -264,7 +337,7 @@ export async function createMediaItem(payload: {
       id: Date.now(),
       ...payload,
       createdAt: new Date().toISOString()
-    };
+    } as any;
   } catch (err) {
     console.error("createMediaItem() erro:", err);
     throw err;
@@ -272,7 +345,128 @@ export async function createMediaItem(payload: {
 }
 
 // ============================
-// (RESERVADO) CONFIGURAÇÕES / TAGS FUTURO
+// OUTBOUND – Campanhas
 // ============================
-// export async function fetchSettings() { ... }
-// export async function saveTags(tags: string[]) { ... }
+
+export type CampaignStatus =
+  | "draft"
+  | "ready"
+  | "running"
+  | "paused"
+  | "finished"
+  | "failed"
+  | "canceled";
+
+export interface CampaignRecord {
+  id: string;
+  name: string;
+  numberId: string;
+  templateName: string;
+  status: CampaignStatus;
+  createdAt: string;
+  updatedAt?: string;
+  audience?: {
+    fileName?: string;
+    totalRows?: number;
+    validRows?: number;
+    invalidRows?: number;
+  };
+}
+
+/**
+ * Lista campanhas
+ * GET /outbound/campaigns
+ */
+export async function fetchCampaigns(): Promise<CampaignRecord[]> {
+  const data = await request<any>("/outbound/campaigns");
+  return Array.isArray(data) ? (data as CampaignRecord[]) : [];
+}
+
+/**
+ * Cria campanha (Passo 1 do Wizard)
+ * POST /outbound/campaigns
+ */
+export async function createCampaign(payload: {
+  name: string;
+  numberId: string;
+  templateName: string;
+  excludeOptOut?: boolean;
+}): Promise<{ id: string }> {
+  return request<{ id: string }>("/outbound/campaigns", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+/**
+ * Upload da audiência (CSV) (Passo 2 do Wizard)
+ * POST /outbound/campaigns/:id/audience
+ */
+export async function uploadCampaignAudience(
+  campaignId: string,
+  file: File
+): Promise<{
+  fileName: string;
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+}> {
+  const fd = new FormData();
+  fd.append("file", file);
+
+  return requestForm(
+    `/outbound/campaigns/${encodeURIComponent(campaignId)}/audience`,
+    fd
+  );
+}
+
+/**
+ * Inicia campanha (Passo 3 do Wizard)
+ * POST /outbound/campaigns/:id/start
+ */
+export async function startCampaign(
+  campaignId: string
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/outbound/campaigns/${encodeURIComponent(campaignId)}/start`,
+    { method: "POST" }
+  );
+}
+
+/**
+ * Pausar campanha
+ * PATCH /outbound/campaigns/:id/pause
+ */
+export async function pauseCampaign(
+  campaignId: string
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/outbound/campaigns/${encodeURIComponent(campaignId)}/pause`,
+    { method: "PATCH" }
+  );
+}
+
+/**
+ * Retomar campanha
+ * PATCH /outbound/campaigns/:id/resume
+ */
+export async function resumeCampaign(
+  campaignId: string
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/outbound/campaigns/${encodeURIComponent(campaignId)}/resume`,
+    { method: "PATCH" }
+  );
+}
+
+/**
+ * Buscar detalhes da campanha (opcional, útil pro Report)
+ * GET /outbound/campaigns/:id
+ */
+export async function fetchCampaignById(
+  campaignId: string
+): Promise<CampaignRecord> {
+  return request<CampaignRecord>(
+    `/outbound/campaigns/${encodeURIComponent(campaignId)}`
+  );
+}

@@ -1,0 +1,47 @@
+.assets-page {
+  padding: 24px;
+}
+
+.assets-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.assets-upload-btn {
+  background: #2563eb;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.card {
+  background: #0b1220;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.assets-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.assets-table th,
+.assets-table td {
+  padding: 10px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.assets-table a {
+  color: #38bdf8;
+}
+
+.actions button {
+  margin-right: 8px;
+}
+
+.actions .danger {
+  color: #ef4444;
+}
