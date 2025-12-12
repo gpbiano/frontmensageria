@@ -3,116 +3,161 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import logger from "../logger.js";
+import jwt from "jsonwebtoken";
 
 const router = express.Router();
 
-// pasta onde os arquivos serão armazenados
-const ASSETS_DIR = path.join(process.cwd(), "uploads/assets");
+// ===============================
+// CONFIG
+// ===============================
+const JWT_SECRET = process.env.JWT_SECRET || "gplabs-dev-secret";
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 
-if (!fs.existsSync(ASSETS_DIR)) {
-  fs.mkdirSync(ASSETS_DIR, { recursive: true });
-}
-
-// limite de 1MB
-const upload = multer({
-  limits: { fileSize: 1 * 1024 * 1024 },
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, ASSETS_DIR),
-    filename: (req, file, cb) => {
-      const timestamp = Date.now();
-      const ext = path.extname(file.originalname) || "";
-      const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
-      cb(null, `${timestamp}-${safeName}${ext}`);
-    }
-  })
-});
-
-// arquivo JSON para persistência simples
+const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+const ASSETS_DIR = path.join(UPLOADS_DIR, "assets");
 const ASSETS_DB = path.join(process.cwd(), "assets.json");
 
-// Carregar dados
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
+
+// ===============================
+// AUTH
+// ===============================
+function requireAuth(req, res, next) {
+  try {
+    const h = req.headers.authorization || "";
+    const token = h.startsWith("Bearer ") ? h.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "missing_token" });
+    req.user = jwt.verify(token, JWT_SECRET);
+    return next();
+  } catch {
+    return res.status(401).json({ error: "invalid_token" });
+  }
+}
+
+// ===============================
+// FILE IO
+// ===============================
+function safeReadJson(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = raw ? JSON.parse(raw) : fallback;
+    return parsed;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeWriteJson(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
 function loadAssets() {
-  try {
-    if (!fs.existsSync(ASSETS_DB)) return [];
-    const raw = fs.readFileSync(ASSETS_DB, "utf-8");
-    return JSON.parse(raw);
-  } catch (err) {
-    logger.error({ err }, "Erro ao carregar assets.json");
-    return [];
-  }
+  const parsed = safeReadJson(ASSETS_DB, []);
+  return Array.isArray(parsed) ? parsed : [];
 }
 
-// Salvar dados
-function saveAssets(data) {
-  try {
-    fs.writeFileSync(ASSETS_DB, JSON.stringify(data, null, 2));
-  } catch (err) {
-    logger.error({ err }, "Erro ao salvar assets.json");
-  }
+function saveAssets(list) {
+  safeWriteJson(ASSETS_DB, Array.isArray(list) ? list : []);
+}
+
+function makeId() {
+  return `asset_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function sanitizeName(name) {
+  return String(name || "file")
+    .replace(/\s+/g, "_")
+    .replace(/[^\w.\-]/g, "");
+}
+
+function getPublicUrl(req, publicPath) {
+  const base = PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+  return `${base}${publicPath}`;
 }
 
 // ===============================
-// GET /outbound/assets
+// MULTER
 // ===============================
-router.get("/outbound/assets", (req, res) => {
-  const list = loadAssets();
-  res.json(list);
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, ASSETS_DIR),
+  filename: (req, file, cb) => {
+    const original = sanitizeName(file.originalname);
+    const ext = path.extname(original);
+    const base = path.basename(original, ext);
+    cb(null, `${Date.now()}-${base}${ext}`);
+  }
 });
 
-// ===============================
-// POST /outbound/assets (upload)
-// ===============================
-router.post("/outbound/assets", upload.single("file"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "Nenhum arquivo enviado." });
-  }
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 } // 25MB
+});
 
-  const assets = loadAssets();
+// =====================
+// GET /outbound/assets
+// =====================
+router.get("/", requireAuth, (req, res) => {
+  return res.json(loadAssets());
+});
 
-  const newAsset = {
-    id: Date.now(),
-    name: req.file.originalname,
-    filename: req.file.filename,
-    size: req.file.size,
-    type: req.file.mimetype,
-    uploadedAt: new Date().toISOString(),
-    url: `/uploads/assets/${req.file.filename}`
+// =============================
+// POST /outbound/assets/upload
+// field: file
+// =============================
+router.post("/upload", requireAuth, upload.single("file"), (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: "file_required" });
+
+  const items = loadAssets();
+  const publicPath = `/uploads/assets/${file.filename}`;
+
+  const item = {
+    id: makeId(),
+    name: file.originalname,
+    label: file.originalname,
+    type: file.mimetype,
+    size: file.size,
+    url: getPublicUrl(req, publicPath),
+    createdAt: new Date().toISOString()
   };
 
-  assets.push(newAsset);
-  saveAssets(assets);
+  items.unshift(item);
+  saveAssets(items);
 
-  logger.info({ file: newAsset.filename }, "📁 Novo arquivo enviado");
-
-  res.status(201).json(newAsset);
+  return res.status(201).json(item);
 });
 
-// ===============================
+// ==========================
 // DELETE /outbound/assets/:id
-// ===============================
-router.delete("/outbound/assets/:id", (req, res) => {
+// ==========================
+router.delete("/:id", requireAuth, (req, res) => {
   const { id } = req.params;
 
-  let assets = loadAssets();
-  const asset = assets.find((a) => a.id == id);
+  const items = loadAssets();
+  const idx = items.findIndex((a) => String(a.id) === String(id));
+  if (idx === -1) return res.status(404).json({ error: "not_found" });
 
-  if (!asset) {
-    return res.status(404).json({ error: "Arquivo não encontrado." });
+  const [removed] = items.splice(idx, 1);
+  saveAssets(items);
+
+  // best-effort delete file
+  try {
+    const marker = "/uploads/assets/";
+    const url = String(removed.url || "");
+    const pos = url.indexOf(marker);
+    const filename = pos >= 0 ? url.slice(pos + marker.length) : null;
+
+    if (filename) {
+      const filePath = path.join(ASSETS_DIR, filename);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+  } catch {
+    // ignore
   }
 
-  // remover arquivo físico
-  const filePath = path.join(ASSETS_DIR, asset.filename);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
-
-  // remover do banco
-  assets = assets.filter((a) => a.id != id);
-  saveAssets(assets);
-
-  logger.info({ id }, "🗑️ Arquivo deletado");
-  res.json({ success: true });
+  return res.json({ success: true });
 });
 
 export default router;

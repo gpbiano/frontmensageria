@@ -1,0 +1,223 @@
+.page.optout-page {
+  padding: 20px 40px;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.page-subtitle {
+  opacity: 0.75;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tab {
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  color: inherit;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.18);
+}
+
+.card {
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.03);
+  border-radius: 14px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.card.inner {
+  margin-top: 12px;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.8fr 0.8fr 0.8fr;
+  gap: 12px;
+  align-items: end;
+}
+
+.field label {
+  display: block;
+  font-size: 12px;
+  opacity: 0.75;
+  margin-bottom: 6px;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  padding: 10px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.25);
+  color: inherit;
+  outline: none;
+}
+
+.field.actions {
+  display: flex;
+  flex-direction: column;
+}
+
+.table-card .table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-indicator {
+  opacity: 0.8;
+  font-size: 13px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+}
+
+.table th,
+.table td {
+  padding: 10px 8px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.table th {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.right {
+  text-align: right !important;
+}
+
+.muted {
+  opacity: 0.75;
+  padding: 14px 0;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  margin-right: 6px;
+  font-size: 12px;
+  opacity: 0.95;
+}
+
+.pill.subtle {
+  opacity: 0.7;
+}
+
+.alert {
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  margin-bottom: 12px;
+}
+
+.alert.error {
+  background: rgba(255,0,0,0.08);
+}
+
+.alert.ok {
+  background: rgba(0,255,120,0.08);
+}
+
+.form-card h2 {
+  margin: 0 0 8px 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.grid .full {
+  grid-column: 1 / -1;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.small {
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+/* Botões (caso seu projeto já tenha, pode remover daqui) */
+.btn {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.08);
+  color: inherit;
+  cursor: pointer;
+}
+
+.btn.secondary {
+  background: rgba(255,255,255,0.04);
+}
+
+.btn.ghost {
+  background: transparent;
+}
+
+.btn.danger {
+  border-color: rgba(255,80,80,0.35);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

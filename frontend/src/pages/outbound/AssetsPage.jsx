@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import "../../styles/assets.css";
 
 import {
-  fetchMediaLibrary, // ✅ nome correto da API
+  fetchAssets, // ✅ usa o export real da API (evita erro de "não exporta")
   uploadAsset,
   deleteAsset
 } from "../../api";
@@ -18,11 +18,12 @@ export default function AssetsPage() {
     setErr("");
 
     try {
-      const res = await fetchMediaLibrary();
+      const res = await fetchAssets();
       setAssets(Array.isArray(res) ? res : []);
     } catch (e) {
       console.error(e);
       setErr("Erro ao carregar arquivos.");
+      setAssets([]);
     } finally {
       setLoading(false);
     }
@@ -37,26 +38,45 @@ export default function AssetsPage() {
 
     try {
       await uploadAsset(file);
-      loadAssets();
+      await loadAssets();
     } catch (e) {
+      console.error(e);
       alert("Erro ao enviar arquivo.");
     }
   }
 
   async function handleDelete(id) {
+    if (!id) return;
     if (!window.confirm("Deseja remover este arquivo?")) return;
 
     try {
       await deleteAsset(id);
-      loadAssets();
+      await loadAssets();
     } catch (e) {
+      console.error(e);
       alert("Erro ao excluir arquivo.");
     }
   }
 
-  function copyLink(url) {
-    navigator.clipboard.writeText(url);
-    alert("Link copiado!");
+  async function copyLink(url) {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      alert("Link copiado!");
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível copiar o link.");
+    }
+  }
+
+  function formatSize(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return "-";
+    if (n < 1024) return `${n} B`;
+    const kb = n / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(1)} MB`;
   }
 
   return (
@@ -94,31 +114,42 @@ export default function AssetsPage() {
                 </tr>
               </thead>
               <tbody>
-                {assets.map((a) => (
-                  <tr key={a.id}>
-                    <td>{a.name || a.label || "-"}</td>
-                    <td>{a.type}</td>
-                    <td>
-                      {a.size
-                        ? `${(a.size / 1024).toFixed(1)} KB`
-                        : "-"}
-                    </td>
-                    <td className="mono">
-                      <a href={a.url} target="_blank" rel="noreferrer">
-                        {a.url}
-                      </a>
-                    </td>
-                    <td className="actions">
-                      <button onClick={() => copyLink(a.url)}>Copiar</button>
-                      <button
-                        className="danger"
-                        onClick={() => handleDelete(a.id)}
-                      >
-                        Excluir
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {assets.map((a) => {
+                  const name = a.name || a.label || a.filename || "-";
+                  const type = a.type || a.mimeType || "-";
+                  const size = a.size ?? a.bytes ?? null;
+                  const url = a.url || a.publicUrl || a.link || "";
+
+                  return (
+                    <tr key={a.id ?? url ?? name}>
+                      <td>{name}</td>
+                      <td>{type}</td>
+                      <td>{formatSize(size)}</td>
+                      <td className="mono">
+                        {url ? (
+                          <a href={url} target="_blank" rel="noreferrer">
+                            {url}
+                          </a>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td className="actions">
+                        <button onClick={() => copyLink(url)} disabled={!url}>
+                          Copiar
+                        </button>
+                        <button
+                          className="danger"
+                          onClick={() => handleDelete(a.id)}
+                          disabled={!a.id}
+                          title={!a.id ? "Item sem id para excluir" : "Excluir"}
+                        >
+                          Excluir
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}

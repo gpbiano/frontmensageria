@@ -3,12 +3,17 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
+import fetch from "node-fetch";
 import logger from "../logger.js";
 
 const router = express.Router();
 
 // Usamos o mesmo data.json do resto da plataforma
 const DB_FILE = path.join(process.cwd(), "data.json");
+
+// Env WhatsApp
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
 // Upload em memória (CSV pequeno/medio). Depois podemos evoluir.
 const upload = multer({
@@ -50,8 +55,8 @@ function newId(prefix = "cmp") {
  * Parse CSV simples:
  * - separador: vírgula
  * - primeira linha: header
- * - aceita colunas: numero (ou number/phone)
- * - ignora linhas vazias
+ * - aceita colunas: numero (ou number/phone/telefone/celular)
+ * - e variáveis: body_var_1..N
  *
  * OBS: MVP. Depois melhoramos para RFC4180, separador ;, aspas, etc.
  */
@@ -81,12 +86,10 @@ function parseCsvBasic(text) {
 }
 
 function normalizePhoneDigits(value) {
-  const digits = String(value || "").replace(/\D/g, "");
-  return digits;
+  return String(value || "").replace(/\D/g, "");
 }
 
 function pickPhoneField(row) {
-  // tenta achar um campo de telefone
   const keys = Object.keys(row || {});
   const candidates = ["numero", "number", "phone", "telefone", "celular"];
   const foundKey =
@@ -95,14 +98,71 @@ function pickPhoneField(row) {
   return foundKey ? row[foundKey] : "";
 }
 
+function pickBodyVars(row) {
+  // pega body_var_1..body_var_99 (se existir)
+  const vars = [];
+  for (let i = 1; i <= 99; i++) {
+    const key = `body_var_${i}`;
+    if (!(key in row)) break;
+    vars.push(String(row[key] ?? ""));
+  }
+  return vars;
+}
+
+async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = []) {
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+    throw new Error("Configuração WhatsApp ausente (WHATSAPP_TOKEN/PHONE_NUMBER_ID)");
+  }
+
+  const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+
+  const components = [];
+
+  // BODY params (se tiver vars)
+  if (Array.isArray(bodyVars) && bodyVars.length > 0) {
+    components.push({
+      type: "body",
+      parameters: bodyVars.map((v) => ({ type: "text", text: String(v) }))
+    });
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: languageCode || "pt_BR" },
+      ...(components.length ? { components } : {})
+    }
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    const msg =
+      data?.error?.message ||
+      data?.message ||
+      `Erro WhatsApp (${res.status})`;
+    throw new Error(msg);
+  }
+
+  return data;
+}
+
 /* ============================================================
-   CAMPANHAS (MVP)
+   CAMPANHAS
    ============================================================ */
 
-/**
- * GET /outbound/campaigns
- * Lista campanhas
- */
 router.get("/", (req, res) => {
   try {
     const db = loadDB();
@@ -114,13 +174,9 @@ router.get("/", (req, res) => {
   }
 });
 
-/**
- * POST /outbound/campaigns
- * Cria campanha (PASSO 1 do Wizard)
- */
 router.post("/", (req, res) => {
   try {
-    const { name, numberId, templateName, excludeOptOut } = req.body || {};
+    const { name, numberId, templateName, templateLanguage, excludeOptOut } = req.body || {};
 
     if (!name || !numberId || !templateName) {
       return res.status(400).json({
@@ -138,12 +194,12 @@ router.post("/", (req, res) => {
       name: String(name),
       numberId: String(numberId),
       templateName: String(templateName),
+      templateLanguage: String(templateLanguage || "pt_BR"),
       excludeOptOut: !!excludeOptOut,
       status: "draft", // draft | ready | sending | done | failed
       createdAt: now,
       updatedAt: now,
 
-      // audiência
       audience: {
         fileName: null,
         totalRows: 0,
@@ -151,13 +207,11 @@ router.post("/", (req, res) => {
         invalidRows: 0
       },
 
-      // logs simples
+      // guarda linhas completas (pra termos vars)
+      audienceRows: [],
+
       logs: [
-        {
-          at: now,
-          type: "created",
-          message: "Campanha criada"
-        }
+        { at: now, type: "created", message: "Campanha criada" }
       ]
     };
 
@@ -171,13 +225,6 @@ router.post("/", (req, res) => {
   }
 });
 
-/**
- * POST /outbound/campaigns/:id/audience
- * Upload CSV audiência (PASSO 2 do Wizard)
- *
- * Form-data:
- * - file: CSV
- */
 router.post("/:id/audience", upload.single("file"), (req, res) => {
   try {
     const { id } = req.params;
@@ -186,18 +233,13 @@ router.post("/:id/audience", upload.single("file"), (req, res) => {
     const campaigns = ensureCampaigns(db);
     const campaign = campaigns.find((c) => String(c.id) === String(id));
 
-    if (!campaign) {
-      return res.status(404).json({ error: "Campanha não encontrada." });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ error: "Arquivo CSV não enviado." });
-    }
+    if (!campaign) return res.status(404).json({ error: "Campanha não encontrada." });
+    if (!req.file) return res.status(400).json({ error: "Arquivo CSV não enviado." });
 
     const csvText = req.file.buffer.toString("utf-8");
     const { rows } = parseCsvBasic(csvText);
 
-    const phones = [];
+    const validRows = [];
     let invalid = 0;
 
     for (const row of rows) {
@@ -207,18 +249,16 @@ router.post("/:id/audience", upload.single("file"), (req, res) => {
         invalid++;
         continue;
       }
-      phones.push(phone);
+      validRows.push({ phone, vars: pickBodyVars(row) });
     }
 
     const now = new Date().toISOString();
 
-    // MVP: guardamos os telefones dentro do data.json (ok pra pouca base)
-    // Depois: guardar em arquivo por campanha, ou DB.
-    campaign.audiencePhones = phones;
+    campaign.audienceRows = validRows; // ✅ agora temos vars por linha
     campaign.audience = {
       fileName: req.file.originalname,
       totalRows: rows.length,
-      validRows: phones.length,
+      validRows: validRows.length,
       invalidRows: invalid
     };
     campaign.status = "ready";
@@ -227,7 +267,7 @@ router.post("/:id/audience", upload.single("file"), (req, res) => {
     campaign.logs.push({
       at: now,
       type: "audience_uploaded",
-      message: `Audiência carregada (${phones.length} válidos, ${invalid} inválidos)`
+      message: `Audiência carregada (${validRows.length} válidos, ${invalid} inválidos)`
     });
 
     saveDB(db);
@@ -246,13 +286,6 @@ router.post("/:id/audience", upload.single("file"), (req, res) => {
   }
 });
 
-/**
- * POST /outbound/campaigns/:id/start
- * Inicia a campanha (PASSO 3 do Wizard)
- *
- * MVP: por enquanto apenas muda status e registra log.
- * Depois ligamos na Meta para disparo real / filas / controle de custo.
- */
 router.post("/:id/start", async (req, res) => {
   try {
     const { id } = req.params;
@@ -261,49 +294,69 @@ router.post("/:id/start", async (req, res) => {
     const campaigns = ensureCampaigns(db);
     const campaign = campaigns.find((c) => String(c.id) === String(id));
 
-    if (!campaign) {
-      return res.status(404).json({ error: "Campanha não encontrada." });
-    }
-
+    if (!campaign) return res.status(404).json({ error: "Campanha não encontrada." });
     if (campaign.status !== "ready" && campaign.status !== "draft") {
       return res.status(400).json({
         error: `Campanha não pode iniciar com status "${campaign.status}".`
       });
     }
 
-    const audienceCount = Array.isArray(campaign.audiencePhones)
-      ? campaign.audiencePhones.length
-      : 0;
-
-    if (audienceCount === 0) {
+    const rows = Array.isArray(campaign.audienceRows) ? campaign.audienceRows : [];
+    if (rows.length === 0) {
       return res.status(400).json({
-        error:
-          "Audiência vazia. Faça upload do CSV antes de iniciar a campanha."
+        error: "Audiência vazia. Faça upload do CSV antes de iniciar a campanha."
+      });
+    }
+
+    if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+      return res.status(500).json({
+        error: "Env WhatsApp ausente (WHATSAPP_TOKEN/PHONE_NUMBER_ID)."
       });
     }
 
     const now = new Date().toISOString();
-
-    // MVP: marca como sending e finaliza como done rapidamente
     campaign.status = "sending";
     campaign.updatedAt = now;
     campaign.logs = campaign.logs || [];
     campaign.logs.push({
       at: now,
       type: "start_requested",
-      message: `Início solicitado (${audienceCount} destinatários)`
+      message: `Início solicitado (${rows.length} destinatários)`
     });
 
-    // Aqui, no futuro:
-    // - enfileirar envios
-    // - disparar WhatsApp Cloud API
-    // - salvar métricas (delivered/read/failed)
-    // - custo estimado
-    campaign.status = "done";
+    campaign.results = [];
+    let sent = 0;
+    let failed = 0;
+
+    // ⚠️ MVP: envia sequencial (seguro). Depois fazemos fila/concorrência.
+    for (const r of rows) {
+      const to = r.phone;
+      try {
+        const waResp = await sendWhatsAppTemplate(
+          to,
+          campaign.templateName,
+          campaign.templateLanguage || "pt_BR",
+          Array.isArray(r.vars) ? r.vars : []
+        );
+
+        const waMessageId = waResp?.messages?.[0]?.id || null;
+        campaign.results.push({ phone: to, status: "sent", waMessageId });
+        sent++;
+        logger.info({ to, waMessageId, campaignId: campaign.id }, "📤 Template enviado (campaigns)");
+      } catch (err) {
+        const msg = err?.message || "Falha ao enviar";
+        campaign.results.push({ phone: to, status: "failed", error: msg });
+        failed++;
+        logger.error({ to, err: msg, campaignId: campaign.id }, "❌ Falha envio template (campaigns)");
+      }
+    }
+
+    campaign.status = failed > 0 && sent === 0 ? "failed" : "done";
+    campaign.updatedAt = new Date().toISOString();
     campaign.logs.push({
-      at: new Date().toISOString(),
+      at: campaign.updatedAt,
       type: "finished",
-      message: "MVP: campanha marcada como concluída (envio real será implementado)"
+      message: `Finalizada: ${sent} enviados, ${failed} falhas`
     });
 
     saveDB(db);
@@ -311,7 +364,9 @@ router.post("/:id/start", async (req, res) => {
     return res.json({
       success: true,
       campaignId: campaign.id,
-      status: campaign.status
+      status: campaign.status,
+      sent,
+      failed
     });
   } catch (err) {
     logger.error({ err }, "❌ Erro ao iniciar campanha");

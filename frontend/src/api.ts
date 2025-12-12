@@ -1,7 +1,7 @@
 // frontend/src/api.ts
 // Central de chamadas da API da plataforma GP Labs
 
-import {
+import type {
   Conversation,
   ConversationStatus,
   LoginResponse,
@@ -11,8 +11,13 @@ import {
   Template
 } from "./types";
 
-// Observação: mantemos compatibilidade com duas envs possíveis
-// VITE_API_BASE (padrão da doc) e VITE_API_BASE_URL (fallback).
+/**
+ * Base da API
+ * Compatível com:
+ * - VITE_API_BASE (padrão)
+ * - VITE_API_BASE_URL (fallback)
+ * - localhost (dev)
+ */
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
   import.meta.env.VITE_API_BASE_URL ||
@@ -20,74 +25,76 @@ const API_BASE =
 
 const AUTH_KEY = "gpLabsAuthToken";
 
-// ============================
-// HELPER GENÉRICO DE FETCH
-// ============================
+// ======================================================
+// HELPERS DE AUTENTICAÇÃO
+// ======================================================
+
+function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(AUTH_KEY);
+}
+
+function buildHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getToken();
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(extra || {})
+  };
+}
+
+// ======================================================
+// HELPER FETCH JSON
+// ======================================================
 
 async function request<T = any>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem(AUTH_KEY) : null;
-
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers || {})
-  };
-
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers
+    headers: buildHeaders({
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    })
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    console.error("Erro na API:", res.status, text);
+    console.error("❌ API ERROR:", res.status, path, text);
     throw new Error(
-      `Erro na API (${res.status}) em ${path}: ${text || "sem corpo"}`
+      `Erro na API (${res.status}) ${path}: ${text || "sem corpo"}`
     );
   }
 
+  // tenta JSON; se não for JSON, retorna null
   try {
     return (await res.json()) as T;
   } catch {
-    // se não houver corpo JSON, retornamos null
     return null as T;
   }
 }
 
-// ============================
-// HELPER PARA FORM-DATA (UPLOAD)
-// ============================
+// ======================================================
+// HELPER FETCH FORM-DATA (UPLOAD)
+// ======================================================
 
 async function requestForm<T = any>(
   path: string,
   formData: FormData,
   options: RequestInit = {}
 ): Promise<T> {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem(AUTH_KEY) : null;
-
-  // ⚠️ Não setar Content-Type aqui. O browser define boundary automaticamente.
-  const headers: HeadersInit = {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers || {})
-  };
-
   const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
     ...options,
-    headers,
+    method: options.method || "POST",
+    headers: buildHeaders(options.headers), // NÃO seta Content-Type aqui (boundary)
     body: formData
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    console.error("Erro na API (FORM):", res.status, text);
+    console.error("❌ API FORM ERROR:", res.status, path, text);
     throw new Error(
-      `Erro na API (${res.status}) em ${path}: ${text || "sem corpo"}`
+      `Erro na API (${res.status}) ${path}: ${text || "sem corpo"}`
     );
   }
 
@@ -98,66 +105,52 @@ async function requestForm<T = any>(
   }
 }
 
-// ============================
-// AUTENTICAÇÃO
-// ============================
+// ======================================================
+// AUTH
+// ======================================================
 
 export async function login(
   email: string,
   password: string
 ): Promise<LoginResponse> {
-  return request<LoginResponse>("/login", {
+  const data = await request<LoginResponse>("/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
+
+  if (data?.token && typeof window !== "undefined") {
+    localStorage.setItem(AUTH_KEY, data.token);
+  }
+
+  return data;
 }
 
-// ============================
+export function logout(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(AUTH_KEY);
+}
+
+// ======================================================
 // CONVERSAS
-// ============================
+// ======================================================
 
 export async function fetchConversations(
   status: ConversationStatus | "all" = "open"
 ): Promise<Conversation[]> {
   const qs =
-    status && status !== "all" ? `?status=${encodeURIComponent(status)}` : "";
-  return request<Conversation[]>(`/conversations${qs}`);
+    status && status !== "all"
+      ? `?status=${encodeURIComponent(status)}`
+      : "";
+
+  const data = await request<any>(`/conversations${qs}`);
+  return Array.isArray(data) ? (data as Conversation[]) : [];
 }
 
 export async function fetchMessages(conversationId: number): Promise<Message[]> {
-  return request<Message[]>(`/conversations/${conversationId}/messages`);
+  const data = await request<any>(`/conversations/${conversationId}/messages`);
+  return Array.isArray(data) ? (data as Message[]) : [];
 }
 
-// ============================
-// NÚMEROS (PHONE NUMBERS)
-// ============================
-
-/**
- * Lista de números conectados
- * GET /outbound/numbers
- */
-export async function fetchNumbers(): Promise<PhoneNumberRecord[]> {
-  return request<PhoneNumberRecord[]>("/outbound/numbers");
-}
-
-/**
- * Força sincronização com a Meta:
- * POST /outbound/numbers/sync
- */
-export async function syncNumbers(): Promise<any> {
-  return request<any>("/outbound/numbers/sync", {
-    method: "POST"
-  });
-}
-
-// ============================
-// MENSAGENS – TEXTO E MÍDIA
-// ============================
-
-/**
- * ENVIO DE TEXTO
- * Usa POST /conversations/:id/messages
- */
 export async function sendTextMessage(
   conversationId: number,
   text: string
@@ -168,10 +161,6 @@ export async function sendTextMessage(
   });
 }
 
-/**
- * ENVIO DE MÍDIA
- * POST /conversations/:id/media
- */
 export async function sendMediaMessage(
   conversationId: number,
   payload: {
@@ -186,26 +175,17 @@ export async function sendMediaMessage(
   });
 }
 
-/**
- * ALTERAR STATUS (open/closed) + tags
- */
 export async function updateConversationStatus(
   conversationId: number,
   status: ConversationStatus,
-  extraData?: { tags?: string[] }
+  extra?: { tags?: string[] }
 ): Promise<Conversation> {
   return request<Conversation>(`/conversations/${conversationId}/status`, {
     method: "PATCH",
-    body: JSON.stringify({
-      status,
-      ...(extraData || {})
-    })
+    body: JSON.stringify({ status, ...(extra || {}) })
   });
 }
 
-/**
- * SALVAR NOTAS DO ATENDENTE
- */
 export async function updateConversationNotes(
   conversationId: number,
   notes: string
@@ -216,196 +196,133 @@ export async function updateConversationNotes(
   });
 }
 
-// ============================
-// OUTBOUND – Templates
-// ============================
+// ======================================================
+// OUTBOUND — NÚMEROS
+// ======================================================
 
-/**
- * Lista templates de mensagem aprovados
- * GET /outbound/templates
- */
-export async function fetchTemplates(): Promise<Template[]> {
-  try {
-    const data = await request<any>("/outbound/templates");
-    return Array.isArray(data) ? (data as Template[]) : [];
-  } catch (err) {
-    console.error("fetchTemplates() erro:", err);
-    return [];
-  }
+export async function fetchNumbers(): Promise<PhoneNumberRecord[]> {
+  const data = await request<any>("/outbound/numbers");
+  return Array.isArray(data) ? (data as PhoneNumberRecord[]) : [];
 }
 
-/**
- * Força sincronização de templates com a Meta
- * POST /outbound/templates/sync
- */
-export async function syncTemplates(): Promise<any> {
-  return request<any>("/outbound/templates/sync", {
+export async function syncNumbers(): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>("/outbound/numbers/sync", {
     method: "POST"
   });
 }
 
-/**
- * Cria um novo template na WABA via backend.
- */
+// ======================================================
+// OUTBOUND — TEMPLATES
+// ======================================================
+
+export async function fetchTemplates(): Promise<Template[]> {
+  const data = await request<any>("/outbound/templates");
+  return Array.isArray(data) ? (data as Template[]) : [];
+}
+
+export async function syncTemplates(): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>("/outbound/templates/sync", {
+    method: "POST"
+  });
+}
+
 export async function createTemplate(payload: {
   name: string;
   category: string;
   language: string;
   components: any[];
 }): Promise<Template> {
-  const data = await request<{ success: boolean; template: Template }>(
+  const res = await request<{ success: boolean; template: Template }>(
     "/outbound/templates",
     {
       method: "POST",
       body: JSON.stringify(payload)
     }
   );
-
-  return data.template;
+  return res.template;
 }
 
-// ============================
-// OUTBOUND – ASSETS (Arquivos)
-// ============================
+// ===============================
+// OUTBOUND – ASSETS (ARQUIVOS)
+// ===============================
 
-/**
- * Lista assets
- * GET /outbound/assets
- */
 export async function fetchAssets(): Promise<MediaItem[]> {
-  try {
-    const data = await request<any>("/outbound/assets");
-    return Array.isArray(data) ? (data as MediaItem[]) : [];
-  } catch (err) {
-    console.error("fetchAssets() erro:", err);
-    return [];
-  }
+  const data = await request<any>("/outbound/assets");
+  return Array.isArray(data) ? (data as MediaItem[]) : [];
 }
 
-/**
- * Alias (compatibilidade com páginas antigas)
- */
-export async function fetchMediaLibrary(): Promise<MediaItem[]> {
-  return fetchAssets();
-}
-
-/**
- * Upload de asset
- * POST /outbound/assets/upload (field: file)
- *
- * ⚠️ Mantemos fallback /outbound/assets só por garantia,
- * mas o endpoint “correto” é /upload (igual router que montamos).
- */
 export async function uploadAsset(file: File): Promise<MediaItem> {
-  const fd = new FormData();
-  fd.append("file", file);
-
-  try {
-    return await requestForm<MediaItem>("/outbound/assets/upload", fd);
-  } catch (e) {
-    // fallback (caso você tenha outro router antigo aceitando POST /outbound/assets)
-    return await requestForm<MediaItem>("/outbound/assets", fd);
-  }
+  const form = new FormData();
+  form.append("file", file);
+  return requestForm<MediaItem>("/outbound/assets/upload", form);
 }
 
-/**
- * Delete de asset
- * DELETE /outbound/assets/:id
- */
 export async function deleteAsset(
-  assetId: string | number
+  id: string | number
 ): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(
-    `/outbound/assets/${encodeURIComponent(String(assetId))}`,
+    `/outbound/assets/${encodeURIComponent(String(id))}`,
     { method: "DELETE" }
   );
 }
 
-/**
- * (Opcional) Stub local para criação de item de mídia (mantido)
- * No futuro, deve chamar POST /outbound/assets.
- */
-export async function createMediaItem(payload: {
-  label: string;
-  type: string;
-  url: string;
-}): Promise<MediaItem> {
-  try {
-    console.log("createMediaItem() stub – payload:", payload);
+// ======================================================
+// OUTBOUND — CAMPANHAS
+// ======================================================
 
-    return {
-      id: Date.now(),
-      ...payload,
-      createdAt: new Date().toISOString()
-    } as any;
-  } catch (err) {
-    console.error("createMediaItem() erro:", err);
-    throw err;
-  }
+export type CampaignStatus = "draft" | "ready" | "sending" | "done" | "failed";
+
+export interface CampaignAudience {
+  fileName?: string | null;
+  totalRows?: number;
+  validRows?: number;
+  invalidRows?: number;
 }
 
-// ============================
-// OUTBOUND – Campanhas
-// ============================
-
-export type CampaignStatus =
-  | "draft"
-  | "ready"
-  | "running"
-  | "paused"
-  | "finished"
-  | "failed"
-  | "canceled";
+export interface CampaignResultItem {
+  phone: string;
+  status: "sent" | "failed";
+  waMessageId?: string | null;
+  error?: string;
+}
 
 export interface CampaignRecord {
   id: string;
   name: string;
   numberId: string;
   templateName: string;
+  excludeOptOut?: boolean;
   status: CampaignStatus;
   createdAt: string;
   updatedAt?: string;
-  audience?: {
-    fileName?: string;
-    totalRows?: number;
-    validRows?: number;
-    invalidRows?: number;
-  };
+  audience?: CampaignAudience;
+  results?: CampaignResultItem[];
+  logs?: Array<{ at: string; type: string; message: string }>;
 }
 
-/**
- * Lista campanhas
- * GET /outbound/campaigns
- */
 export async function fetchCampaigns(): Promise<CampaignRecord[]> {
   const data = await request<any>("/outbound/campaigns");
   return Array.isArray(data) ? (data as CampaignRecord[]) : [];
 }
 
-/**
- * Cria campanha (Passo 1 do Wizard)
- * POST /outbound/campaigns
- */
 export async function createCampaign(payload: {
   name: string;
   numberId: string;
   templateName: string;
   excludeOptOut?: boolean;
-}): Promise<{ id: string }> {
-  return request<{ id: string }>("/outbound/campaigns", {
+}): Promise<CampaignRecord> {
+  return request<CampaignRecord>("/outbound/campaigns", {
     method: "POST",
     body: JSON.stringify(payload)
   });
 }
 
-/**
- * Upload da audiência (CSV) (Passo 2 do Wizard)
- * POST /outbound/campaigns/:id/audience
- */
 export async function uploadCampaignAudience(
   campaignId: string,
   file: File
 ): Promise<{
+  success: boolean;
+  campaignId: string;
   fileName: string;
   totalRows: number;
   validRows: number;
@@ -420,23 +337,16 @@ export async function uploadCampaignAudience(
   );
 }
 
-/**
- * Inicia campanha (Passo 3 do Wizard)
- * POST /outbound/campaigns/:id/start
- */
 export async function startCampaign(
   campaignId: string
-): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
+): Promise<{ success: boolean; sent?: number; failed?: number }> {
+  return request<{ success: boolean; sent?: number; failed?: number }>(
     `/outbound/campaigns/${encodeURIComponent(campaignId)}/start`,
     { method: "POST" }
   );
 }
 
-/**
- * Pausar campanha
- * PATCH /outbound/campaigns/:id/pause
- */
+// (ainda não implementados no backend — deixamos, mas tipados como opcionais)
 export async function pauseCampaign(
   campaignId: string
 ): Promise<{ success: boolean }> {
@@ -446,10 +356,6 @@ export async function pauseCampaign(
   );
 }
 
-/**
- * Retomar campanha
- * PATCH /outbound/campaigns/:id/resume
- */
 export async function resumeCampaign(
   campaignId: string
 ): Promise<{ success: boolean }> {
@@ -459,14 +365,130 @@ export async function resumeCampaign(
   );
 }
 
-/**
- * Buscar detalhes da campanha (opcional, útil pro Report)
- * GET /outbound/campaigns/:id
- */
 export async function fetchCampaignById(
   campaignId: string
 ): Promise<CampaignRecord> {
   return request<CampaignRecord>(
     `/outbound/campaigns/${encodeURIComponent(campaignId)}`
   );
+}
+
+// ======================================================
+// OUTBOUND — OPT-OUT
+// ======================================================
+
+export interface OptOutItem {
+  id: string;
+  phone: string;
+  name?: string;
+  source: "manual" | "csv" | "whatsapp" | "flow" | "webhook";
+  reason?: string;
+  createdAt: string;
+}
+
+export async function fetchOptOut(params?: {
+  page?: number;
+  limit?: number;
+  search?: string;
+  source?: string;
+  from?: string;
+  to?: string;
+}) {
+  const qs = new URLSearchParams();
+
+  if (params?.page) qs.set("page", String(params.page));
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.search) qs.set("search", params.search);
+  if (params?.source) qs.set("source", params.source);
+  if (params?.from) qs.set("from", params.from);
+  if (params?.to) qs.set("to", params.to);
+
+  // backend retorna { data, total, page, limit }
+  return request<{
+    data: OptOutItem[];
+    total: number;
+    page: number;
+    limit: number;
+  }>(`/outbound/optout?${qs.toString()}`);
+}
+
+export async function createOptOut(payload: {
+  phone: string;
+  name?: string;
+  reason?: string;
+  source?: "manual";
+}) {
+  return request<{ success: boolean; duplicate?: boolean }>(
+    "/outbound/optout",
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function deleteOptOut(id: string) {
+  return request<{ success: boolean }>(
+    `/outbound/optout/${encodeURIComponent(id)}`,
+    { method: "DELETE" }
+  );
+}
+
+// (seu backend pode não ter isso ainda; mantenho pra não quebrar UI,
+// mas se 404, é porque a rota ainda não foi criada)
+export async function importOptOutCSV(file: File) {
+  const fd = new FormData();
+  fd.append("file", file);
+
+  return requestForm<{
+    total: number;
+    imported: number;
+    skipped: number;
+  }>("/outbound/optout/import/csv", fd);
+}
+
+// backend atual retorna { data, total }
+export async function fetchOptOutWhatsAppContacts() {
+  return request<{
+    data: { phone: string; name?: string }[];
+    total: number;
+  }>("/outbound/optout/whatsapp-contacts");
+}
+
+export async function downloadOptOutExport(params?: {
+  search?: string;
+  source?: string;
+  from?: string;
+  to?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.search) qs.set("search", params.search);
+  if (params?.source) qs.set("source", params.source);
+  if (params?.from) qs.set("from", params.from);
+  if (params?.to) qs.set("to", params.to);
+
+  const res = await fetch(
+    `${API_BASE}/outbound/optout/export?${qs.toString()}`,
+    { headers: buildHeaders() }
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.error("❌ EXPORT ERROR:", res.status, text);
+    throw new Error(`Erro ao exportar opt-out (${res.status})`);
+  }
+
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `optout-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  window.URL.revokeObjectURL(url);
+
+  return { success: true };
 }

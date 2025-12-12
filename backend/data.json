@@ -2489,5 +2489,132 @@
         "category": "UTILITY"
       }
     }
+  ],
+  "outboundCampaigns": [
+    {
+      "id": "cmp_1765557366872_49049",
+      "name": "teste_3",
+      "numberId": "890327707503654",
+      "templateName": "conheca_gp",
+      "excludeOptOut": true,
+      "status": "done",
+      "createdAt": "2025-12-12T16:36:06.872Z",
+      "updatedAt": "2025-12-12T16:36:44.993Z",
+      "audience": {
+        "fileName": "exemplo_audiencia_conheca_gp - exemplo_audiencia_conheca_gp.csv",
+        "totalRows": 2,
+        "validRows": 2,
+        "invalidRows": 0
+      },
+      "logs": [
+        {
+          "at": "2025-12-12T16:36:06.872Z",
+          "type": "created",
+          "message": "Campanha criada"
+        },
+        {
+          "at": "2025-12-12T16:36:14.232Z",
+          "type": "audience_uploaded",
+          "message": "Audiência carregada (2 válidos, 0 inválidos)"
+        },
+        {
+          "at": "2025-12-12T16:36:44.993Z",
+          "type": "start_requested",
+          "message": "Início solicitado (2 destinatários)"
+        },
+        {
+          "at": "2025-12-12T16:36:44.993Z",
+          "type": "finished",
+          "message": "MVP: campanha marcada como concluída (envio real será implementado)"
+        }
+      ],
+      "audiencePhones": [
+        "5564999477939",
+        "5564999989978"
+      ]
+    },
+    {
+      "id": "cmp_1765556776882_35964",
+      "name": "teste_2",
+      "numberId": "890327707503654",
+      "templateName": "conheca_gp",
+      "excludeOptOut": true,
+      "status": "done",
+      "createdAt": "2025-12-12T16:26:16.882Z",
+      "updatedAt": "2025-12-12T16:28:42.691Z",
+      "audience": {
+        "fileName": "exemplo_audiencia_conheca_gp - exemplo_audiencia_conheca_gp.csv",
+        "totalRows": 2,
+        "validRows": 2,
+        "invalidRows": 0
+      },
+      "logs": [
+        {
+          "at": "2025-12-12T16:26:16.882Z",
+          "type": "created",
+          "message": "Campanha criada"
+        },
+        {
+          "at": "2025-12-12T16:28:07.818Z",
+          "type": "audience_uploaded",
+          "message": "Audiência carregada (2 válidos, 0 inválidos)"
+        },
+        {
+          "at": "2025-12-12T16:28:42.691Z",
+          "type": "start_requested",
+          "message": "Início solicitado (2 destinatários)"
+        },
+        {
+          "at": "2025-12-12T16:28:42.695Z",
+          "type": "finished",
+          "message": "MVP: campanha marcada como concluída (envio real será implementado)"
+        }
+      ],
+      "audiencePhones": [
+        "5564999477939",
+        "5564999989978"
+      ]
+    },
+    {
+      "id": "cmp_1765554661498_91252",
+      "name": "testes_1",
+      "numberId": "890327707503654",
+      "templateName": "gp_labs_atendimento",
+      "excludeOptOut": true,
+      "status": "done",
+      "createdAt": "2025-12-12T15:51:01.498Z",
+      "updatedAt": "2025-12-12T15:52:14.063Z",
+      "audience": {
+        "fileName": "exemplo_audiencia (1).csv",
+        "totalRows": 1,
+        "validRows": 1,
+        "invalidRows": 0
+      },
+      "logs": [
+        {
+          "at": "2025-12-12T15:51:01.498Z",
+          "type": "created",
+          "message": "Campanha criada"
+        },
+        {
+          "at": "2025-12-12T15:52:01.045Z",
+          "type": "audience_uploaded",
+          "message": "Audiência carregada (1 válidos, 0 inválidos)"
+        },
+        {
+          "at": "2025-12-12T15:52:14.063Z",
+          "type": "start_requested",
+          "message": "Início solicitado (1 destinatários)"
+        },
+        {
+          "at": "2025-12-12T15:52:14.063Z",
+          "type": "finished",
+          "message": "MVP: campanha marcada como concluída (envio real será implementado)"
+        }
+      ],
+      "audiencePhones": [
+        "5599999999999"
+      ]
+    }
   ]
 }

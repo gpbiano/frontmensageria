@@ -14,18 +14,19 @@ import ChatbotConfigPage from "./pages/chatbot/ChatbotConfigPage.jsx";
 import NumbersPage from "./pages/outbound/NumbersPage.jsx";
 import TemplatesPage from "./pages/outbound/TemplatesPage.jsx";
 
-// ✅ Campanhas
-// ATENÇÃO: seu arquivo legacy ainda é CampaignsPage.jsx, então importamos ele e apelidamos como Legacy
+// Campanhas (legacy + wizard)
 import CampaignsLegacyPage from "./pages/outbound/campaigns/CampaignsPage.jsx";
 import CampaignCreateWizard from "./pages/outbound/campaigns/CampaignCreateWizard.jsx";
-import CampaignsAnalyticsPage from "./pages/outbound/campaigns/CampaignsAnalyticsPage.jsx";
-import CampaignReport from "./pages/outbound/campaigns/CampaignReport.jsx";
 
-// ✅ Arquivos (Assets)
+// Assets
 import AssetsPage from "./pages/outbound/AssetsPage.jsx";
 
-// CSS global da app
+// CSS global
 import "./styles/App.css";
+
+// Opt-Out
+import OptOutPage from "./pages/outbound/OptOutPage.tsx";
+
 
 const AUTH_KEY = "gpLabsAuthToken";
 
@@ -56,7 +57,7 @@ export default function App() {
 }
 
 /* ==========================================================
-   MENU LATERAL (drilldown)
+   MENU LATERAL
 ========================================================== */
 const MENU = [
   {
@@ -80,13 +81,13 @@ const MENU = [
     id: "campanhas",
     label: "Campanhas",
     items: [
-      { id: "reportes", label: "Reportes" },
-      { id: "campanhas", label: "Campanhas" }, // ✅ LISTA (legacy)
-      { id: "nova", label: "Criar campanha" }, // ✅ WIZARD
+      { id: "reportes", label: "Reportes" }, // placeholder por enquanto
+      { id: "campanhas", label: "Campanhas" }, // legacy
+      { id: "nova", label: "Criar campanha" }, // wizard
       { id: "templates", label: "Templates" },
       { id: "numeros", label: "Números" },
       { id: "arquivos", label: "Arquivos" },
-      { id: "optout", label: "Opt-Out" }
+      { id: "optout", label: "Opt-Out" } // vamos implementar agora
     ]
   },
   {
@@ -100,7 +101,6 @@ const MENU = [
    SHELL DA PLATAFORMA
 ========================================================== */
 function PlatformShell({ onLogout }) {
-  // ✅ Default para não cair “em branco” nem entrar direto em campanhas
   const [mainSection, setMainSection] = useState("atendimento");
   const [subSection, setSubSection] = useState("conversas");
   const [openSection, setOpenSection] = useState("atendimento");
@@ -212,7 +212,7 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // Atendimento → Grupos (placeholder por enquanto)
+  // Atendimento → Grupos (placeholder)
   if (main === "atendimento" && sub === "grupos") {
     return (
       <Placeholder
@@ -222,7 +222,7 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // Atendimento → Histórico de Chats
+  // Atendimento → Histórico
   if (main === "atendimento" && sub === "historico") {
     return (
       <div className="page-full">
@@ -249,19 +249,25 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // ===============================
-  // CAMPANHAS
-  // ===============================
+  // Campanhas
   if (main === "campanhas") {
     if (sub === "reportes") {
       return (
-        <div className="page-full">
-          <CampaignsAnalyticsPage />
-        </div>
+        <Placeholder
+          title="Campanhas · Reportes"
+          text="Em breve: dashboard e relatórios de campanhas."
+        />
       );
     }
+// ✅ Opt-Out
+if (sub === "optout") {
+  return (
+    <div className="page-full">
+      <OptOutPage />
+    </div>
+  );
+}
 
-    // ✅ LISTA (legacy)
     if (sub === "campanhas") {
       return (
         <div className="page-full">
@@ -270,11 +276,9 @@ function SectionRenderer({ main, sub, goTo }) {
       );
     }
 
-    // ✅ WIZARD
     if (sub === "nova") {
       return (
         <div className="page-full">
-          {/* o Wizard atual não recebe props; saída controlada pelo menu */}
           <CampaignCreateWizard />
           <div style={{ marginTop: 12 }}>
             <button
@@ -289,20 +293,10 @@ function SectionRenderer({ main, sub, goTo }) {
       );
     }
 
-    // ✅ Arquivos (Assets)
     if (sub === "arquivos") {
       return (
         <div className="page-full">
           <AssetsPage />
-        </div>
-      );
-    }
-
-    // ✅ Report (opcional)
-    if (sub === "report") {
-      return (
-        <div className="page-full">
-          <CampaignReport />
         </div>
       );
     }
@@ -323,10 +317,19 @@ function SectionRenderer({ main, sub, goTo }) {
       );
     }
 
+    if (sub === "optout") {
+      return (
+        <Placeholder
+          title="Campanhas · Opt-Out"
+          text="Vamos montar agora: cadastro manual, import CSV, listar com filtros, deletar e exportar."
+        />
+      );
+    }
+
     return (
       <Placeholder
         title={`Campanhas · ${subSectionLabel(sub)}`}
-        text="Em breve: módulo completo de campanhas com reports, templates, números e opt-out."
+        text="Seção em construção."
       />
     );
   }
@@ -398,3 +401,4 @@ function subSectionLabel(sub) {
       return "";
   }
 }
+

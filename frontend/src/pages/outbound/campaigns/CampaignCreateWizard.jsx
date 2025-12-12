@@ -30,7 +30,9 @@ export default function CampaignCreateWizard({ onExit }) {
   const [numbers, setNumbers] = useState([]);
   const [templates, setTemplates] = useState([]);
 
-  const [loading, setLoading] = useState(true);
+  const [bootLoading, setBootLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+
   const [err, setErr] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -58,13 +60,12 @@ export default function CampaignCreateWizard({ onExit }) {
     let alive = true;
 
     async function boot() {
-      setLoading(true);
+      setBootLoading(true);
       setErr("");
       setSuccess("");
 
       try {
         const [nums, temps] = await Promise.all([fetchNumbers(), fetchTemplates()]);
-
         if (!alive) return;
 
         setNumbers(Array.isArray(nums) ? nums : []);
@@ -74,7 +75,7 @@ export default function CampaignCreateWizard({ onExit }) {
         setErr(e?.message || "Falha ao carregar números/templates.");
       } finally {
         if (!alive) return;
-        setLoading(false);
+        setBootLoading(false);
       }
     }
 
@@ -84,31 +85,30 @@ export default function CampaignCreateWizard({ onExit }) {
     };
   }, []);
 
-  const selectedNumber = useMemo(
-    () => numbers.find((n) => String(n.id) === String(form.numberId)),
-    [numbers, form.numberId]
-  );
+  const selectedNumber = useMemo(() => {
+    // tolera variações de shape (id / phone_number_id / numberId)
+    return (
+      numbers.find((n) => String(n?.id) === String(form.numberId)) ||
+      numbers.find((n) => String(n?.phone_number_id) === String(form.numberId)) ||
+      numbers.find((n) => String(n?.numberId) === String(form.numberId)) ||
+      null
+    );
+  }, [numbers, form.numberId]);
 
-  const selectedTemplate = useMemo(
-    () => templates.find((t) => String(t.name) === String(form.templateName)),
-    [templates, form.templateName]
-  );
+  const selectedTemplate = useMemo(() => {
+    return templates.find((t) => String(t?.name) === String(form.templateName)) || null;
+  }, [templates, form.templateName]);
 
   function goBackStep() {
     setErr("");
-    setSuccess("");
     setStepIndex((s) => Math.max(0, s - 1));
   }
 
   function goNextStep() {
     setErr("");
-    setSuccess("");
     setStepIndex((s) => Math.min(STEPS.length - 1, s + 1));
   }
 
-  // ✅ Botão "Voltar" do topo:
-  // - Se App passar onExit, voltamos pro menu (sem mexer no browser)
-  // - Senão, fallback: history.back()
   function topBack() {
     if (typeof onExit === "function") return onExit();
     if (window.history.length > 1) window.history.back();
@@ -117,19 +117,21 @@ export default function CampaignCreateWizard({ onExit }) {
   async function handleCreateCampaign() {
     setErr("");
     setSuccess("");
+    setActionLoading(true);
 
     try {
-      if (!form.name || !form.numberId || !form.templateName) {
+      if (!form.name?.trim() || !form.numberId || !form.templateName) {
         setErr("Preencha nome, número e template.");
         return;
       }
 
       const res = await createCampaign({
-        name: form.name,
-        numberId: form.numberId,
-        templateName: form.templateName,
-        excludeOptOut: !!form.excludeOptOut
-      });
+  name: form.name.trim(),
+  numberId: String(form.numberId),
+  templateName: String(form.templateName),
+  templateLanguage: selectedTemplate?.language || "pt_BR",
+  excludeOptOut: !!form.excludeOptOut
+});
 
       const id = res?.id;
       if (!id) throw new Error("API não retornou id da campanha.");
@@ -139,12 +141,15 @@ export default function CampaignCreateWizard({ onExit }) {
       goNextStep();
     } catch (e) {
       setErr(e?.message || "Erro ao criar campanha.");
+    } finally {
+      setActionLoading(false);
     }
   }
 
   async function handleUploadAudience(file) {
     setErr("");
     setSuccess("");
+    setActionLoading(true);
 
     try {
       if (!campaignId) throw new Error("Campanha ainda não foi criada.");
@@ -154,21 +159,24 @@ export default function CampaignCreateWizard({ onExit }) {
 
       setAudience({
         fileName: res?.fileName || file?.name || "",
-        totalRows: res?.totalRows ?? 0,
-        validRows: res?.validRows ?? 0,
-        invalidRows: res?.invalidRows ?? 0
+        totalRows: Number(res?.totalRows ?? 0),
+        validRows: Number(res?.validRows ?? 0),
+        invalidRows: Number(res?.invalidRows ?? 0)
       });
 
       setSuccess("Audiência carregada. Agora é só iniciar a campanha.");
       goNextStep();
     } catch (e) {
       setErr(e?.message || "Erro ao enviar audiência.");
+    } finally {
+      setActionLoading(false);
     }
   }
 
   async function handleStartCampaign() {
     setErr("");
     setSuccess("");
+    setActionLoading(true);
 
     try {
       if (!campaignId) throw new Error("Campanha ainda não foi criada.");
@@ -180,6 +188,8 @@ export default function CampaignCreateWizard({ onExit }) {
       // if (typeof onExit === "function") onExit();
     } catch (e) {
       setErr(e?.message || "Erro ao iniciar campanha.");
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -193,7 +203,12 @@ export default function CampaignCreateWizard({ onExit }) {
           </div>
         </div>
 
-        <button className="cmp-btn" onClick={topBack} title="Voltar">
+        <button
+          className="cmp-btn"
+          onClick={topBack}
+          title="Voltar"
+          disabled={actionLoading}
+        >
           Voltar
         </button>
       </div>
@@ -225,7 +240,7 @@ export default function CampaignCreateWizard({ onExit }) {
         </div>
       ) : null}
 
-      {loading ? (
+      {bootLoading ? (
         <div className="cmp-card">Carregando números e templates…</div>
       ) : (
         <>
@@ -236,14 +251,17 @@ export default function CampaignCreateWizard({ onExit }) {
               form={form}
               setForm={setForm}
               onNext={handleCreateCampaign}
+              loading={actionLoading}
             />
           )}
 
           {step === "audience" && (
             <StepUploadAudience
               campaignId={campaignId}
+              template={selectedTemplate}   // ✅ AJUSTE: exemplo do CSV vira dinâmico pelo template
               onBack={goBackStep}
               onNext={handleUploadAudience}
+              loading={actionLoading}
             />
           )}
 
@@ -256,6 +274,7 @@ export default function CampaignCreateWizard({ onExit }) {
               audience={audience}
               onBack={goBackStep}
               onStart={handleStartCampaign}
+              loading={actionLoading}
             />
           )}
         </>
@@ -263,4 +282,3 @@ export default function CampaignCreateWizard({ onExit }) {
     </div>
   );
 }
-

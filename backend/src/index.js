@@ -1,7 +1,7 @@
 // backend/src/index.js
 
 // ===============================
-// IMPORTS
+// IMPORTS (core/libs)
 // ===============================
 import express from "express";
 import cors from "cors";
@@ -13,43 +13,40 @@ import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 
-import logger from "./logger.js";
-
-// Módulo Chatbot (configurações + regras + GenAI)
-import chatbotRouter from "./chatbot/chatbotRouter.js";
-
-// Módulo de atendimento humano (histórico, storage, rotas específicas)
-import humanRouter from "./human/humanRouter.js";
-
-// Módulo Outbound (campanhas, números, templates, assets)
-import outboundRouter from "./outbound/outboundRouter.js";
-import numbersRouter from "./outbound/numbersRouter.js";
-import templatesRouter from "./outbound/templatesRouter.js";
-import assetsRouter from "./outbound/assetsRouter.js";
-
-// ✅ Campanhas (novo router dedicado)
-import campaignsRouter from "./outbound/campaignsRouter.js";
-
-import {
-  getChatbotSettingsForAccount,
-  decideRoute
-} from "./chatbot/rulesEngine.js";
-import { callGenAIBot } from "./chatbot/botEngine.js";
-
+// ===============================
+// ENV – CARREGAR .env.{ENV} ANTES DE IMPORTAR ROUTERS
+// (evita bug: routers lendo process.env antes do dotenv)
+// ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ===============================
-// ENV – CARREGAR .env.{ENV}
-// ===============================
 const ENV = process.env.NODE_ENV || "development";
 const envFile = `.env.${ENV}`;
-
-logger.info({ envFile }, "🧾 Carregando arquivo de env");
 
 dotenv.config({
   path: path.join(process.cwd(), envFile)
 });
+
+// agora que env carregou, podemos importar módulos internos
+const { default: logger } = await import("./logger.js");
+
+// Routers
+const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
+const { default: humanRouter } = await import("./human/humanRouter.js");
+
+const { default: outboundRouter } = await import("./outbound/outboundRouter.js");
+const { default: numbersRouter } = await import("./outbound/numbersRouter.js");
+const { default: templatesRouter } = await import("./outbound/templatesRouter.js");
+const { default: assetsRouter } = await import("./outbound/assetsRouter.js");
+
+const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js");
+const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
+
+// Chatbot engine
+const { getChatbotSettingsForAccount, decideRoute } = await import(
+  "./chatbot/rulesEngine.js"
+);
+const { callGenAIBot } = await import("./chatbot/botEngine.js");
 
 // ===============================
 // VARIÁVEIS DE AMBIENTE
@@ -63,15 +60,15 @@ const JWT_SECRET = process.env.JWT_SECRET || "gplabs-dev-secret";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
-// WABA ID para endpoints de conta (ex: /{WABA_ID}/phone_numbers)
 const WABA_ID = process.env.WABA_ID;
 
+logger.info({ envFile }, "🧾 Env carregado");
 logger.info(
   {
     WHATSAPP_TOKEN_len: WHATSAPP_TOKEN?.length || "N/A",
     PHONE_NUMBER_ID: PHONE_NUMBER_ID || "N/A",
     VERIFY_TOKEN_defined: !!VERIFY_TOKEN,
-    JWT_SECRET_defined: !!JWT_SECRET,
+    JWT_SECRET_defined: !!process.env.JWT_SECRET,
     OPENAI_API_KEY_defined: !!OPENAI_API_KEY,
     OPENAI_MODEL,
     WABA_ID: WABA_ID || "N/A",
@@ -95,7 +92,9 @@ process.on("uncaughtException", (err) => {
 // ===============================
 // PERSISTÊNCIA EM ARQUIVO (data.json)
 // ===============================
-const DB_FILE = path.join(process.cwd(), "data.json");
+const DB_FILE = process.env.DB_FILE
+  ? path.resolve(process.cwd(), process.env.DB_FILE)
+  : path.join(process.cwd(), "data.json");
 
 let state = loadStateFromDisk();
 
@@ -104,13 +103,11 @@ if (!state.users) state.users = [];
 if (!state.conversations) state.conversations = [];
 if (!state.messagesByConversation) state.messagesByConversation = {};
 if (!state.settings) {
-  state.settings = {
-    tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"]
-  };
+  state.settings = { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] };
 }
 if (!state.contacts) state.contacts = [];
 
-// cria contatos a partir das conversas existentes (migração suave)
+// migra contatos a partir das conversas existentes
 ensureContactsFromConversations();
 
 // garante admin padrão
@@ -118,22 +115,16 @@ ensureDefaultAdminUser();
 
 const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24h
 
-// -------------------------------
 function loadStateFromDisk() {
   try {
     if (!fs.existsSync(DB_FILE)) {
-      logger.warn(
-        { DB_FILE },
-        "📁 data.json não encontrado, criando estrutura inicial."
-      );
+      logger.warn({ DB_FILE }, "📁 data.json não encontrado, criando inicial.");
       const initial = {
         users: [],
         contacts: [],
         conversations: [],
         messagesByConversation: {},
-        settings: {
-          tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"]
-        }
+        settings: { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] }
       };
       fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), "utf8");
       return initial;
@@ -150,7 +141,7 @@ function loadStateFromDisk() {
         contactsCount: parsed.contacts?.length || 0,
         DB_FILE
       },
-      "💾 Estado carregado de data.json"
+      "💾 Estado carregado"
     );
 
     return parsed;
@@ -161,9 +152,7 @@ function loadStateFromDisk() {
       contacts: [],
       conversations: [],
       messagesByConversation: {},
-      settings: {
-        tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"]
-      }
+      settings: { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] }
     };
   }
 }
@@ -176,13 +165,11 @@ function saveStateToDisk() {
   }
 }
 
-// migra contatos antigos a partir das conversas
 function ensureContactsFromConversations() {
   if (!state.contacts) state.contacts = [];
   const byPhone = new Map();
   let changed = false;
 
-  // indexa contatos já existentes por telefone
   for (const c of state.contacts) {
     if (c.phone) byPhone.set(c.phone, c);
   }
@@ -217,12 +204,7 @@ function ensureContactsFromConversations() {
   }
 
   if (changed) {
-    logger.info(
-      {
-        contactsCount: state.contacts.length
-      },
-      "🔗 Contatos migrados/associados às conversas"
-    );
+    logger.info({ contactsCount: state.contacts.length }, "🔗 Contatos migrados");
     saveStateToDisk();
   }
 }
@@ -254,11 +236,7 @@ function ensureDefaultAdminUser() {
   }
 
   saveStateToDisk();
-
-  logger.info(
-    { email, password },
-    "👤 Usuário admin padrão definido/atualizado"
-  );
+  logger.info({ email }, "👤 Usuário admin padrão definido/atualizado");
 }
 
 // ===============================
@@ -285,10 +263,8 @@ function findOrCreateContact(phone, name) {
     };
     state.contacts.push(contact);
     saveStateToDisk();
-
     logger.info({ contactId: contact.id, phone }, "🆕 Contato criado");
   } else {
-    // atualiza nome se vier algo melhor
     if (name && (!contact.name || contact.name === contact.phone)) {
       contact.name = name;
       saveStateToDisk();
@@ -350,35 +326,21 @@ function createNewConversation(phone, contactName, channel) {
   saveStateToDisk();
 
   logger.info(
-    {
-      conversationId: id,
-      sessionId,
-      phone,
-      contactName: conv.contactName,
-      channel
-    },
-    "🆕 Nova conversa (sessão) criada"
+    { conversationId: id, sessionId, phone, contactName: conv.contactName, channel },
+    "🆕 Nova conversa criada"
   );
 
   return conv;
 }
 
-/**
- * Localiza a conversa mais recente por telefone.
- * - Se existir uma sessão aberta e com menos de 24h, reutiliza
- * - Se estiver encerrada ou com +24h, cria nova sessão
- */
 function findOrCreateConversationByPhone(phone, contactName, channel) {
-  // garante contato
   const contact = findOrCreateContact(phone, contactName);
-
   const convsForPhone = state.conversations.filter((c) => c.phone === phone);
 
   if (convsForPhone.length === 0) {
     return createNewConversation(phone, contactName, channel);
   }
 
-  // pega a mais recente (por updatedAt, depois id)
   const sorted = [...convsForPhone].sort((a, b) => {
     const aTime = a.updatedAt ? Date.parse(a.updatedAt) : 0;
     const bTime = b.updatedAt ? Date.parse(b.updatedAt) : 0;
@@ -391,19 +353,16 @@ function findOrCreateConversationByPhone(phone, contactName, channel) {
   const lastUpdated = latest.updatedAt ? Date.parse(latest.updatedAt) : now;
   const diff = now - lastUpdated;
 
-  // garante vínculo com contato
   if (contact && latest.contactId !== contact.id) {
     latest.contactId = contact.id;
     latest.contactName = contact.name || latest.contactName;
     saveStateToDisk();
   }
 
-  // se está encerrada → sempre nova sessão
   if (latest.status === "closed") {
     return createNewConversation(phone, contactName, channel);
   }
 
-  // se passou de 24h → auto-close + nova sessão
   if (diff > SESSION_TIMEOUT_MS) {
     latest.status = "closed";
     latest.autoClosed = true;
@@ -411,15 +370,10 @@ function findOrCreateConversationByPhone(phone, contactName, channel) {
     latest.updatedAt = new Date().toISOString();
     saveStateToDisk();
 
-    logger.info(
-      { conversationId: latest.id, phone },
-      "⏱️ Sessão encerrada automaticamente (24h)"
-    );
-
+    logger.info({ conversationId: latest.id, phone }, "⏱️ Sessão auto-closed (24h)");
     return createNewConversation(phone, contactName, channel);
   }
 
-  // reutiliza sessão aberta
   if (!latest.currentMode) latest.currentMode = "bot";
   if (typeof latest.botAttempts !== "number") latest.botAttempts = 0;
   if (!latest.channel) latest.channel = channel || "whatsapp";
@@ -459,10 +413,6 @@ function addMessageToConversation(conversationId, message) {
   return msgWithId;
 }
 
-/**
- * Monta o histórico para enviar ao bot (IA).
- * Converte mensagens para o formato user/assistant.
- */
 function getConversationHistoryForBot(conversationId, maxMessages = 10) {
   const msgs = state.messagesByConversation[conversationId] || [];
   const last = msgs.slice(-maxMessages);
@@ -472,10 +422,7 @@ function getConversationHistoryForBot(conversationId, maxMessages = 10) {
     const content =
       m.type === "text" ? m.text || "" : m.caption || m.text || `[${m.type}]`;
 
-    return {
-      role,
-      content
-    };
+    return { role, content };
   });
 }
 
@@ -486,14 +433,12 @@ async function sendWhatsAppText(to, text) {
   if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
     logger.error(
       { hasToken: !!WHATSAPP_TOKEN, hasPhoneId: !!PHONE_NUMBER_ID },
-      "❌ WHATSAPP_TOKEN ou PHONE_NUMBER_ID não definidos."
+      "❌ WhatsApp env ausente"
     );
     throw new Error("Configuração WhatsApp ausente");
   }
 
   const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
-
-  logger.info({ to, PHONE_NUMBER_ID, url }, "➡️ Enviando mensagem de texto");
 
   const body = {
     messaging_product: "whatsapp",
@@ -514,14 +459,11 @@ async function sendWhatsAppText(to, text) {
   const data = await res.json();
 
   if (!res.ok) {
-    logger.error(
-      { status: res.status, data },
-      "❌ Erro ao enviar mensagem de texto WhatsApp"
-    );
+    logger.error({ status: res.status, data }, "❌ Erro ao enviar texto WhatsApp");
     throw new Error("Erro ao enviar mensagem de texto");
   }
 
-  logger.info({ to, data }, "📤 Mensagem de texto enviada");
+  logger.info({ to, waMessageId: data?.messages?.[0]?.id }, "📤 Texto enviado");
   return data;
 }
 
@@ -529,17 +471,12 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
   if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
     logger.error(
       { hasToken: !!WHATSAPP_TOKEN, hasPhoneId: !!PHONE_NUMBER_ID },
-      "❌ WHATSAPP_TOKEN ou PHONE_NUMBER_ID não definidos."
+      "❌ WhatsApp env ausente"
     );
     throw new Error("Configuração WhatsApp ausente");
   }
 
   const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
-
-  logger.info(
-    { to, type, mediaUrl, PHONE_NUMBER_ID, url },
-    "➡️ Enviando mídia WhatsApp"
-  );
 
   const mediaObject = { link: mediaUrl };
   const payload = {
@@ -549,10 +486,7 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
     [type]: mediaObject
   };
 
-  if (
-    caption &&
-    (type === "image" || type === "video" || type === "document")
-  ) {
+  if (caption && (type === "image" || type === "video" || type === "document")) {
     mediaObject.caption = caption;
   }
 
@@ -568,24 +502,19 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
   const data = await res.json();
 
   if (!res.ok) {
-    logger.error(
-      { status: res.status, data },
-      "❌ Erro ao enviar mídia WhatsApp"
-    );
+    logger.error({ status: res.status, data }, "❌ Erro ao enviar mídia WhatsApp");
     throw new Error("Erro ao enviar mídia");
   }
 
-  logger.info({ to, type, data }, "📤 Mídia enviada para WhatsApp");
+  logger.info({ to, type, waMessageId: data?.messages?.[0]?.id }, "📤 Mídia enviada");
   return data;
 }
 
 // ===============================
-// HELPERS – WHATSAPP CLOUD API (ENTRADA / DOWNLOAD DE MÍDIA)
+// HELPERS – WHATSAPP (DOWNLOAD MÍDIA)
 // ===============================
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 function getExtensionFromMime(mime = "") {
   if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
@@ -607,52 +536,32 @@ async function downloadWhatsappMedia(mediaObj, logicalType) {
 
   const mediaId = mediaObj.id;
   const mimeType = mediaObj.mime_type || "application/octet-stream";
-
   if (!mediaId) return null;
 
   try {
     let fileUrl = mediaObj.url;
 
     if (!fileUrl) {
-      const metaRes = await fetch(
-        `https://graph.facebook.com/v22.0/${mediaId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${WHATSAPP_TOKEN}`
-          }
-        }
-      );
-
+      const metaRes = await fetch(`https://graph.facebook.com/v22.0/${mediaId}`, {
+        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+      });
       const meta = await metaRes.json();
-
       if (!metaRes.ok) {
-        logger.error(
-          { status: metaRes.status, meta },
-          "❌ Erro ao buscar metadata da mídia"
-        );
+        logger.error({ status: metaRes.status, meta }, "❌ Erro metadata mídia");
         return null;
       }
-
       fileUrl = meta.url;
     }
 
-    if (!fileUrl) {
-      logger.warn({ mediaId }, "⚠️ Não foi possível obter URL da mídia");
-      return null;
-    }
+    if (!fileUrl) return null;
 
     const mediaRes = await fetch(fileUrl, {
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`
-      }
+      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
     });
 
     if (!mediaRes.ok) {
       const text = await mediaRes.text();
-      logger.error(
-        { status: mediaRes.status, text },
-        "❌ Erro ao fazer download da mídia"
-      );
+      logger.error({ status: mediaRes.status, text }, "❌ Erro download mídia");
       return null;
     }
 
@@ -666,12 +575,7 @@ async function downloadWhatsappMedia(mediaObj, logicalType) {
     fs.writeFileSync(filePath, buffer);
 
     const publicUrl = `/uploads/${filename}`;
-
-    logger.info(
-      { mediaId, mimeType, publicUrl },
-      "💾 Mídia baixada e salva localmente"
-    );
-
+    logger.info({ mediaId, mimeType, publicUrl }, "💾 Mídia salva");
     return publicUrl;
   } catch (err) {
     logger.error({ err }, "❌ Erro inesperado ao baixar mídia");
@@ -683,75 +587,79 @@ async function downloadWhatsappMedia(mediaObj, logicalType) {
 // EXPRESS APP
 // ===============================
 const app = express();
-
-// Corrige problema de 304 Not Modified
 app.set("etag", false);
 
-// Middleware de log HTTP
+// HTTP Logs organizados
 app.use(
   pinoHttp({
     logger,
-    customSuccessMessage(req, res) {
-      return `${req.method} ${req.url} -> ${res.statusCode}`;
+    quietReqLogger: true,
+    autoLogging: {
+      ignore: (req) =>
+        req.method === "OPTIONS" ||
+        req.url.startsWith("/health") ||
+        req.url.startsWith("/uploads/")
     },
-    customErrorMessage(req, res, err) {
-      return `❌ ERRO ${req.method} ${req.url} -> ${res.statusCode}`;
+    genReqId: (req) =>
+      req.headers["x-request-id"]?.toString() ||
+      `req_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    customLogLevel(req, res, err) {
+      if (err || res.statusCode >= 500) return "error";
+      if (res.statusCode >= 400) return "warn";
+      return "info";
     },
     serializers: {
       req(req) {
-        return {
-          method: req.method,
-          url: req.url
-        };
+        return { id: req.id, method: req.method, url: req.url };
       },
       res(res) {
-        return {
-          statusCode: res.statusCode
-        };
+        return { statusCode: res.statusCode };
       }
     },
-    quietReqLogger: true
+    customSuccessMessage(req, res) {
+      const ms = res.responseTime ? `${res.responseTime}ms` : "";
+      return `✅ ${req.method} ${req.url} -> ${res.statusCode} ${ms}`.trim();
+    },
+    customErrorMessage(req, res, err) {
+      const ms = res.responseTime ? `${res.responseTime}ms` : "";
+      return `❌ ${req.method} ${req.url} -> ${res.statusCode} ${ms} :: ${
+        err?.message || "error"
+      }`.trim();
+    }
   })
 );
 
 app.use(cors());
 app.use(express.json());
-
-// Servir uploads locais
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-/**
- * ROTAS PRINCIPAIS
- * ----------------
- * /api/chatbot/...            → Configuração do chatbot (aba Chatbot)
- * /api/human/...              → Rotas específicas do atendimento humano
- * /outbound/numbers/...       → Números WABA (sync com Meta)
- * /outbound/templates/...     → Templates (listar, sync)
- * /outbound/assets/...        → Arquivos de mídia
- * /outbound/campaigns/...     → ✅ Campanhas (wizard 3 passos)
- * /outbound/...               → Rotas gerais outbound
- */
-
-// Rotas de configuração do chatbot (aba Chatbot)
-app.use("/api", chatbotRouter); // gera /api/chatbot/...
-
-// Rotas específicas para atendimento humano (seu módulo human/)
+// ============================
+// ROTAS PRINCIPAIS
+// =============================
+app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
 
-// Rotas de NÚMEROS (sync com Meta)
-app.use("/outbound/numbers", numbersRouter); // /outbound/numbers e /outbound/numbers/sync
+// ===============================
+// ✅ OUTBOUND – ORDEM CORRETA + SEM DUPLICAÇÃO
+// ===============================
+logger.info("🧩 Montando rotas Outbound (assets/numbers/templates/campaigns/optout/outbound)");
 
-// Rotas de TEMPLATES (listar, sync com Meta)
-app.use("/outbound/templates", templatesRouter); // /outbound/templates e /outbound/templates/sync
+// ✅ ASSETS PRIMEIRO (antes de qualquer "/outbound" genérico)
+app.use("/outbound/assets", assetsRouter);
 
-// Rotas de ARQUIVOS (biblioteca de mídia / assets)
-app.use("/outbound/assets", assetsRouter); // /outbound/assets...
+// Rotas específicas
+app.use("/outbound/numbers", numbersRouter);
+app.use("/outbound/templates", templatesRouter);
+app.use("/outbound/campaigns", campaignsRouter);
 
-// ✅ Rotas de CAMPANHAS (novo módulo)
-app.use("/outbound/campaigns", campaignsRouter); // /outbound/campaigns...
+// ✅ Opt-Out (compatibilidade dupla para evitar 404)
+// - Se o optoutRouter tiver rotas começando com "/whatsapp-contacts", funciona via /outbound/optout/...
+app.use("/outbound/optout", optoutRouter);
+// - Se o optoutRouter tiver rotas começando com "/optout/whatsapp-contacts", funciona via /outbound/optout/...
+app.use("/outbound", optoutRouter);
 
-// Rotas gerais de outbound (seu router agregador)
-app.use("/outbound", outboundRouter); // /outbound/... (outros endpoints)
+// ✅ Agregador outbound (deixa por último)
+app.use("/outbound", outboundRouter);
 
 // ===============================
 // HEALTH / STATUS
@@ -768,28 +676,20 @@ app.get("/", (req, res) => {
 
 app.get("/health", (req, res) => {
   const memory = process.memoryUsage();
-
-  const payload = {
+  res.json({
     ok: true,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     conversationsCount: state.conversations.length,
     contactsCount: (state.contacts || []).length,
-    memory: {
-      rss: memory.rss,
-      heapUsed: memory.heapUsed
-    },
+    memory: { rss: memory.rss, heapUsed: memory.heapUsed },
     wabaId: WABA_ID || null,
     phoneNumberId: PHONE_NUMBER_ID || null
-  };
-
-  logger.debug(payload, "🔎 Health check");
-
-  res.json(payload);
+  });
 });
 
 // ===============================
-// LOGIN REAL (DEV) – /login
+// LOGIN (DEV) – /login
 // ===============================
 app.post("/login", (req, res) => {
   const { email, password } = req.body || {};
@@ -805,17 +705,9 @@ app.post("/login", (req, res) => {
     (u) => u.email && u.email.toLowerCase() === email.toLowerCase()
   );
 
-  if (!user) {
-    logger.warn({ email }, "Tentativa de login com usuário inexistente");
-    return res.status(401).json({ error: "Usuário não encontrado." });
-  }
-
-  const passwordMatch = password === user.password;
-
-  if (!passwordMatch) {
-    logger.warn({ email }, "Tentativa de login com senha incorreta");
+  if (!user) return res.status(401).json({ error: "Usuário não encontrado." });
+  if (password !== user.password)
     return res.status(401).json({ error: "Senha incorreta." });
-  }
 
   const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, {
     expiresIn: "8h"
@@ -825,27 +717,17 @@ app.post("/login", (req, res) => {
 
   return res.json({
     token,
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email
-    }
+    user: { id: user.id, name: user.name, email: user.email }
   });
 });
 
 // ===============================
-// ROTAS DE CONTATOS (para futuro dash)
+// CONTATOS / CONVERSAS
 // ===============================
-app.get("/contacts", (req, res) => {
-  res.json(state.contacts || []);
-});
+app.get("/contacts", (req, res) => res.json(state.contacts || []));
 
-// ===============================
-// ROTAS DE CONVERSAS
-// ===============================
 app.get("/conversations", (req, res) => {
   const { status } = req.query;
-
   let conversations = [...state.conversations];
 
   if (status && status !== "all") {
@@ -853,14 +735,12 @@ app.get("/conversations", (req, res) => {
   }
 
   conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-
   res.json(conversations);
 });
 
 app.get("/conversations/:id/messages", (req, res) => {
   const { id } = req.params;
-  const msgs = state.messagesByConversation[id] || [];
-  res.json(msgs);
+  res.json(state.messagesByConversation[id] || []);
 });
 
 app.post("/conversations/:id/messages", async (req, res, next) => {
@@ -868,25 +748,20 @@ app.post("/conversations/:id/messages", async (req, res, next) => {
   const { text } = req.body || {};
 
   const conversation = findConversationById(id);
-  if (!conversation) {
+  if (!conversation)
     return res.status(404).json({ error: "Conversa não encontrada." });
-  }
-
-  if (!text || !text.trim()) {
+  if (!text || !text.trim())
     return res.status(400).json({ error: "Texto da mensagem é obrigatório." });
-  }
 
   try {
     const waResponse = await sendWhatsAppText(conversation.phone, text);
     const waMessageId = waResponse?.messages?.[0]?.id || null;
 
-    const timestamp = new Date().toISOString();
-
     const message = addMessageToConversation(conversation.id, {
       direction: "out",
       type: "text",
       text,
-      timestamp,
+      timestamp: new Date().toISOString(),
       waMessageId
     });
 
@@ -902,15 +777,10 @@ app.post("/conversations/:id/media", async (req, res, next) => {
   const { type, mediaUrl, caption } = req.body || {};
 
   const conversation = findConversationById(id);
-  if (!conversation) {
+  if (!conversation)
     return res.status(404).json({ error: "Conversa não encontrada." });
-  }
-
-  if (!type || !mediaUrl) {
-    return res
-      .status(400)
-      .json({ error: "type e mediaUrl são obrigatórios." });
-  }
+  if (!type || !mediaUrl)
+    return res.status(400).json({ error: "type e mediaUrl são obrigatórios." });
 
   try {
     const waResponse = await sendWhatsAppMedia(
@@ -921,14 +791,12 @@ app.post("/conversations/:id/media", async (req, res, next) => {
     );
     const waMessageId = waResponse?.messages?.[0]?.id || null;
 
-    const timestamp = new Date().toISOString();
-
     const message = addMessageToConversation(conversation.id, {
       direction: "out",
       type,
       text: caption || "",
       mediaUrl,
-      timestamp,
+      timestamp: new Date().toISOString(),
       waMessageId
     });
 
@@ -939,15 +807,13 @@ app.post("/conversations/:id/media", async (req, res, next) => {
   }
 });
 
-// alterar status + tags
 app.patch("/conversations/:id/status", (req, res) => {
   const { id } = req.params;
   const { status, tags } = req.body || {};
 
   const conversation = findConversationById(id);
-  if (!conversation) {
+  if (!conversation)
     return res.status(404).json({ error: "Conversa não encontrada." });
-  }
 
   if (!["open", "closed"].includes(status)) {
     return res
@@ -957,25 +823,19 @@ app.patch("/conversations/:id/status", (req, res) => {
 
   conversation.status = status;
   conversation.updatedAt = new Date().toISOString();
-
-  if (Array.isArray(tags)) {
-    conversation.tags = tags;
-  }
+  if (Array.isArray(tags)) conversation.tags = tags;
 
   saveStateToDisk();
-
   res.json(conversation);
 });
 
-// salvar observações do atendente
 app.patch("/conversations/:id/notes", (req, res) => {
   const { id } = req.params;
   const { notes } = req.body || {};
 
   const conversation = findConversationById(id);
-  if (!conversation) {
+  if (!conversation)
     return res.status(404).json({ error: "Conversa não encontrada." });
-  }
 
   conversation.notes = notes || "";
   conversation.updatedAt = new Date().toISOString();
@@ -995,23 +855,22 @@ app.get("/webhook/whatsapp", (req, res) => {
   const received = (token || "").trim();
   const expected = (VERIFY_TOKEN || "").trim();
 
-  logger.info({ mode, received, expected }, "🌐 GET /webhook/whatsapp");
+  logger.info({ mode }, "🌐 GET /webhook/whatsapp");
 
   if (mode === "subscribe" && received === expected) {
-    logger.info("✅ Webhook Verificado com sucesso.");
+    logger.info("✅ Webhook verificado");
     return res.status(200).send(challenge);
   }
 
-  logger.warn("⚠️ Webhook não autorizado.");
+  logger.warn("⚠️ Webhook não autorizado");
   return res.sendStatus(403);
 });
 
 app.post("/webhook/whatsapp", async (req, res, next) => {
-  const body = req.body;
-  logger.info({ body }, "📩 Webhook recebido");
-
   try {
-    if (body.object !== "whatsapp_business_account") {
+    const body = req.body;
+
+    if (body?.object !== "whatsapp_business_account") {
       return res.sendStatus(200);
     }
 
@@ -1020,6 +879,16 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
     const value = changes?.value;
 
     const messages = value?.messages || [];
+    const statuses = value?.statuses || [];
+
+    logger.info(
+      {
+        phone_number_id: value?.metadata?.phone_number_id,
+        messagesCount: messages.length,
+        statusesCount: statuses.length
+      },
+      "📩 Webhook recebido"
+    );
 
     for (const msg of messages) {
       const waId = msg.from;
@@ -1027,7 +896,6 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
       const channel = "whatsapp";
 
       const conv = findOrCreateConversationByPhone(waId, profileName, channel);
-
       const timestamp = new Date(Number(msg.timestamp) * 1000).toISOString();
 
       let type = msg.type;
@@ -1035,7 +903,6 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
       let mediaUrl = null;
       let location = null;
 
-      // TIPOS DE MENSAGEM
       if (type === "text") {
         text = msg.text?.body || "";
       } else if (type === "image") {
@@ -1060,7 +927,6 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
             name: loc.name || null,
             address: loc.address || null
           };
-
           text =
             loc.name ||
             loc.address ||
@@ -1068,16 +934,12 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         }
       }
 
-      // PREVENÇÃO DE DUPLICADOS
       const existingMsgs = state.messagesByConversation[conv.id] || [];
-      const alreadyExists = existingMsgs.some((m) => m.waMessageId === msg.id);
-
-      if (alreadyExists) {
-        logger.warn({ waMessageId: msg.id }, "⚠️ Mensagem já processada, ignorando");
+      if (existingMsgs.some((m) => m.waMessageId === msg.id)) {
+        logger.warn({ waMessageId: msg.id }, "⚠️ Mensagem duplicada, ignorando");
         continue;
       }
 
-      // SALVAR MENSAGEM
       addMessageToConversation(conv.id, {
         direction: "in",
         type,
@@ -1088,12 +950,6 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         waMessageId: msg.id
       });
 
-      logger.info(
-        { waId, conversationId: conv.id, type },
-        "💬 Nova mensagem recebida e salva"
-      );
-
-      // DECISÃO BOT / HUMANO
       const accountId = "default";
       const accountSettings = getChatbotSettingsForAccount(accountId);
 
@@ -1103,11 +959,8 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
         messageText: text
       });
 
-      logger.info({ conversationId: conv.id, decision }, "🤖 Decisão de roteamento");
-
       if (decision.target === "bot" && type === "text") {
         const history = getConversationHistoryForBot(conv.id, 10);
-
         const botResult = await callGenAIBot({
           accountSettings,
           conversation: conv,
@@ -1121,13 +974,11 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
           const waResp = await sendWhatsAppText(conv.phone, botReply);
           const waBotMessageId = waResp?.messages?.[0]?.id || null;
 
-          const outTimestamp = new Date().toISOString();
-
           addMessageToConversation(conv.id, {
             direction: "out",
             type: "text",
             text: botReply,
-            timestamp: outTimestamp,
+            timestamp: new Date().toISOString(),
             fromBot: true,
             waMessageId: waBotMessageId
           });
@@ -1135,27 +986,13 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
           conv.botAttempts = (conv.botAttempts || 0) + 1;
           conv.currentMode = "bot";
           saveStateToDisk();
-
-          logger.info(
-            { conversationId: conv.id, waBotMessageId },
-            "🤖 Resposta do bot enviada"
-          );
         } catch (err) {
-          logger.error(
-            { err },
-            "❌ Erro ao enviar mensagem de texto WhatsApp (bot)"
-          );
+          logger.error({ err }, "❌ Erro ao enviar texto do bot");
         }
       } else {
         conv.currentMode = "human";
         saveStateToDisk();
-        logger.info({ conversationId: conv.id }, "🧑‍💻 Conversa roteada para humano");
       }
-    }
-
-    const statuses = value?.statuses;
-    if (statuses && statuses.length > 0) {
-      logger.info({ statuses }, "📊 Status de mensagens recebido");
     }
 
     res.sendStatus(200);
@@ -1170,19 +1007,10 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
 // ===============================
 app.use((err, req, res, next) => {
   logger.error(
-    {
-      err,
-      path: req.path,
-      method: req.method,
-      body: req.body
-    },
+    { err, path: req.path, method: req.method },
     "💥 Erro não tratado"
   );
-
-  if (res.headersSent) {
-    return next(err);
-  }
-
+  if (res.headersSent) return next(err);
   res.status(500).json({ error: "Internal server error" });
 });
 
@@ -1191,4 +1019,5 @@ app.use((err, req, res, next) => {
 // ===============================
 app.listen(PORT, () => {
   logger.info({ port: PORT, WABA_ID, PHONE_NUMBER_ID }, "🚀 API rodando");
+  logger.info("✅ Rotas esperadas: /outbound/assets, /outbound/assets/upload, /uploads/*");
 });

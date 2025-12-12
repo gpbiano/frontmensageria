@@ -7,46 +7,97 @@
 
 export type ConversationStatus = "open" | "closed";
 
+export type ConversationMode = "bot" | "human";
+
 export interface Conversation {
   id: number;
+  phone?: string;
+  channel?: string;
+
   status: ConversationStatus;
-  currentMode?: "bot" | "human";
+  currentMode?: ConversationMode;
   botAttempts?: number;
+
+  contactId?: number | null;
+  contactName?: string;
+
+  lastMessage?: string;
+  tags?: string[];
+  notes?: string;
+
+  createdAt?: string;
   updatedAt?: string;
+
+  autoClosed?: boolean;
+  closedReason?: string;
 
   [key: string]: any;
 }
 
 /* ============================================================
-   MENSAGENS (TEXT, MEDIA, LOCATION, CONTACT, FLOW, ETC.)
+   MENSAGENS
 ============================================================ */
+
+export type MessageDirection = "in" | "out";
+export type MessageRole = "agent" | "customer" | "bot";
+
+// (opcional) tipos mais comuns do WhatsApp
+export type MessageType =
+  | "text"
+  | "image"
+  | "video"
+  | "audio"
+  | "document"
+  | "sticker"
+  | "location"
+  | "contacts"
+  | string;
+
+export interface MessageLocation {
+  latitude: number;
+  longitude: number;
+  name?: string | null;
+  address?: string | null;
+}
+
+export interface MessageContactPhone {
+  phone?: string;
+  wa_id?: string;
+  type?: string;
+}
+
+export interface MessageContact {
+  name?: string;
+  org?: string;
+  phones?: MessageContactPhone[];
+}
 
 export interface Message {
   id?: string | number;
+
+  // id da mensagem na Meta (Cloud API)
   waMessageId?: string;
-  from?: "agent" | "customer" | "bot";
+
+  // seu backend usa direction
+  direction?: MessageDirection;
+
+  // compat: algumas telas antigas usavam from
+  from?: MessageRole;
+
+  type?: MessageType;
 
   text?: string;
-  type?: string; 
+  caption?: string;
+
   mediaUrl?: string;
+
   timestamp?: string | number;
 
-  location?: {
-    latitude: number;
-    longitude: number;
-    name?: string;
-    address?: string;
-  };
+  fromBot?: boolean;
 
-  contact?: {
-    name?: string;
-    org?: string;
-    phones?: {
-      phone?: string;
-      wa_id?: string;
-      type?: string;
-    }[];
-  };
+  location?: MessageLocation;
+
+  contact?: MessageContact;
 
   [key: string]: any;
 }
@@ -60,13 +111,18 @@ export interface PhoneNumberRecord {
 
   name: string;
   displayNumber: string;
+
+  // opcional: número "cru"
   number?: string;
+
   channel?: string;
 
   quality?: string;
   limitPerDay?: number | null;
+
   status?: string;
   connected?: boolean;
+
   updatedAt?: string;
 
   raw?: any;
@@ -92,11 +148,15 @@ export interface LoginResponse {
    TEMPLATE COMPONENTS (MODELO DA META)
 ============================================================ */
 
-// -----------------------------
-// Botões de template
-// -----------------------------
+export type TemplateButtonType =
+  | "QUICK_REPLY"
+  | "URL"
+  | "PHONE_NUMBER"
+  | "FLOW"
+  | string;
+
 export interface TemplateComponentButton {
-  type?: "QUICK_REPLY" | "URL" | "PHONE_NUMBER" | "FLOW" | string;
+  type?: TemplateButtonType;
   text?: string;
 
   // URL buttons
@@ -108,19 +168,26 @@ export interface TemplateComponentButton {
 
   // Flow buttons
   flow_id?: string;
-  button_type?: string; // variações da Meta
+  button_type?: string;
 
   [key: string]: any;
 }
 
-// -----------------------------
-// Componentes (HEADER, BODY, FOOTER, BUTTONS)
-// -----------------------------
+export type TemplateComponentType =
+  | "HEADER"
+  | "BODY"
+  | "FOOTER"
+  | "BUTTONS"
+  | "FLOW"
+  | string;
+
+export type TemplateHeaderFormat = "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
+
 export interface TemplateComponent {
-  type: "HEADER" | "BODY" | "FOOTER" | "BUTTONS" | "FLOW" | string;
+  type: TemplateComponentType;
 
   // HEADER content
-  format?: "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
+  format?: TemplateHeaderFormat;
   text?: string;
 
   // Exemplos obrigatórios quando há variáveis
@@ -145,31 +212,37 @@ export interface TemplateComponent {
    TEMPLATE COMPLETO (META)
 ============================================================ */
 
+export type TemplateCategory = "MARKETING" | "UTILITY" | "AUTHENTICATION" | string;
+
+export type TemplateStatus =
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "PAUSED"
+  | string;
+
 export interface Template {
   id: string | number;
   name: string;
 
-  category?: "MARKETING" | "UTILITY" | "AUTHENTICATION" | string;
+  category?: TemplateCategory;
   language?: string; // pt_BR, en_US, etc.
 
-  status?: "PENDING" | "APPROVED" | "REJECTED" | "PAUSED" | string;
+  status?: TemplateStatus;
   rejectedReason?: string | null;
 
-  quality?: string | null; // HIGH, MEDIUM, LOW, GREEN, YELLOW, RED...
+  quality?: string | null;
 
   hasFlow?: boolean;
 
-  // Conteúdo principal
   components?: TemplateComponent[];
 
-  // Última versão retornada pela Meta
   latestVersion?: any;
 
-  // Metadata local
   updatedAt?: string;
+  createdAt?: string;
   createdFromPlatform?: boolean;
 
-  // Payload original
   raw?: any;
 
   [key: string]: any;
@@ -179,14 +252,48 @@ export interface Template {
    MEDIA LIBRARY
 ============================================================ */
 
+export type MediaType = "image" | "video" | "document" | string;
+
 export interface MediaItem {
   id: string | number;
   label: string;
-  type: "image" | "video" | "document" | string;
+  type: MediaType;
   url: string;
+
   createdAt?: string;
 
   raw?: any;
+
+  [key: string]: any;
+}
+/* ============================================================
+   OUTBOUND – OPT-OUT (Blacklist)
+============================================================ */
+
+export type OptOutSource = "manual" | "csv" | "whatsapp" | "flow" | "webhook";
+
+export interface OptOutItem {
+  id: string;
+  phone: string; // normalizado (ex: 55DDDNUMERO)
+  name?: string | null;
+  source: OptOutSource;
+  sourceRef?: string | null;
+  reason?: string | null;
+  createdAt: string;
+
+  [key: string]: any;
+}
+
+export interface OptOutListResponse {
+  page: number;
+  limit: number;
+  total: number;
+  items: OptOutItem[];
+}
+
+export interface WhatsAppContactLite {
+  phone: string; // normalizado
+  name?: string | null;
 
   [key: string]: any;
 }

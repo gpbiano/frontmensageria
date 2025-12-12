@@ -16,16 +16,16 @@ function fmtDate(iso) {
 function badge(status) {
   const s = status || "draft";
   const map = {
-    draft: { label: "Rascunho" },
-    ready: { label: "Pronta" },
-    sending: { label: "Enviando" },
-    done: { label: "Concluída" },
-    failed: { label: "Falhou" }
+    draft: { label: "Rascunho", cls: "cmp-badge-draft" },
+    ready: { label: "Pronta", cls: "cmp-badge-ready" },
+    sending: { label: "Enviando", cls: "cmp-badge-sending" },
+    done: { label: "Concluída", cls: "cmp-badge-done" },
+    failed: { label: "Falhou", cls: "cmp-badge-failed" }
   };
-  return map[s]?.label || s;
+  return map[s] || { label: s, cls: "" };
 }
 
-export default function CampaignsPage({ onNew }) {
+export default function CampaignsPage({ onNew, onOpenReport }) {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState([]);
   const [err, setErr] = useState("");
@@ -94,24 +94,39 @@ export default function CampaignsPage({ onNew }) {
                 </tr>
               </thead>
               <tbody>
-                {items.map((c) => (
-                  <tr key={c.id}>
-                    <td style={{ fontWeight: 700 }}>{c.name}</td>
-                    <td>{badge(c.status)}</td>
-                    <td>{c.templateName}</td>
-                    <td>
-                      {c?.audience?.validRows ?? 0}/{c?.audience?.totalRows ?? 0}
-                    </td>
-                    <td>{fmtDate(c.createdAt)}</td>
-                    <td>{fmtDate(c.updatedAt)}</td>
-                  </tr>
-                ))}
+                {items.map((c) => {
+                  const b = badge(c.status);
+                  return (
+                    <tr
+                      key={c.id}
+                      style={{ cursor: onOpenReport ? "pointer" : "default" }}
+                      onClick={() =>
+                        typeof onOpenReport === "function" &&
+                        onOpenReport(c.id)
+                      }
+                    >
+                      <td style={{ fontWeight: 700 }}>{c.name}</td>
+                      <td>
+                        <span className={`cmp-badge ${b.cls}`}>
+                          {b.label}
+                        </span>
+                      </td>
+                      <td>{c.templateName}</td>
+                      <td>
+                        {c?.audience?.validRows ?? 0}/
+                        {c?.audience?.totalRows ?? 0}
+                      </td>
+                      <td>{fmtDate(c.createdAt)}</td>
+                      <td>{fmtDate(c.updatedAt)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
           <div style={{ marginTop: 12, opacity: 0.8, fontSize: 13 }}>
-            Dica: clique em “Atualizar” após iniciar uma campanha para ver o status mudar.
+            Dica: após iniciar uma campanha, clique em “Atualizar” para acompanhar o envio.
           </div>
         </div>
       )}
