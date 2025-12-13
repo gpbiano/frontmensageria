@@ -393,6 +393,21 @@
       "botAttempts": 2,
       "tags": [],
       "notes": ""
+    },
+    {
+      "id": 27,
+      "sessionId": "S-99477939-1765558082578",
+      "contactId": 2,
+      "contactName": "Adriano Ferreira",
+      "phone": "556499477939",
+      "channel": "whatsapp",
+      "lastMessage": "Obrigado",
+      "status": "open",
+      "updatedAt": "2025-12-12T16:48:53.000Z",
+      "currentMode": "human",
+      "botAttempts": 3,
+      "tags": [],
+      "notes": ""
     }
   ],
   "messagesByConversation": {
@@ -2407,6 +2422,75 @@
         "text": "Oi",
         "timestamp": "2025-12-12T01:42:25.257Z",
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMzY4MDYwQjVFQTBERTdGNzQ5AA=="
+      }
+    ],
+    "27": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Site abriu beleza",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T16:48:01.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0FBMTU3RUYwMTMyQzI3NTU3RTYA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Que bom que o site abriu direitinho! Posso ajudar com mais alguma coisa?",
+        "timestamp": "2025-12-12T16:48:05.397Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSRkU2NUVCNTIyMjJFNTQ3NTk2AA=="
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "E ligação também abriu",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T16:48:09.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0ExMzE2N0NFNTVCNzQ4QjQzQjgA"
+      },
+      {
+        "id": 4,
+        "direction": "out",
+        "type": "text",
+        "text": "Ótimo saber que a ligação também funcionou! Precisa de ajuda com mais alguma coisa relacionada?",
+        "timestamp": "2025-12-12T16:48:13.000Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSREUxQTM5OTEzQjU3RDRGQ0Y3AA=="
+      },
+      {
+        "id": 5,
+        "direction": "in",
+        "type": "text",
+        "text": "Só isso mesmo.",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T16:48:44.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0E4MEQwQkRERkU3NUQyRTBGMDcA"
+      },
+      {
+        "id": 6,
+        "direction": "out",
+        "type": "text",
+        "text": "Perfeito! Qualquer coisa, estou à disposição. Tenha um ótimo dia!",
+        "timestamp": "2025-12-12T16:48:47.949Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSNzI4Q0IxMjM3RUU4RUJGRjM0AA=="
+      },
+      {
+        "id": 7,
+        "direction": "in",
+        "type": "text",
+        "text": "Obrigado",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T16:48:53.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0EyNTZFNzE0QjFDMUY2QkE2MzkA"
       }
     ]
   },
