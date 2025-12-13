@@ -1,12 +1,20 @@
 /* =========================================================
-   CHAT HISTORY – LAYOUT GERAL
-   Usar dentro da área principal (.app-main) da plataforma
+   CHAT (HUMAN + CHATBOT) – CSS ÚNICO E ORGANIZADO
+   - Remove duplicações (emoji picker / header-right / hh-*)
+   - Mantém layout 3 colunas (lista | chat | painel)
+   - Corrige o “min-height:0” + scroll só no lugar certo
+   - Mantém compatível com suas classes atuais:
+     .chat-history-*, .chat-panel-*, .chat-messages, .chat-composer, etc.
 ========================================================= */
+
+/* =========================
+   LAYOUT GERAL
+========================= */
 
 .chat-history-layout {
   display: flex;
   height: 100%;
-  min-height: 0;
+  min-height: 0; /* ESSENCIAL */
   background: #020617;
   color: #e5e7eb;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
@@ -17,17 +25,19 @@
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.75);
 }
 
-/* =========================================================
-   COLUNA ESQUERDA – LISTA DE CONVERSAS
-========================================================= */
+/* =========================
+   COLUNA ESQUERDA – LISTA
+========================= */
 
 .chat-history-sidebar {
   width: 340px;
+  min-width: 340px;
   border-right: 1px solid rgba(148, 163, 184, 0.25);
   padding: 14px 14px 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 0; /* ESSENCIAL */
   background: radial-gradient(
       circle at top left,
       rgba(22, 163, 74, 0.22),
@@ -36,27 +46,29 @@
   backdrop-filter: blur(10px);
 }
 
-/* Header (título + controles de notificação) */
+/* Header */
 .chat-history-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
 }
 
 .chat-history-header h1 {
   font-size: 18px;
-  font-weight: 600;
+  font-weight: 650;
   margin: 0;
+  color: #e5e7eb;
 }
 
 .chat-history-header p {
   font-size: 13px;
-  margin-top: 4px;
+  margin: 4px 0 0;
   color: #9ca3af;
+  line-height: 1.35;
 }
 
-/* Controles de notificação (Som / Silêncio) */
+/* (Opcional) controles antigos (se usar no JSX) */
 .chat-history-notification-controls {
   display: flex;
   flex-direction: column;
@@ -78,10 +90,7 @@
   accent-color: #22c55e;
 }
 
-/* =========================================================
-   BUSCA
-========================================================= */
-
+/* Busca */
 .chat-history-search input {
   width: 100%;
   padding: 9px 13px;
@@ -91,16 +100,19 @@
   color: #e5e7eb;
   font-size: 14px;
   box-sizing: border-box;
+  outline: none;
+}
+
+.chat-history-search input:focus {
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25);
 }
 
 .chat-history-search input::placeholder {
   color: #6b7280;
 }
 
-/* =========================================================
-   FILTROS – Abertas / Encerradas / Todas
-========================================================= */
-
+/* Filtros (pills) */
 .chat-history-filters {
   display: flex;
   gap: 8px;
@@ -129,19 +141,17 @@
   border-color: rgba(148, 163, 184, 0.7);
 }
 
-/* =========================================================
-   LISTA DE CONVERSAS
-========================================================= */
-
+/* Lista */
 .chat-history-list {
   flex: 1;
+  min-height: 0; /* ESSENCIAL */
   overflow-y: auto;
   padding-right: 4px;
 }
 
 .chat-history-item {
   width: 100%;
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 10px 12px;
   margin-bottom: 6px;
   background: rgba(15, 23, 42, 0.96);
@@ -151,6 +161,7 @@
   flex-direction: column;
   gap: 3px;
   transition: all 0.18s ease-in-out;
+  text-align: left;
 }
 
 .chat-history-item:hover {
@@ -159,21 +170,25 @@
 }
 
 .chat-history-item.selected {
-  border-color: #16a34a;
-  box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.8);
+  border-color: rgba(34, 197, 94, 0.85);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
 }
 
-/* Linha principal (nome + status + ícone canal + badge) */
 .chat-history-item-main {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
 }
 
 .chat-history-contact-name {
-  font-weight: 600;
+  font-weight: 650;
   color: #e5e7eb;
-  font-size: 15px;
+  font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-history-status {
@@ -183,40 +198,33 @@
   border-radius: 999px;
   background: rgba(22, 163, 74, 0.14);
   color: #4ade80;
+  flex-shrink: 0;
 }
 
 .chat-history-phone {
-  font-size: 13px;
+  font-size: 12px;
   color: #9ca3af;
 }
 
 .chat-history-last-message {
-  font-size: 13px;
+  font-size: 12px;
   color: #9ca3af;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Ícone do canal */
-.chat-channel-icon {
-  width: 16px;
-  height: 16px;
-  opacity: 0.92;
-  flex-shrink: 0;
-}
-
-/* Badge de não lidas */
+/* Badge não lidas */
 .chat-history-unread-badge {
   background: #00ff9d;
   color: #03131f;
   border-radius: 999px;
   font-size: 11px;
-  font-weight: 600;
-  padding: 1px 6px;
-  margin-left: 6px;
+  font-weight: 700;
+  padding: 1px 7px;
   min-width: 18px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 /* Estado vazio */
@@ -226,18 +234,18 @@
   padding: 12px;
 }
 
-/* =========================================================
-   COLUNA DO MEIO – MENSAGENS
-========================================================= */
+/* =========================
+   COLUNA CENTRAL – CHAT
+========================= */
 
 .chat-history-main {
   flex: 1;
+  min-width: 0;
+  min-height: 0; /* ESSENCIAL */
   display: flex;
   flex-direction: column;
   padding: 14px;
-  min-width: 0;
-  height: 100%;
-  min-height: 0;
+  overflow: hidden; /* ESSENCIAL: impede expansão infinita */
 }
 
 .chat-history-placeholder {
@@ -251,22 +259,22 @@
   margin-bottom: 4px;
 }
 
-/* =========================================================
-   CHAT PANEL (dentro da coluna do meio)
-========================================================= */
+/* =========================
+   CHAT PANEL (centro)
+========================= */
 
 .chat-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0; /* ESSENCIAL */
   background: #020617;
   border-radius: 14px;
   border: 1px solid rgba(148, 163, 184, 0.25);
   overflow: hidden;
 }
 
-/* HEADER DO CHAT */
-
+/* Header do chat */
 .chat-panel-header {
   padding: 10px 14px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.25);
@@ -274,12 +282,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
 }
 
 .chat-panel-header-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .chat-panel-avatar {
@@ -291,18 +301,26 @@
   justify-content: center;
   background: linear-gradient(135deg, #16a34a, #065f46);
   color: #ecfdf5;
-  font-weight: 600;
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 .chat-header-name {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 650;
   color: #e5e7eb;
 }
 
 .chat-header-phone {
-  font-size: 13px;
+  font-size: 12px;
   color: #9ca3af;
+}
+
+.chat-panel-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .chat-panel-status-wrapper {
@@ -325,12 +343,14 @@
   cursor: pointer;
 }
 
-/* =========================================================
+/* =========================
    LISTA DE MENSAGENS
-========================================================= */
+   (scroll só aqui)
+========================= */
 
 .chat-messages {
   flex: 1;
+  min-height: 0; /* ESSENCIAL */
   overflow-y: auto;
   padding: 10px 14px 14px;
   display: flex;
@@ -339,6 +359,7 @@
   background: #020617;
 }
 
+/* Bolhas */
 .message-row {
   display: flex;
 }
@@ -356,7 +377,7 @@
   max-width: 70%;
   padding: 8px 10px;
   border-radius: 14px;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.45;
   display: flex;
   flex-direction: column;
@@ -384,9 +405,9 @@
   text-align: right;
 }
 
-/* =========================================================
-   RENDERIZAÇÃO DE MÍDIA
-========================================================= */
+/* =========================
+   MÍDIA
+========================= */
 
 .msg-media {
   max-width: 260px;
@@ -411,17 +432,38 @@
   font-size: 14px;
 }
 
-/* =========================================================
-   INPUT DE MENSAGEM
-========================================================= */
+/* =========================
+   COMPOSER + EMOJI
+========================= */
 
 .chat-composer {
+  position: relative; /* para o picker */
   border-top: 1px solid rgba(148, 163, 184, 0.25);
   background: rgba(15, 23, 42, 0.98);
   padding: 10px 12px;
   display: flex;
   align-items: flex-end;
   gap: 8px;
+}
+
+.chat-composer-emoji-btn {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.9);
+  color: #e5e7eb;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.chat-composer-emoji-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .chat-composer-textarea {
@@ -435,13 +477,18 @@
   color: #e5e7eb;
   font-size: 14px;
   resize: vertical;
+  outline: none;
+}
+
+.chat-composer-textarea:focus {
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25);
 }
 
 .chat-composer-textarea::placeholder {
   color: #6b7280;
 }
 
-/* Botão enviar */
 .chat-composer-send {
   padding: 9px 18px;
   border-radius: 999px;
@@ -450,14 +497,56 @@
   border: none;
   cursor: pointer;
   font-size: 14px;
+  flex-shrink: 0;
 }
 
-/* =========================================================
-   COLUNA DIREITA – PAINEL DO CONTATO
-========================================================= */
+.chat-composer-send:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Emoji picker */
+.chat-emoji-picker {
+  position: absolute;
+  bottom: 58px;
+  left: 10px;
+  z-index: 50;
+  background: #020617;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  padding: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 260px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.65);
+}
+
+.chat-emoji-item {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-emoji-item:hover {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+/* =========================
+   COLUNA DIREITA – PAINEL
+========================= */
 
 .chat-contact-panel {
   width: 260px;
+  min-width: 260px;
   border-left: 1px solid rgba(148, 163, 184, 0.25);
   background: radial-gradient(
       circle at top right,
@@ -468,9 +557,9 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
 }
 
-/* Seções do painel */
 .chat-contact-section {
   display: flex;
   flex-direction: column;
@@ -486,7 +575,7 @@
 
 .chat-contact-name {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .chat-contact-phone,
@@ -495,19 +584,6 @@
   color: #9ca3af;
 }
 
-.chat-contact-channel {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  opacity: 0.9;
-}
-
-.chat-contact-channel img {
-  width: 18px;
-  height: 18px;
-}
-
-/* Tags */
 .chat-contact-tags {
   display: flex;
   flex-wrap: wrap;
@@ -522,7 +598,6 @@
   color: #e5e7eb;
 }
 
-/* Observações */
 .chat-contact-notes-input {
   width: 100%;
   min-height: 80px;
@@ -546,9 +621,9 @@
   font-size: 14px;
 }
 
-/* =========================================================
+/* =========================
    ALERTAS
-========================================================= */
+========================= */
 
 .chat-new-alert {
   animation: pulseGreen 1.2s ease-in-out infinite;
@@ -560,21 +635,21 @@
     box-shadow: 0 0 0 rgba(0, 255, 150, 0);
   }
   50% {
-    box-shadow: 0 0 0 10px rgba(0, 255, 150, 0.8);
+    box-shadow: 0 0 0 10px rgba(0, 255, 150, 0.5);
   }
   100% {
     box-shadow: 0 0 0 rgba(0, 255, 150, 0);
   }
 }
 
-/* Alerta de bot na sidebar (modo highlight) */
+/* Alerta “bot” (mantém seu comportamento) */
 .chat-history-layout.bot-alert .chat-history-header h1 {
   animation: bot-pulse-bg 1s ease-out infinite;
 }
 
 @keyframes bot-pulse-bg {
   0% {
-    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.35);
   }
   70% {
     box-shadow: 0 0 0 14px rgba(52, 211, 153, 0);
@@ -584,50 +659,9 @@
   }
 }
 
-/* =========================================================
-   CHATS ANTERIORES – LISTA E MODAL
-========================================================= */
-
-.chat-previous-sessions-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.chat-previous-session-item {
-  width: 100%;
-  border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  background: #020617;
-  color: #e5e7eb;
-  padding: 6px 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-  cursor: pointer;
-  transition: 0.15s ease;
-}
-
-.chat-previous-session-item:hover {
-  border-color: #22c55e;
-  background: rgba(15, 23, 42, 0.98);
-}
-
-.chat-previous-session-status {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.95);
-  border: 1px solid rgba(148, 163, 184, 0.5);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-/* MODAL */
+/* =========================
+   MODAL (se ainda usar)
+========================= */
 
 .chat-history-modal-backdrop {
   position: fixed;
@@ -694,172 +728,9 @@
   color: #e5e7eb;
 }
 
-.chat-history-modal-messages {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* =========================================================
-   (LEGADO) TABS E TABELAS – HISTÓRICO / GRUPOS
-========================================================= */
-
-.chat-history-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.chat-history-page-header {
-  margin-bottom: 8px;
-}
-
-.chat-history-page-header h1 {
-  font-size: 24px;
-  margin: 0 0 4px;
-}
-
-/* Tabs antigas de atendimento */
-.inbound-tabs {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0 18px;
-}
-
-.inbound-tab {
-  border-radius: 999px;
-  border: 1px solid rgba(31, 41, 55, 0.8);
-  background: rgba(15, 23, 42, 0.95);
-  color: #9ca3af;
-  font-size: 13px;
-  padding: 6px 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease,
-    color 0.15s ease, box-shadow 0.15s ease, transform 0.08s ease;
-}
-
-.inbound-tab:hover {
-  background: rgba(15, 23, 42, 1);
-  border-color: rgba(55, 65, 81, 1);
-  color: #e5e7eb;
-}
-
-.inbound-tab-active {
-  background: linear-gradient(90deg, #22c55e, #16a34a);
-  border-color: transparent;
-  color: #022c22;
-  box-shadow: 0 10px 26px rgba(34, 197, 94, 0.45);
-  transform: translateY(-1px);
-}
-
-.inbound-tab-pill {
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  background: rgba(15, 23, 42, 0.85);
-  color: inherit;
-}
-
-/* Layout base das subtelas */
-.inbound-layout {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-height: 360px;
-}
-
-/* Histórico de chats e grupos – styles genéricos */
-.inbound-history-header,
-.inbound-groups-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.inbound-history-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.inbound-history-search {
-  min-width: 260px;
-  max-width: 360px;
-  border-radius: 999px;
-  border: 1px solid rgba(31, 41, 55, 0.9);
-  background: rgba(15, 23, 42, 0.96);
-  padding: 8px 12px;
-  font-size: 13px;
-  color: #e5e7eb;
-  outline: none;
-}
-
-.inbound-history-search::placeholder {
-  color: #6b7280;
-}
-
-.inbound-history-search:focus {
-  border-color: #22c55e;
-  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
-}
-
-.inbound-history-table-card,
-.inbound-groups-table-card {
-  border-radius: 18px;
-  border: 1px solid rgba(31, 41, 55, 0.9);
-  background: rgba(15, 23, 42, 0.98);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.65);
-  padding: 16px 18px;
-}
-
-.inbound-history-table,
-.inbound-groups-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.inbound-history-table th,
-.inbound-history-table td,
-.inbound-groups-table th,
-.inbound-groups-table td {
-  padding: 8px 10px;
-  border-bottom: 1px solid rgba(31, 41, 55, 0.9);
-  text-align: left;
-}
-
-.inbound-history-table th,
-.inbound-groups-table th {
-  font-weight: 500;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #9ca3af;
-}
-
-.table-link {
-  border: none;
-  background: none;
-  color: #38bdf8;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0 6px 0 0;
-}
-
-.table-link:hover {
-  text-decoration: underline;
-}
-
-.table-link-danger {
-  color: #f97373;
-}
-
-/* RESPONSIVO HISTÓRICO / GRUPOS */
+/* =========================
+   RESPONSIVO
+========================= */
 
 @media (max-width: 960px) {
   .chat-history-layout {
@@ -867,7 +738,7 @@
   }
 
   .chat-history-sidebar {
-    display: none; /* em mobile poderia esconder a lista e usar outro fluxo */
+    display: none;
   }
 
   .chat-contact-panel {
@@ -877,144 +748,4 @@
   .chat-history-main {
     padding: 10px;
   }
-
-  .inbound-history-header,
-  .inbound-groups-header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .inbound-history-actions {
-    width: 100%;
-  }
-
-  .inbound-history-search {
-    flex: 1;
-    min-width: 0;
-  }
 }
-.chat-history-main {
-  flex: 1;
-  min-height: 0;         /* ESSENCIAL */
-  display: flex;
-  overflow: hidden;       /* impede expansão infinita */
-}
-
-.chat-panel-wrapper {
-  flex: 1;
-  min-height: 0;         /* ESSENCIAL */
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.chat-messages-container {
-  flex: 1;
-  overflow-y: auto;      /* rolagem só aqui */
-  padding-right: 4px;
-}
-.chat-panel-header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.chat-emoji-picker {
-  position: absolute;
-  bottom: 70px;
-  left: 16px;
-  z-index: 50;
-}
-
-.chat-composer {
-  position: relative; /* para o picker se posicionar sobre ela */
-}
-
-.chat-composer-emoji-btn {
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  background: rgba(15, 23, 42, 0.9);
-  color: #e5e7eb;
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 6px;
-  cursor: pointer;
-  font-size: 18px;
-}
-
-.chat-composer-emoji-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.chat-panel-header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* Container geral do composer já existe,
-   mas garantimos position: relative para o picker flutuar */
-.chat-composer {
-  position: relative;
-}
-
-/* Caixa de emojis */
-.chat-emoji-picker {
-  position: absolute;
-  bottom: 60px;
-  left: 10px;
-  z-index: 50;
-  background: #020617;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  padding: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-width: 260px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.65);
-}
-
-/* Botãozinho de cada emoji */
-.chat-emoji-item {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 20px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat-emoji-item:hover {
-  background: rgba(15, 23, 42, 0.9);
-}
-
-/* Botão de abrir/fechar emojis */
-.chat-composer-emoji-btn {
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  background: rgba(15, 23, 42, 0.9);
-  color: #e5e7eb;
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 6px;
-  cursor: pointer;
-  font-size: 18px;
-}
-
-.chat-composer-emoji-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-

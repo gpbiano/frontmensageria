@@ -8,8 +8,10 @@ import logger from "../logger.js";
 
 const router = express.Router();
 
-// Base do app (onde fica a rota /criar-senha)
-// importante: remove barra final para evitar //criar-senha
+// ⚠️ ESTE ROUTER TEM PATHS INTERNOS "/users"
+// então o mount correto no index é:
+// app.use("/settings", usersRouter);
+
 const APP_BASE_URL = String(
   process.env.APP_BASE_URL || "http://localhost:5173"
 ).replace(/\/+$/, "");
@@ -36,7 +38,6 @@ function nextUserId(users) {
 function sanitizeUser(u) {
   if (!u) return u;
   const { password, passwordHash, ...rest } = u;
-  // normaliza isActive para boolean (default true)
   return { ...rest, isActive: rest.isActive !== false };
 }
 
@@ -49,13 +50,21 @@ function isValidEmail(email) {
 }
 
 function isValidRole(role) {
-  return ROLES.includes(String(role || "").trim());
+  return ROLES.includes(String(role || "").trim().toLowerCase());
 }
 
 function ensureDbArrays(db) {
   db.users = ensureArray(db.users);
   db.passwordTokens = ensureArray(db.passwordTokens);
   return db;
+}
+
+function parseBoolean(v) {
+  if (typeof v === "boolean") return v;
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "true" || s === "1" || s === "yes") return true;
+  if (s === "false" || s === "0" || s === "no") return false;
+  return undefined;
 }
 
 function invalidateUserTokens(db, userId, reason = "invalidated") {
@@ -73,25 +82,123 @@ function buildInviteEmail({ name, tokenId }) {
   const link = `${APP_BASE_URL}/criar-senha?token=${encodeURIComponent(tokenId)}`;
   const subject = "GP Labs — Crie sua senha de acesso";
 
+  const preheader =
+    "Ative seu acesso à plataforma GP Labs e crie sua senha em poucos segundos.";
+
   const text =
     `Olá${name ? `, ${name}` : ""}!\n\n` +
-    `Para acessar a plataforma, crie sua senha pelo link:\n${link}\n\n` +
+    `Bem-vindo(a) à GP Labs.\n` +
+    `Para ativar seu usuário e criar sua senha, acesse:\n${link}\n\n` +
     `Este link expira em 24h.\n\n` +
     `Se você não solicitou isso, ignore este e-mail.`;
 
-  const html = `
-  <div style="font-family:Arial,sans-serif;line-height:1.4;color:#111">
-    <h2 style="margin:0 0 12px;">GP Labs — Criar senha</h2>
-    <p>Olá${name ? `, <b>${name}</b>` : ""}!</p>
-    <p>Para acessar a plataforma, clique no botão abaixo para criar sua senha:</p>
-    <p style="margin:18px 0;">
-      <a href="${link}" style="background:#10b981;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px;display:inline-block;">
-        Criar senha
-      </a>
-    </p>
-    <p style="color:#555;font-size:13px;">Este link expira em 24h.</p>
-    <p style="color:#777;font-size:12px;margin-top:18px;">Se você não solicitou isso, ignore este e-mail.</p>
-  </div>`;
+  const html = `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>GP Labs — Criar senha</title>
+</head>
+<body style="margin:0;padding:0;background:#0b1020;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+    ${preheader}
+  </div>
+
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#0b1020;">
+    <tr>
+      <td align="center" style="padding:28px 12px;">
+        <table width="640" cellpadding="0" cellspacing="0" role="presentation" style="max-width:100%;border-radius:18px;overflow:hidden;background:#070b18;border:1px solid rgba(255,255,255,0.10);">
+
+          <tr>
+            <td style="padding:26px 24px;background:
+              radial-gradient(1200px 500px at 20% 10%, rgba(34,197,94,0.25), rgba(11,16,32,0) 60%),
+              linear-gradient(135deg,#020617,#0b1020);">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td valign="middle">
+                    <img
+                      src="${APP_BASE_URL}/gp-labs-logo.png"
+                      alt="GP Labs"
+                      width="120"
+                      style="display:block;border:0;outline:none;"
+                    />
+                  </td>
+                  <td align="right" valign="middle">
+                    <span style="display:inline-block;padding:6px 12px;border-radius:999px;
+                      background:rgba(34,197,94,0.15);
+                      border:1px solid rgba(34,197,94,0.35);
+                      color:#86efac;
+                      font-family:Arial,sans-serif;
+                      font-size:12px;">
+                      Convite
+                    </span>
+                  </td>
+                </tr>
+              </table>
+
+              <h1 style="margin:22px 0 10px;color:#e5e7eb;font-family:Arial,sans-serif;font-size:26px;font-weight:800;">
+                Bem-vindo(a)${name ? `, ${name}` : ""} 👋
+              </h1>
+
+              <p style="margin:0;color:#cbd5e1;font-family:Arial,sans-serif;font-size:14px;line-height:1.6;">
+                Você foi adicionado(a) à plataforma da <b>GP Labs</b>.
+                Para ativar seu usuário e criar sua senha de acesso, clique no botão abaixo.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:24px;">
+              <a href="${link}" style="
+                display:inline-block;
+                background:#22c55e;
+                color:#052e1a;
+                text-decoration:none;
+                font-family:Arial,sans-serif;
+                font-weight:800;
+                font-size:14px;
+                padding:14px 18px;
+                border-radius:12px;">
+                Criar senha
+              </a>
+
+              <p style="margin:18px 0 0;color:#94a3b8;font-family:Arial,sans-serif;font-size:13px;line-height:1.6;">
+                Este link expira em <b>24 horas</b>. Se você não solicitou isso, pode ignorar este e-mail com segurança.
+              </p>
+
+              <div style="margin-top:16px;padding:14px;border-radius:14px;
+                background:rgba(255,255,255,0.04);
+                border:1px solid rgba(255,255,255,0.08);">
+                <p style="margin:0;color:#cbd5e1;font-family:Arial,sans-serif;font-size:12px;">
+                  Se o botão não funcionar, copie e cole este link no navegador:
+                </p>
+                <p style="margin:8px 0 0;color:#e5e7eb;font-family:Arial,sans-serif;font-size:12px;word-break:break-all;">
+                  ${link}
+                </p>
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:20px 24px;border-top:1px solid rgba(255,255,255,0.08);background:#050816;">
+              <p style="margin:0;color:#94a3b8;font-family:Arial,sans-serif;font-size:12px;">
+                © ${new Date().getFullYear()} GP Labs. Todos os direitos reservados.
+              </p>
+              <p style="margin:8px 0 0;color:#64748b;font-family:Arial,sans-serif;font-size:11px;">
+                Não quer mais receber e-mails?
+                <span style="color:#e5e7eb;text-decoration:underline;">
+                  Cancelar recebimento
+                </span>
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 
   return { subject, text, html, link };
 }
@@ -102,23 +209,19 @@ function buildResetEmail({ name, tokenId }) {
 
   const text =
     `Olá${name ? `, ${name}` : ""}!\n\n` +
-    `Você solicitou redefinir sua senha. Use o link:\n${link}\n\n` +
+    `Recebemos uma solicitação de redefinição de senha.\n` +
+    `Para continuar, acesse:\n${link}\n\n` +
     `Este link expira em 24h.\n\n` +
     `Se não foi você, ignore este e-mail.`;
 
-  const html = `
-  <div style="font-family:Arial,sans-serif;line-height:1.4;color:#111">
-    <h2 style="margin:0 0 12px;">GP Labs — Redefinir senha</h2>
-    <p>Olá${name ? `, <b>${name}</b>` : ""}!</p>
-    <p>Use o botão abaixo para redefinir sua senha:</p>
-    <p style="margin:18px 0;">
-      <a href="${link}" style="background:#2563eb;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px;display:inline-block;">
-        Redefinir senha
-      </a>
-    </p>
-    <p style="color:#555;font-size:13px;">Este link expira em 24h.</p>
-    <p style="color:#777;font-size:12px;margin-top:18px;">Se não foi você, ignore este e-mail.</p>
-  </div>`;
+  const html = buildInviteEmail({ name, tokenId }).html
+    .replace("Convite", "Redefinição")
+    .replace("Bem-vindo(a)", "Redefinir senha")
+    .replace(">Criar senha<", ">Redefinir senha<")
+    .replace(
+      "Para ativar seu usuário e criar sua senha de acesso, clique no botão abaixo.",
+      "Recebemos uma solicitação para redefinir sua senha de acesso. Para continuar, clique no botão abaixo."
+    );
 
   return { subject, text, html, link };
 }
@@ -127,10 +230,25 @@ function buildResetEmail({ name, tokenId }) {
  * GET /settings/users
  * (admin/manager) - lista usuários sanitizados
  */
-router.get("/users", requireAuth, requireRole(["admin", "manager"]), (req, res) => {
+router.get("/users", requireAuth, requireRole("admin", "manager"), (req, res) => {
   const db = ensureDbArrays(loadDB());
   const users = (db.users || []).map(sanitizeUser);
   return res.json({ data: users, total: users.length });
+});
+
+/**
+ * GET /settings/users/:id
+ * (admin/manager) - pega 1 usuário
+ */
+router.get("/users/:id", requireAuth, requireRole("admin", "manager"), (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "ID inválido." });
+
+  const db = ensureDbArrays(loadDB());
+  const user = (db.users || []).find((u) => Number(u.id) === id);
+  if (!user) return res.status(404).json({ error: "Usuário não encontrado." });
+
+  return res.json({ user: sanitizeUser(user) });
 });
 
 /**
@@ -138,10 +256,10 @@ router.get("/users", requireAuth, requireRole(["admin", "manager"]), (req, res) 
  * (admin) - cria usuário + token invite + envia e-mail
  * body: { name, email, role }
  */
-router.post("/users", requireAuth, requireRole(["admin"]), async (req, res) => {
+router.post("/users", requireAuth, requireRole("admin"), async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const email = normalizeEmail(req.body?.email);
-  const role = String(req.body?.role || "agent").trim();
+  const role = String(req.body?.role || "agent").trim().toLowerCase();
 
   if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
   if (!email) return res.status(400).json({ error: "E-mail é obrigatório." });
@@ -165,7 +283,6 @@ router.post("/users", requireAuth, requireRole(["admin"]), async (req, res) => {
 
   db.users.push(user);
 
-  // token de convite
   const tokenId = newTokenId("invite");
   const token = {
     id: tokenId,
@@ -179,7 +296,6 @@ router.post("/users", requireAuth, requireRole(["admin"]), async (req, res) => {
   db.passwordTokens.push(token);
   saveDB(db);
 
-  // envia e-mail (se falhar, usuário continua criado)
   try {
     const mail = buildInviteEmail({ name: user.name, tokenId });
     await sendEmail({
@@ -204,7 +320,7 @@ router.post("/users", requireAuth, requireRole(["admin"]), async (req, res) => {
  * PATCH /settings/users/:id
  * (admin/manager) - edita name/role/isActive
  */
-router.patch("/users/:id", requireAuth, requireRole(["admin", "manager"]), (req, res) => {
+router.patch("/users/:id", requireAuth, requireRole("admin", "manager"), (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "ID inválido." });
 
@@ -223,7 +339,7 @@ router.patch("/users/:id", requireAuth, requireRole(["admin", "manager"]), (req,
   }
 
   if (hasRole) {
-    const newRole = String(req.body?.role || "").trim();
+    const newRole = String(req.body?.role || "").trim().toLowerCase();
 
     // manager não pode promover para admin
     if (req.user?.role === "manager" && newRole === "admin") {
@@ -235,12 +351,13 @@ router.patch("/users/:id", requireAuth, requireRole(["admin", "manager"]), (req,
   }
 
   if (hasIsActive) {
-    const active = Boolean(req.body?.isActive);
-    user.isActive = active;
-
-    if (active === false) {
-      invalidateUserTokens(db, user.id, "user_deactivated");
+    const parsed = parseBoolean(req.body?.isActive);
+    if (parsed === undefined) {
+      return res.status(400).json({ error: "isActive inválido (use true/false)." });
     }
+    user.isActive = parsed;
+
+    if (parsed === false) invalidateUserTokens(db, user.id, "user_deactivated");
   }
 
   user.updatedAt = nowIso();
@@ -253,7 +370,7 @@ router.patch("/users/:id", requireAuth, requireRole(["admin", "manager"]), (req,
  * PATCH /settings/users/:id/deactivate
  * (admin) - soft delete + invalida tokens pendentes
  */
-router.patch("/users/:id/deactivate", requireAuth, requireRole(["admin"]), (req, res) => {
+router.patch("/users/:id/deactivate", requireAuth, requireRole("admin"), (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "ID inválido." });
 
@@ -265,7 +382,25 @@ router.patch("/users/:id/deactivate", requireAuth, requireRole(["admin"]), (req,
   user.updatedAt = nowIso();
 
   invalidateUserTokens(db, user.id, "user_deactivated");
+  saveDB(db);
 
+  return res.json({ success: true, user: sanitizeUser(user) });
+});
+
+/**
+ * PATCH /settings/users/:id/activate
+ * (admin) - reativa usuário
+ */
+router.patch("/users/:id/activate", requireAuth, requireRole("admin"), (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "ID inválido." });
+
+  const db = ensureDbArrays(loadDB());
+  const user = (db.users || []).find((u) => Number(u.id) === id);
+  if (!user) return res.status(404).json({ error: "Usuário não encontrado." });
+
+  user.isActive = true;
+  user.updatedAt = nowIso();
   saveDB(db);
 
   return res.json({ success: true, user: sanitizeUser(user) });
@@ -275,7 +410,7 @@ router.patch("/users/:id/deactivate", requireAuth, requireRole(["admin"]), (req,
  * POST /settings/users/:id/reset-password
  * (admin) - gera token reset + envia e-mail
  */
-router.post("/users/:id/reset-password", requireAuth, requireRole(["admin"]), async (req, res) => {
+router.post("/users/:id/reset-password", requireAuth, requireRole("admin"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "ID inválido." });
 
@@ -308,7 +443,6 @@ router.post("/users/:id/reset-password", requireAuth, requireRole(["admin"]), as
       html: mail.html,
       text: mail.text
     });
-
     logger.info({ userId: user.id, email: user.email }, "📧 Reset de senha enviado");
   } catch (e) {
     logger.error({ err: e?.message || e, userId: user.id, email: user.email }, "❌ Falha ao enviar reset de senha");
@@ -321,4 +455,3 @@ router.post("/users/:id/reset-password", requireAuth, requireRole(["admin"]), as
 });
 
 export default router;
-

@@ -30,6 +30,9 @@ import OptOutPage from "./pages/outbound/OptOutPage.tsx";
 // ✅ Settings — Users
 import SettingsUsersPage from "./pages/settings/SettingsUsersPage.jsx";
 
+// ✅ Settings — Groups
+import SettingsGroupsPage from "./pages/settings/SettingsGroupsPage.jsx";
+
 // Criar Senha (Público)
 import CreatePasswordPage from "./pages/auth/CreatePasswordPage.jsx";
 
@@ -38,6 +41,9 @@ import "./styles/App.css";
 
 // CSS específico de outbound / reports / analytics
 import "./styles/outbound.css";
+
+// ✅ CSS da página de grupos (se você já criou o arquivo)
+import "./styles/settings-groups.css";
 
 const AUTH_KEY = "gpLabsAuthToken";
 
@@ -120,6 +126,8 @@ const MENU = [
     items: [
       { id: "canais", label: "Canais" },
       { id: "usuarios", label: "Usuários" }
+      // ⚠️ Se quiser, dá pra duplicar também aqui:
+      // { id: "grupos", label: "Grupos" }
     ]
   }
 ];
@@ -249,13 +257,12 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // Atendimento → Grupos (placeholder)
+  // ✅ Atendimento → Grupos (AGORA REAL)
   if (main === "atendimento" && sub === "grupos") {
     return (
-      <Placeholder
-        title="Atendimento · Grupos"
-        text="Em breve: suporte a grupos (WhatsApp Groups) e histórico dedicado."
-      />
+      <div className="page-full">
+        <SettingsGroupsPage />
+      </div>
     );
   }
 
@@ -440,4 +447,3 @@ function subSectionLabel(sub) {
       return "";
   }
 }
-

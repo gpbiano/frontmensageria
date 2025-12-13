@@ -1,0 +1,273 @@
+/* frontend/src/styles/settings-groups.css */
+
+.settings-groups-page {
+  padding: 18px;
+  color: #e5e7eb;
+}
+
+.settings-groups-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.settings-groups-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.settings-groups-subtitle {
+  margin: 6px 0 0;
+  opacity: 0.75;
+  font-size: 13px;
+}
+
+.settings-groups-kpi {
+  margin-left: 10px;
+  opacity: 0.9;
+}
+
+.settings-groups-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  opacity: 0.9;
+  font-size: 13px;
+}
+
+.settings-groups-error {
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+
+.settings-groups-card {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  padding: 14px;
+  margin-bottom: 14px;
+  backdrop-filter: blur(8px);
+}
+
+.settings-groups-card h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-groups-form {
+  display: grid;
+  grid-template-columns: 1fr 120px 140px 160px;
+  gap: 10px;
+  align-items: end;
+}
+
+@media (max-width: 860px) {
+  .settings-groups-form {
+    grid-template-columns: 1fr 120px 140px;
+  }
+}
+
+@media (max-width: 620px) {
+  .settings-groups-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field label {
+  display: block;
+  font-size: 12px;
+  opacity: 0.75;
+  margin-bottom: 6px;
+}
+
+.field input {
+  width: 100%;
+  padding: 10px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(2, 6, 23, 0.55);
+  color: #e5e7eb;
+  outline: none;
+}
+
+.field input[type="color"] {
+  padding: 0;
+  height: 40px;
+  width: 100%;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.settings-groups-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.settings-groups-empty {
+  padding: 12px;
+  opacity: 0.7;
+  font-size: 13px;
+}
+
+.settings-groups-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 760px) {
+  .settings-groups-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.group-item {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.group-item.inactive {
+  opacity: 0.7;
+}
+
+.group-item-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.group-badge {
+  width: 12px;
+  height: 36px;
+  border-radius: 8px;
+}
+
+.group-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.group-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.group-inactive-pill {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  opacity: 0.9;
+}
+
+.group-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.group-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* Buttons */
+.btn-primary,
+.btn-secondary,
+.btn-danger,
+.btn-ghost {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.35);
+  color: #e5e7eb;
+  padding: 10px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-primary {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.btn-ghost {
+  background: transparent;
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-danger:disabled,
+.btn-ghost:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Modal */
+.settings-groups-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+
+.settings-groups-modal {
+  width: min(720px, 96vw);
+  background: rgba(2, 6, 23, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.modal-footnote {
+  margin-top: 10px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.modal-footnote code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11px;
+}

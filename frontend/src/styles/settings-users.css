@@ -1,64 +1,312 @@
+/* =========================
+   SETTINGS USERS (SU)
+========================= */
+
 .su-page {
-  padding: 16px;
+  padding: 20px;
+  color: #e5e7eb;
 }
 
+/* “Card”/surface para não sumir no fundo */
+.su-page-inner {
+  background: rgba(2, 6, 23, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+/* Header */
 .su-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
+.su-header h1,
+.su-header h2,
+.su-header h3 {
+  margin: 0;
+  color: #e5e7eb;
+  font-weight: 700;
+}
+
+/* Input */
 .su-input {
   width: 100%;
-  margin: 8px 0;
-  padding: 8px;
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(15, 23, 42, 0.8);
+  color: #e5e7eb;
+  outline: none;
 }
 
+.su-input::placeholder {
+  color: rgba(229, 231, 235, 0.55);
+}
+
+.su-input:focus {
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+}
+
+/* =========================
+   BUTTONS
+========================= */
+
+/* Base */
 .su-btn {
   padding: 8px 12px;
   margin-right: 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(15, 23, 42, 0.85);
+  color: #e5e7eb;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  transition: transform 0.12s ease, background 0.2s ease, border-color 0.2s ease,
+    opacity 0.2s ease;
+  white-space: nowrap;
 }
+
+.su-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(30, 41, 59, 0.95);
+}
+
+.su-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Variantes por ação (usa junto com su-btn) */
+.su-btn-primary {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #34d399;
+}
+
+.su-btn-primary:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.22);
+}
+
+.su-btn-edit {
+  background: rgba(37, 99, 235, 0.18);
+  border-color: rgba(37, 99, 235, 0.35);
+  color: #93c5fd;
+}
+
+.su-btn-edit:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.26);
+}
+
+.su-btn-reset {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
+.su-btn-reset:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.26);
+}
+
+.su-btn-danger {
+  background: rgba(220, 38, 38, 0.18);
+  border-color: rgba(220, 38, 38, 0.35);
+  color: #fca5a5;
+}
+
+.su-btn-danger:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.28);
+}
+
+/* =========================
+   TABLE
+========================= */
 
 .su-table {
   width: 100%;
   border-collapse: collapse;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .su-table th,
 .su-table td {
-  border-bottom: 1px solid #333;
-  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px 10px;
+  vertical-align: middle;
 }
 
+.su-table th {
+  text-align: left;
+  font-size: 12px;
+  color: rgba(229, 231, 235, 0.65);
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.su-table tr:hover td {
+  background: rgba(15, 23, 42, 0.35);
+}
+
+/* Ações em linha (importante pra não “sumir”) */
+.su-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+/* Status */
 .inactive {
-  opacity: 0.5;
+  opacity: 0.55;
 }
 
+/* Toast / Alerts */
 .su-alert {
   color: #ff6b6b;
+  margin-top: 8px;
 }
 
 .su-toast {
   color: #22c55e;
+  margin-top: 8px;
 }
 
+/* Link box */
 .su-linkbox {
   display: flex;
   gap: 8px;
-  margin: 8px 0;
+  align-items: center;
+  margin: 8px 0 12px;
 }
 
+.su-linkbox input {
+  flex: 1;
+}
+
+/* Modal */
 .su-modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.62);
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 16px;
+  z-index: 9999;
 }
 
 .su-modal form {
-  background: #111;
+  background: rgba(2, 6, 23, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 14px;
   padding: 16px;
-  width: 400px;
+  width: min(520px, 96vw);
+  color: #e5e7eb;
+}
+
+.su-modal label {
+  display: block;
+  font-size: 13px;
+  color: rgba(229, 231, 235, 0.75);
+  margin-top: 10px;
+}
+
+.su-modal input,
+.su-modal select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(15, 23, 42, 0.85);
+  color: #e5e7eb;
+  outline: none;
+}
+
+.su-modal input:focus,
+.su-modal select:focus {
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+}
+/* ===== Botões padrão ===== */
+.su-btn {
+  background: #1f2933; /* slate-800 */
+  color: #e5e7eb; /* gray-200 */
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.su-btn:hover {
+  background: #111827; /* slate-900 */
+}
+/* Editar */
+.su-btn.edit {
+  background: #1e3a8a; /* blue-900 */
+  border-color: #2563eb;
+}
+
+.su-btn.edit:hover {
+  background: #1d4ed8;
+}
+
+/* Reset senha */
+.su-btn.reset {
+  background: #78350f; /* amber-900 */
+  border-color: #f59e0b;
+}
+
+.su-btn.reset:hover {
+  background: #92400e;
+}
+
+/* Desativar */
+.su-btn.danger {
+  background: #7f1d1d; /* red-900 */
+  border-color: #ef4444;
+}
+
+.su-btn.danger:hover {
+  background: #991b1b;
+}
+.su-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.su-table td:last-child {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+/* REMOVER: alerta de bot na sidebar (modo highlight) */
+.chat-history-layout.bot-alert .chat-history-header h1 {
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+/* (Opcional) se existir no seu arquivo, pode apagar o keyframes também */
+@keyframes bot-pulse-bg {
+  0% { box-shadow: none; }
+  70% { box-shadow: none; }
+  100% { box-shadow: none; }
+}
+
+/* Garanta que o h1 nunca ganhe “caixa/contorno” estranho */
+.chat-history-header h1 {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
 }

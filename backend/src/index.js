@@ -32,21 +32,26 @@ const { default: logger } = await import("./logger.js");
 // Routers
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
 const { default: humanRouter } = await import("./human/humanRouter.js");
+const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
 
+// ✅ Settings
+const { default: usersRouter } = await import("./settings/usersRouter.js");
+const { default: groupsRouter } = await import("./settings/groupsRouter.js");
+
+// ✅ Auth
+const { default: passwordRouter } = await import("./auth/passwordRouter.js");
+
+// ✅ Middlewares / Security
+const { requireAuth } = await import("./middleware/requireAuth.js");
+const { verifyPassword } = await import("./security/passwords.js");
+
+// ✅ Outbound
 const { default: outboundRouter } = await import("./outbound/outboundRouter.js");
 const { default: numbersRouter } = await import("./outbound/numbersRouter.js");
 const { default: templatesRouter } = await import("./outbound/templatesRouter.js");
 const { default: assetsRouter } = await import("./outbound/assetsRouter.js");
-
 const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js");
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
-
-// ✅ Settings / Users + Password (convite / reset / criar senha)
-const { default: usersRouter } = await import("./settings/usersRouter.js");
-const { default: passwordRouter } = await import("./auth/passwordRouter.js");
-
-// ✅ Password verify helper (login com hash)
-const { verifyPassword } = await import("./security/passwords.js");
 
 // Chatbot engine
 const { getChatbotSettingsForAccount, decideRoute } = await import(
@@ -109,7 +114,7 @@ let state = loadStateFromDisk();
 
 // garante estruturas básicas
 if (!state.users) state.users = [];
-if (!state.passwordTokens) state.passwordTokens = []; // ✅ novo (convite/reset)
+if (!state.passwordTokens) state.passwordTokens = []; // ✅ convite/reset
 if (!state.conversations) state.conversations = [];
 if (!state.messagesByConversation) state.messagesByConversation = {};
 if (!state.settings) {
@@ -132,7 +137,7 @@ function loadStateFromDisk() {
       logger.warn({ DB_FILE }, "📁 data.json não encontrado, criando inicial.");
       const initial = {
         users: [],
-        passwordTokens: [], // ✅ novo
+        passwordTokens: [],
         contacts: [],
         conversations: [],
         messagesByConversation: {},
@@ -147,7 +152,7 @@ function loadStateFromDisk() {
     const parsed = JSON.parse(raw);
 
     if (!parsed.users) parsed.users = [];
-    if (!Array.isArray(parsed.passwordTokens)) parsed.passwordTokens = []; // ✅ novo
+    if (!Array.isArray(parsed.passwordTokens)) parsed.passwordTokens = [];
     if (!parsed.contacts) parsed.contacts = [];
     if (!Array.isArray(parsed.outboundCampaigns)) parsed.outboundCampaigns = [];
 
@@ -230,8 +235,7 @@ function ensureContactsFromConversations() {
   }
 }
 
-// Sempre garante o admin@gplabs.com.br com senha em TEXTO PURO (DEV)
-// ✅ Agora também garante role/isActive e mantém compat com passwordHash
+// Sempre garante o admin@gplabs.com.br com senha dev (legado)
 function ensureDefaultAdminUser() {
   const email = "admin@gplabs.com.br";
   const password = "gplabs123";
@@ -251,7 +255,6 @@ function ensureDefaultAdminUser() {
         ? state.users[existingIndex].isActive
         : true;
 
-    // mantém senha dev em texto (legado). Se quiser forçar hash, a gente troca depois.
     state.users[existingIndex].password = password;
     if (state.users[existingIndex].passwordHash === undefined) {
       state.users[existingIndex].passwordHash = null;
@@ -267,7 +270,7 @@ function ensureDefaultAdminUser() {
       id: nextId,
       name: "Administrador",
       email,
-      password, // legado dev
+      password,
       passwordHash: null,
       role: "admin",
       isActive: true,
@@ -417,10 +420,7 @@ function findOrCreateConversationByPhone(phone, contactName, channel) {
     latest.updatedAt = new Date().toISOString();
     saveStateToDisk();
 
-    logger.info(
-      { conversationId: latest.id, phone },
-      "⏱️ Sessão auto-closed (24h)"
-    );
+    logger.info({ conversationId: latest.id, phone }, "⏱️ Sessão auto-closed (24h)");
     return createNewConversation(phone, contactName, channel);
   }
 
@@ -471,13 +471,12 @@ function getConversationHistoryForBot(conversationId, maxMessages = 10) {
     const role = m.direction === "in" ? "user" : "assistant";
     const content =
       m.type === "text" ? m.text || "" : m.caption || m.text || `[${m.type}]`;
-
     return { role, content };
   });
 }
 
 // ===============================
-// 🔎 CAMPANHAS – TRACK STATUS (sent/delivered/read/failed)
+// 🔎 CAMPANHAS – TRACK STATUS
 // ===============================
 const META_ERROR_DOCS_BASE =
   "https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes?locale=pt_BR";
@@ -500,9 +499,7 @@ function findCampaignResultByWaMessageId(waMessageId) {
 
   for (const c of campaigns) {
     const results = Array.isArray(c?.results) ? c.results : [];
-    const r = results.find(
-      (x) => x && String(x.waMessageId) === String(waMessageId)
-    );
+    const r = results.find((x) => x && String(x.waMessageId) === String(waMessageId));
     if (r) return { campaign: c, result: r };
   }
 
@@ -515,7 +512,6 @@ function applyWebhookStatusToCampaign(statusObj) {
   if (!found) return false;
 
   const { campaign, result } = found;
-
   const newStatus = normalizeWaStatus(statusObj?.status);
 
   const tsIso = statusObj?.timestamp
@@ -576,7 +572,6 @@ function applyWebhookStatusToCampaign(statusObj) {
   });
 
   if (!campaign.timeline) campaign.timeline = {};
-
   if (
     !campaign.timeline.startedAt &&
     (newStatus === "sent" || newStatus === "delivered" || newStatus === "read")
@@ -636,10 +631,7 @@ async function sendWhatsAppText(to, text) {
   const data = await res.json();
 
   if (!res.ok) {
-    logger.error(
-      { status: res.status, data },
-      "❌ Erro ao enviar texto WhatsApp"
-    );
+    logger.error({ status: res.status, data }, "❌ Erro ao enviar texto WhatsApp");
     throw new Error("Erro ao enviar mensagem de texto");
   }
 
@@ -686,10 +678,7 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
     throw new Error("Erro ao enviar mídia");
   }
 
-  logger.info(
-    { to, type, waMessageId: data?.messages?.[0]?.id },
-    "📤 Mídia enviada"
-  );
+  logger.info({ to, type, waMessageId: data?.messages?.[0]?.id }, "📤 Mídia enviada");
   return data;
 }
 
@@ -725,12 +714,9 @@ async function downloadWhatsappMedia(mediaObj, logicalType) {
     let fileUrl = mediaObj.url;
 
     if (!fileUrl) {
-      const metaRes = await fetch(
-        `https://graph.facebook.com/v22.0/${mediaId}`,
-        {
-          headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
-        }
-      );
+      const metaRes = await fetch(`https://graph.facebook.com/v22.0/${mediaId}`, {
+        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+      });
       const meta = await metaRes.json();
       if (!metaRes.ok) {
         logger.error({ status: metaRes.status, meta }, "❌ Erro metadata mídia");
@@ -836,35 +822,41 @@ app.get("/r/meta-error/:code?", (req, res) => {
 // =============================
 app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
+app.use("/api/human", assignmentRouter);
 
 // ===============================
-// ✅ SETTINGS / USERS + AUTH PASSWORD (token público)
-// ⚠️ IMPORTANTE: o usersRouter já tem paths "/users", então o mount é "/settings"
-// Resultado final: GET /settings/users ✅
+// ✅ SETTINGS (SEM CONFLITO)
 // ===============================
+// ⚠️ usersRouter já tem paths internos "/users"
 app.use("/settings", usersRouter);
+
+// ✅ groupsRouter responde:
+// GET /settings/groups
+// POST /settings/groups
+// PATCH /settings/groups/:id
+// PATCH /settings/groups/:id/deactivate
+// PATCH /settings/groups/:id/activate
+// e dentro dele: /settings/groups/:id/members/*
+app.use("/settings/groups", groupsRouter);
+
+// ✅ Auth
 app.use("/auth", passwordRouter);
 
 // ===============================
 // ✅ OUTBOUND – ORDEM CORRETA + SEM DUPLICAÇÃO
 // ===============================
-logger.info(
-  "🧩 Montando rotas Outbound (assets/numbers/templates/campaigns/optout/outbound)"
-);
+logger.info("🧩 Montando rotas Outbound (assets/numbers/templates/campaigns/optout/outbound)");
 
-// ✅ ASSETS PRIMEIRO (antes de qualquer "/outbound" genérico)
 app.use("/outbound/assets", assetsRouter);
-
-// Rotas específicas
 app.use("/outbound/numbers", numbersRouter);
 app.use("/outbound/templates", templatesRouter);
 app.use("/outbound/campaigns", campaignsRouter);
 
-// ✅ Opt-Out (compatibilidade dupla para evitar 404)
+// Opt-Out (compat dupla)
 app.use("/outbound/optout", optoutRouter);
 app.use("/outbound", optoutRouter);
 
-// ✅ Agregador outbound (deixa por último)
+// agregador por último
 app.use("/outbound", outboundRouter);
 
 // ===============================
@@ -896,15 +888,13 @@ app.get("/health", (req, res) => {
 });
 
 // ===============================
-// LOGIN – /login (legado + hash + role + isActive)
+// LOGIN – /login
 // ===============================
 app.post("/login", (req, res) => {
   const { email, password } = req.body || {};
 
   if (!email || !password) {
-    return res
-      .status(400)
-      .json({ error: "Informe e-mail e senha para entrar." });
+    return res.status(400).json({ error: "Informe e-mail e senha para entrar." });
   }
 
   const users = state.users || [];
@@ -913,12 +903,10 @@ app.post("/login", (req, res) => {
   );
 
   if (!user) return res.status(401).json({ error: "Usuário não encontrado." });
-  if (user.isActive === false)
-    return res.status(403).json({ error: "Usuário inativo." });
+  if (user.isActive === false) return res.status(403).json({ error: "Usuário inativo." });
 
   const ok =
-    (user.passwordHash &&
-      verifyPassword(String(password), user.passwordHash)) ||
+    (user.passwordHash && verifyPassword(String(password), user.passwordHash)) ||
     (!user.passwordHash && String(password) === String(user.password));
 
   if (!ok) return res.status(401).json({ error: "Senha incorreta." });
@@ -929,10 +917,7 @@ app.post("/login", (req, res) => {
     { expiresIn: "8h" }
   );
 
-  logger.info(
-    { email: user.email, role: user.role || "agent" },
-    "✅ Login realizado"
-  );
+  logger.info({ email: user.email, role: user.role || "agent" }, "✅ Login realizado");
 
   return res.json({
     token,
@@ -962,13 +947,47 @@ app.get("/conversations/:id/messages", (req, res) => {
   res.json(state.messagesByConversation[id] || []);
 });
 
+app.post("/conversations/:id/messages/human", requireAuth, async (req, res, next) => {
+  const { id } = req.params;
+  const { text } = req.body || {};
+
+  const conversation = findConversationById(id);
+  if (!conversation) return res.status(404).json({ error: "Conversa não encontrada." });
+
+  if (!text || !text.trim())
+    return res.status(400).json({ error: "Texto da mensagem é obrigatório." });
+
+  try {
+    const waResponse = await sendWhatsAppText(conversation.phone, text);
+    const waMessageId = waResponse?.messages?.[0]?.id || null;
+
+    const me = req.user;
+
+    const message = addMessageToConversation(conversation.id, {
+      direction: "out",
+      type: "text",
+      text,
+      timestamp: new Date().toISOString(),
+      waMessageId,
+      from: "agent",
+      senderId: me.id,
+      senderName: me.name,
+      senderRole: me.role
+    });
+
+    res.status(201).json(message);
+  } catch (err) {
+    logger.error({ err }, "❌ Erro ao enviar mensagem humana");
+    next(err);
+  }
+});
+
 app.post("/conversations/:id/messages", async (req, res, next) => {
   const { id } = req.params;
   const { text } = req.body || {};
 
   const conversation = findConversationById(id);
-  if (!conversation)
-    return res.status(404).json({ error: "Conversa não encontrada." });
+  if (!conversation) return res.status(404).json({ error: "Conversa não encontrada." });
   if (!text || !text.trim())
     return res.status(400).json({ error: "Texto da mensagem é obrigatório." });
 
@@ -996,18 +1015,12 @@ app.post("/conversations/:id/media", async (req, res, next) => {
   const { type, mediaUrl, caption } = req.body || {};
 
   const conversation = findConversationById(id);
-  if (!conversation)
-    return res.status(404).json({ error: "Conversa não encontrada." });
+  if (!conversation) return res.status(404).json({ error: "Conversa não encontrada." });
   if (!type || !mediaUrl)
     return res.status(400).json({ error: "type e mediaUrl são obrigatórios." });
 
   try {
-    const waResponse = await sendWhatsAppMedia(
-      conversation.phone,
-      type,
-      mediaUrl,
-      caption
-    );
+    const waResponse = await sendWhatsAppMedia(conversation.phone, type, mediaUrl, caption);
     const waMessageId = waResponse?.messages?.[0]?.id || null;
 
     const message = addMessageToConversation(conversation.id, {
@@ -1031,13 +1044,10 @@ app.patch("/conversations/:id/status", (req, res) => {
   const { status, tags } = req.body || {};
 
   const conversation = findConversationById(id);
-  if (!conversation)
-    return res.status(404).json({ error: "Conversa não encontrada." });
+  if (!conversation) return res.status(404).json({ error: "Conversa não encontrada." });
 
   if (!["open", "closed"].includes(status)) {
-    return res
-      .status(400)
-      .json({ error: "Status inválido. Use 'open' ou 'closed'." });
+    return res.status(400).json({ error: "Status inválido. Use 'open' ou 'closed'." });
   }
 
   conversation.status = status;
@@ -1053,8 +1063,7 @@ app.patch("/conversations/:id/notes", (req, res) => {
   const { notes } = req.body || {};
 
   const conversation = findConversationById(id);
-  if (!conversation)
-    return res.status(404).json({ error: "Conversa não encontrada." });
+  if (!conversation) return res.status(404).json({ error: "Conversa não encontrada." });
 
   conversation.notes = notes || "";
   conversation.updatedAt = new Date().toISOString();
@@ -1109,7 +1118,6 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
       "📩 Webhook recebido"
     );
 
-    // ✅ 1) STATUS FIRST (sent/delivered/read/failed)
     if (Array.isArray(statuses) && statuses.length > 0) {
       let updated = 0;
       for (const st of statuses) {
@@ -1117,20 +1125,13 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
           const ok = applyWebhookStatusToCampaign(st);
           if (ok) updated++;
         } catch (e) {
-          logger.error(
-            { e, stId: st?.id },
-            "❌ Falha ao aplicar status na campanha"
-          );
+          logger.error({ e, stId: st?.id }, "❌ Falha ao aplicar status na campanha");
         }
       }
       if (updated > 0)
-        logger.info(
-          { updated },
-          "📊 Status de campanha atualizados via webhook"
-        );
+        logger.info({ updated }, "📊 Status de campanha atualizados via webhook");
     }
 
-    // ✅ 2) MENSAGENS INBOUND
     for (const msg of messages) {
       const waId = msg.from;
       const profileName = value?.contacts?.[0]?.profile?.name;
@@ -1177,10 +1178,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
 
       const existingMsgs = state.messagesByConversation[conv.id] || [];
       if (existingMsgs.some((m) => m.waMessageId === msg.id)) {
-        logger.warn(
-          { waMessageId: msg.id },
-          "⚠️ Mensagem duplicada, ignorando"
-        );
+        logger.warn({ waMessageId: msg.id }, "⚠️ Mensagem duplicada, ignorando");
         continue;
       }
 
@@ -1261,6 +1259,6 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   logger.info({ port: PORT, WABA_ID, PHONE_NUMBER_ID }, "🚀 API rodando");
   logger.info(
-    "✅ Rotas esperadas: /settings/users, /auth/*, /outbound/assets, /outbound/numbers, /outbound/templates, /outbound/campaigns, /outbound/optout, /uploads/*"
+    "✅ Rotas esperadas: /settings/users, /settings/groups, /settings/groups/:id/members, /auth/*, /outbound/*, /uploads/*"
   );
 });

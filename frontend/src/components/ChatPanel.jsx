@@ -1,31 +1,19 @@
 // frontend/src/components/ChatPanel.jsx
 import { useEffect, useRef, useState } from "react";
 
-// Paleta simples de emojis para o atendente
 const EMOJI_PALETTE = [
-  "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "😎",
-  "🙂", "😉", "🤩", "🥳", "😇", "😅", "😢", "😭",
-  "😡", "👍", "👎", "🙏", "👏", "💪", "✨", "🔥",
-  "❤️", "💚", "💙", "💛", "🧡", "🤍", "🤝", "✅"
+  "😀","😁","😂","🤣","😊","😍","😘","😎",
+  "🙂","😉","🤩","🥳","😇","😅","😢","😭",
+  "😡","👍","👎","🙏","👏","💪","✨","🔥",
+  "❤️","💚","💙","💛","🧡","🤍","🤝","✅"
 ];
 
-/**
- * Painel principal do chat (coluna central)
- *
- * Props:
- * - conversation: objeto da conversa selecionada
- * - messages: array de mensagens
- * - loadingMessages: boolean
- * - onSendText(text: string)
- * - onSendMedia({ type, mediaUrl, caption })
- * - onChangeStatus(conversationId, newStatus)
- */
 export default function ChatPanel({
   conversation,
   messages,
   loadingMessages,
   onSendText,
-  onSendMedia, // reservado pro futuro
+  onSendMedia,
   onChangeStatus
 }) {
   const [draft, setDraft] = useState("");
@@ -36,20 +24,27 @@ export default function ChatPanel({
 
   const isClosed = conversation?.status === "closed";
 
-  // Auto-scroll para a última mensagem
   useEffect(() => {
     if (!bottomRef.current) return;
     bottomRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, loadingMessages]);
 
-  // Ao trocar de conversa: limpa rascunho e fecha emojis
   useEffect(() => {
     setDraft("");
     setShowEmoji(false);
   }, [conversation?.id]);
 
-  // Helpers de formatação -------------------------
   function formatMessageText(msg) {
+    if (msg?.type === "system") {
+      return (
+        msg?.textPublic ||
+        msg?.text ||
+        msg?.message ||
+        msg?.event ||
+        "Atualização do atendimento"
+      );
+    }
+
     return (
       msg?.text?.body ??
       msg?.text ??
@@ -72,7 +67,6 @@ export default function ChatPanel({
 
     let date;
     if (typeof raw === "number") {
-      // segundos vs ms
       date = raw > 10_000_000_000 ? new Date(raw) : new Date(raw * 1000);
     } else {
       date = new Date(raw);
@@ -82,23 +76,18 @@ export default function ChatPanel({
     return date.toLocaleString();
   }
 
-  // Ações ----------------------------------------
   function handleSubmit(e) {
     e.preventDefault();
     const text = draft.trim();
     if (!text || !conversation || isClosed) return;
-    if (onSendText) {
-      onSendText(text);
-    }
+    onSendText?.(text);
     setDraft("");
     setShowEmoji(false);
   }
 
   function handleEmojiClick(emoji) {
     setDraft((prev) => prev + emoji);
-    if (textareaRef.current) {
-      textareaRef.current.focus();
-    }
+    textareaRef.current?.focus();
   }
 
   function handleStatusChange(e) {
@@ -120,10 +109,8 @@ export default function ChatPanel({
     "Contato sem nome";
   const headerPhone = conversation?.phone || "—";
 
-  // Render ---------------------------------------
   return (
     <div className="chat-panel">
-      {/* HEADER DO CHAT */}
       <header className="chat-panel-header">
         <div className="chat-panel-header-left">
           <div className="chat-panel-avatar">
@@ -168,12 +155,9 @@ export default function ChatPanel({
         </div>
       </header>
 
-      {/* LISTA DE MENSAGENS */}
       <div className="chat-messages">
         {loadingMessages && (
-          <div className="chat-history-empty">
-            Carregando mensagens...
-          </div>
+          <div className="chat-history-empty">Carregando mensagens...</div>
         )}
 
         {!loadingMessages && (!messages || messages.length === 0) && (
@@ -183,9 +167,38 @@ export default function ChatPanel({
         )}
 
         {messages?.map((msg) => {
-          const key = msg.id || msg._id || msg.timestamp;
-          const isInbound = msg.direction === "in";
-          const isBot = msg.isBot || msg.fromBot;
+          const key = msg.id || msg._id || msg.timestamp || Math.random();
+
+          // ✅ Mensagens de sistema (centralizadas)
+          if (msg?.type === "system") {
+            const text = formatMessageText(msg);
+            const ts = formatTimestamp(msg);
+            return (
+              <div key={key} className="message-row" style={{ justifyContent: "center" }}>
+                <div
+                  style={{
+                    maxWidth: 560,
+                    background: "rgba(148,163,184,0.12)",
+                    border: "1px solid rgba(148,163,184,0.25)",
+                    color: "#e5e7eb",
+                    padding: "10px 12px",
+                    borderRadius: 14,
+                    textAlign: "center"
+                  }}
+                >
+                  <div className="chat-message-text">{text}</div>
+                  {ts && (
+                    <div className="message-timestamp" style={{ opacity: 0.7, marginTop: 6 }}>
+                      {ts}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          }
+
+          const isInbound = msg.direction === "in" || msg.from === "client";
+          const isBot = !!(msg.isBot || msg.fromBot || msg.from === "bot");
 
           const rowClass = isInbound
             ? "message-row message-row-in"
@@ -197,12 +210,30 @@ export default function ChatPanel({
           const text = formatMessageText(msg);
           const ts = formatTimestamp(msg);
 
+          // ✅ Label do remetente (resolve teu “Atendente”)
+          const senderLabel = isInbound
+            ? (conversation?.contactName || conversation?.phone || "Cliente")
+            : (isBot
+                ? "🤖 Bot"
+                : `👤 ${msg.senderName || msg.byName || msg.agentName || "Atendente"}`);
+
           return (
             <div key={key} className={rowClass}>
               <div className={bubbleClass}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "rgba(229,231,235,0.7)",
+                    marginBottom: 6
+                  }}
+                >
+                  {senderLabel}
+                </div>
+
                 <div className="chat-message-text">
                   {text || "[mensagem sem texto]"}
                 </div>
+
                 <div className="message-timestamp">
                   {ts}
                   {isBot ? " · Bot" : " · Humano"}
@@ -215,9 +246,7 @@ export default function ChatPanel({
         <div ref={bottomRef} />
       </div>
 
-      {/* COMPOSER / INPUT */}
       <form className="chat-composer" onSubmit={handleSubmit}>
-        {/* Emoji picker flutuando acima do input */}
         {showEmoji && !isClosed && (
           <div className="chat-emoji-picker">
             {EMOJI_PALETTE.map((emoji) => (
@@ -233,7 +262,6 @@ export default function ChatPanel({
           </div>
         )}
 
-        {/* Botão de emoji */}
         <button
           type="button"
           className="chat-composer-emoji-btn"
@@ -244,7 +272,6 @@ export default function ChatPanel({
           😊
         </button>
 
-        {/* Textarea */}
         <textarea
           ref={textareaRef}
           className="chat-composer-textarea"
@@ -259,7 +286,6 @@ export default function ChatPanel({
           rows={1}
         />
 
-        {/* Botão enviar */}
         <button
           type="submit"
           className="chat-composer-send"

@@ -6,6 +6,7 @@ import {
   logHumanAction,
   closeHumanSession
 } from "./humanHistory.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 
 const router = express.Router();
 
@@ -13,11 +14,23 @@ const router = express.Router();
  * MÓDULO HUMAN
  * -------------
  * Rotas relacionadas ao atendimento humano.
- * Toda a persistência fica em humanStorage.js / humanHistory.js,
- * usando o arquivo human-data.json na raiz do backend.
+ * Persistência em humanHistory.js / human-data.json
  */
 
-// Ping simples para saber se o módulo está ativo
+/**
+ * Helper padrão para identificar o usuário logado
+ * (fonte única de verdade para auditoria)
+ */
+function getUserFromReq(req) {
+  const u = req.user || {};
+  return {
+    id: u.id || u.userId || "unknown",
+    name: u.name || u.fullName || u.email || "Atendente",
+    role: u.role || "agent"
+  };
+}
+
+// Ping simples
 router.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -27,9 +40,9 @@ router.get("/", (req, res) => {
 
 /**
  * GET /api/human/sessions
- * Lista sessões humanas registradas (para dashboards futuros).
+ * Lista sessões humanas registradas
  */
-router.get("/sessions", async (req, res, next) => {
+router.get("/sessions", requireAuth, async (req, res, next) => {
   try {
     const sessions = await listHumanSessions();
     res.json(sessions);
@@ -40,9 +53,9 @@ router.get("/sessions", async (req, res, next) => {
 
 /**
  * GET /api/human/actions
- * Lista ações dos atendentes (log de atividade humano).
+ * Lista ações dos atendentes (log de auditoria)
  */
-router.get("/actions", async (req, res, next) => {
+router.get("/actions", requireAuth, async (req, res, next) => {
   try {
     const actions = await listHumanActions();
     res.json(actions);
@@ -57,15 +70,18 @@ router.get("/actions", async (req, res, next) => {
  *
  * body esperado:
  * {
- *   "conversationId": 123,
- *   "agent": "Genivaldo",
+ *   "conversationId": "conv_123",
  *   "type": "note|takeover|release|tag_change|status_change",
  *   "note": "texto opcional"
  * }
+ *
+ * ⚠️ IMPORTANTE:
+ * O atendente NÃO vem mais do body.
+ * Sempre usamos o usuário autenticado (req.user).
  */
-router.post("/actions", async (req, res, next) => {
+router.post("/actions", requireAuth, async (req, res, next) => {
   try {
-    const { conversationId, agent, type, note } = req.body || {};
+    const { conversationId, type, note } = req.body || {};
 
     if (!conversationId || !type) {
       return res.status(400).json({
@@ -73,9 +89,13 @@ router.post("/actions", async (req, res, next) => {
       });
     }
 
+    const me = getUserFromReq(req);
+
     const action = await logHumanAction({
       conversationId,
-      agent: agent || "unknown",
+      agentId: me.id,
+      agentName: me.name,
+      agentRole: me.role,
       type,
       note: note || ""
     });
@@ -88,13 +108,18 @@ router.post("/actions", async (req, res, next) => {
 
 /**
  * POST /api/human/:conversationId/close
- * Fecha uma sessão humana (marcando endAt no histórico).
+ * Fecha uma sessão humana (fim de atendimento)
  */
-router.post("/:conversationId/close", async (req, res, next) => {
+router.post("/:conversationId/close", requireAuth, async (req, res, next) => {
   try {
     const { conversationId } = req.params;
+    const me = getUserFromReq(req);
 
-    const session = await closeHumanSession(conversationId);
+    const session = await closeHumanSession(conversationId, {
+      closedById: me.id,
+      closedByName: me.name,
+      closedByRole: me.role
+    });
 
     if (!session) {
       return res.status(404).json({ error: "Sessão não encontrada." });

@@ -2,7 +2,7 @@
 import "../../styles/chatbot.css";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchConversations } from "../../api.js";
+import { fetchConversations, fetchMessages } from "../../api.js";
 
 /**
  * Regras:
@@ -11,75 +11,111 @@ import { fetchConversations } from "../../api.js";
  *    - "bot_resolved": status "closed" e currentMode === "bot"
  *    - "transferred": currentMode === "human"
  *    - "in_bot": status "open" e currentMode === "bot"
+ *    - "mixed": demais casos
  */
 
 function classifyOutcome(conv) {
-  const botAttempts = conv.botAttempts || 0;
-  if (botAttempts === 0) return null;
+  const botAttempts = Number(conv?.botAttempts || 0);
+  if (botAttempts <= 0) return null;
 
-  if (conv.currentMode === "human") return "transferred";
-  if (conv.status === "closed" && conv.currentMode === "bot")
-    return "bot_resolved";
-  if (conv.status === "open" && conv.currentMode === "bot") return "in_bot";
+  const status = String(conv?.status || "").toLowerCase();
+  const mode = String(conv?.currentMode || "").toLowerCase();
 
+  if (mode === "human") return "transferred";
+  if (status === "closed" && mode === "bot") return "bot_resolved";
+  if (status === "open" && mode === "bot") return "in_bot";
   return "mixed";
+}
+
+function outcomeLabel(outcome) {
+  if (outcome === "bot_resolved") return "Resolvido pelo bot";
+  if (outcome === "transferred") return "Transferido para humano";
+  if (outcome === "in_bot") return "Em andamento com o bot";
+  return "Misto";
+}
+
+function safeLocale(dt) {
+  try {
+    return dt ? new Date(dt).toLocaleString() : "—";
+  } catch {
+    return "—";
+  }
+}
+
+function msgText(m) {
+  return (
+    m?.text ||
+    m?.body ||
+    m?.caption ||
+    (m?.type === "image" ? "[imagem]" : "") ||
+    (m?.type === "audio" ? "[áudio]" : "") ||
+    (m?.type === "video" ? "[vídeo]" : "") ||
+    (m?.type ? `[${m.type}]` : "[mensagem]")
+  );
 }
 
 export default function ChatbotHistoryPage() {
   const [conversations, setConversations] = useState([]);
   const [statusFilter, setStatusFilter] = useState("all"); // all | open | closed
-  const [outcomeFilter, setOutcomeFilter] = useState("all"); // all | bot_resolved | transferred | in_bot
+  const [outcomeFilter, setOutcomeFilter] = useState("all"); // all | bot_resolved | transferred | in_bot | mixed
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  // drawer (detalhe)
+  const [openId, setOpenId] = useState(null);
+  const [openConv, setOpenConv] = useState(null);
+  const [msgLoading, setMsgLoading] = useState(false);
+  const [msgError, setMsgError] = useState("");
+  const [messages, setMessages] = useState([]);
+
+  async function load() {
+    try {
+      setLoading(true);
+      setError("");
+
+      const data = await fetchConversations("all");
+      const list = Array.isArray(data) ? data : [];
+
+      const withBot = list.filter((c) => Number(c?.botAttempts || 0) > 0);
+
+      withBot.sort((a, b) => {
+        const da = Date.parse(a?.updatedAt || "") || 0;
+        const db = Date.parse(b?.updatedAt || "") || 0;
+        return db - da;
+      });
+
+      setConversations(withBot);
+    } catch (err) {
+      console.error("Erro ao carregar histórico do bot:", err);
+      setError(err?.message || "Erro ao carregar histórico do bot.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    async function load() {
-      try {
-        setLoading(true);
-        // pega todas as conversas, filtro de bot é feito no front
-        const data = await fetchConversations("all");
-        const list = Array.isArray(data) ? data : [];
-
-        // apenas conversas onde o bot atuou
-        const withBot = list.filter((c) => (c.botAttempts || 0) > 0);
-        setConversations(withBot);
-      } catch (err) {
-        console.error("Erro ao carregar histórico do bot:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-
     load();
   }, []);
 
   const filteredConversations = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
+    const term = String(searchTerm || "").trim().toLowerCase();
 
     return conversations.filter((c) => {
       const outcome = classifyOutcome(c);
-      if (!outcome) return false; // não deveria acontecer, mas por segurança
+      if (!outcome) return false;
 
-      // filtro por status (open/closed/all)
-      if (statusFilter !== "all" && c.status !== statusFilter) {
-        return false;
-      }
+      const status = String(c?.status || "").toLowerCase();
 
-      // filtro por outcome (bot_resolved / transferred / in_bot / all)
-      if (outcomeFilter !== "all" && outcome !== outcomeFilter) {
-        return false;
-      }
+      if (statusFilter !== "all" && status !== statusFilter) return false;
+      if (outcomeFilter !== "all" && outcome !== outcomeFilter) return false;
 
-      // filtro de busca
-      const matchesTerm =
-        !term ||
-        (c.contactName &&
-          c.contactName.toLowerCase().includes(term)) ||
-        (c.phone && c.phone.toLowerCase().includes(term)) ||
-        (c.lastMessage &&
-          c.lastMessage.toLowerCase().includes(term));
+      const name = String(c?.contactName || "").toLowerCase();
+      const phone = String(c?.phone || "").toLowerCase();
+      const last = String(c?.lastMessage || "").toLowerCase();
 
-      return matchesTerm;
+      if (!term) return true;
+      return name.includes(term) || phone.includes(term) || last.includes(term);
     });
   }, [conversations, statusFilter, outcomeFilter, searchTerm]);
 
@@ -99,159 +135,285 @@ export default function ChatbotHistoryPage() {
     return { total, botResolved, transferred, inBot };
   }, [conversations]);
 
+  async function openConversation(c) {
+    const id = c?.id;
+    if (!id) return;
+
+    setOpenId(id);
+    setOpenConv(c);
+    setMessages([]);
+    setMsgError("");
+
+    try {
+      setMsgLoading(true);
+      const res = await fetchMessages(id);
+      const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setMessages(list);
+    } catch (err) {
+      console.error("Erro ao carregar mensagens:", err);
+      setMsgError(err?.message || "Erro ao carregar mensagens da conversa.");
+    } finally {
+      setMsgLoading(false);
+    }
+  }
+
+  function closeDrawer() {
+    setOpenId(null);
+    setOpenConv(null);
+    setMessages([]);
+    setMsgError("");
+    setMsgLoading(false);
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "Escape" && openId) closeDrawer();
+  }
+
+  useEffect(() => {
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId]);
+
   return (
-    <div className="chatbot-history-layout">
-      <header className="chatbot-history-header">
-        <div>
-          <h1>Histórico do Chatbot</h1>
-          <p>
-            Visão das conversas em que o bot atuou, com separação entre
-            resolvidas pelo bot e transferidas para humanos.
-          </p>
+    <div className="cbh-page">
+      <div className="cbh-card">
+        <div className="cbh-top">
+          <div>
+            <h1 className="cbh-title">Histórico do Chatbot</h1>
+            <p className="cbh-subtitle">
+              Visão das conversas em que o bot atuou, com separação entre
+              resolvidas pelo bot e transferidas para humanos.
+            </p>
+
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="cbh-btn cbh-btn-ghost"
+                onClick={load}
+                disabled={loading}
+                title="Recarregar"
+              >
+                {loading ? "Atualizando..." : "Atualizar"}
+              </button>
+            </div>
+          </div>
+
+          <div className="cbh-stats">
+            <div className="cbh-stat">
+              <div className="cbh-stat-label">Total com bot</div>
+              <div className="cbh-stat-value">{stats.total}</div>
+            </div>
+            <div className="cbh-stat">
+              <div className="cbh-stat-label">Resolvido pelo bot</div>
+              <div className="cbh-stat-value">{stats.botResolved}</div>
+            </div>
+            <div className="cbh-stat">
+              <div className="cbh-stat-label">Transferido para humano</div>
+              <div className="cbh-stat-value">{stats.transferred}</div>
+            </div>
+            <div className="cbh-stat">
+              <div className="cbh-stat-label">Em andamento com o bot</div>
+              <div className="cbh-stat-value">{stats.inBot}</div>
+            </div>
+          </div>
         </div>
 
-        <div className="chatbot-history-stats">
-          <div className="stat-card">
-            <span className="stat-label">Total com bot</span>
-            <span className="stat-value">{stats.total}</span>
+        <div className="cbh-filters">
+          <div className="cbh-search">
+            <input
+              className="cbh-input"
+              type="text"
+              placeholder="Buscar por nome, telefone ou última mensagem..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
           </div>
-          <div className="stat-card stat-bot-resolved">
-            <span className="stat-label">Resolvido pelo bot</span>
-            <span className="stat-value">{stats.botResolved}</span>
+
+          <div className="cbh-filter-block">
+            <div className="cbh-filter-label">Status</div>
+            <div className="cbh-pills">
+              <button
+                type="button"
+                className={`cbh-pill ${statusFilter === "all" ? "is-active" : ""}`}
+                onClick={() => setStatusFilter("all")}
+              >
+                Todos
+              </button>
+              <button
+                type="button"
+                className={`cbh-pill ${statusFilter === "open" ? "is-active" : ""}`}
+                onClick={() => setStatusFilter("open")}
+              >
+                Abertas
+              </button>
+              <button
+                type="button"
+                className={`cbh-pill ${statusFilter === "closed" ? "is-active" : ""}`}
+                onClick={() => setStatusFilter("closed")}
+              >
+                Encerradas
+              </button>
+            </div>
           </div>
-          <div className="stat-card stat-transferred">
-            <span className="stat-label">Transferido para humano</span>
-            <span className="stat-value">{stats.transferred}</span>
-          </div>
-          <div className="stat-card stat-in-bot">
-            <span className="stat-label">Em andamento com o bot</span>
-            <span className="stat-value">{stats.inBot}</span>
+
+          <div className="cbh-filter-block">
+            <div className="cbh-filter-label">Resultado</div>
+            <div className="cbh-pills">
+              <button
+                type="button"
+                className={`cbh-pill ${outcomeFilter === "all" ? "is-active" : ""}`}
+                onClick={() => setOutcomeFilter("all")}
+              >
+                Todos
+              </button>
+              <button
+                type="button"
+                className={`cbh-pill ${outcomeFilter === "bot_resolved" ? "is-active" : ""}`}
+                onClick={() => setOutcomeFilter("bot_resolved")}
+              >
+                Resolvido pelo bot
+              </button>
+              <button
+                type="button"
+                className={`cbh-pill ${outcomeFilter === "transferred" ? "is-active" : ""}`}
+                onClick={() => setOutcomeFilter("transferred")}
+              >
+                Transferido para humano
+              </button>
+              <button
+                type="button"
+                className={`cbh-pill ${outcomeFilter === "in_bot" ? "is-active" : ""}`}
+                onClick={() => setOutcomeFilter("in_bot")}
+              >
+                Em andamento com o bot
+              </button>
+            </div>
           </div>
         </div>
-      </header>
 
-      <section className="chatbot-history-filters">
-        <input
-          type="text"
-          placeholder="Buscar por nome, telefone ou última mensagem..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
+        {error && <div className="cbh-alert">{error}</div>}
 
-        <div className="filter-group">
-          <span className="filter-label">Status:</span>
-          <button
-            className={statusFilter === "all" ? "active" : ""}
-            onClick={() => setStatusFilter("all")}
-          >
-            Todos
-          </button>
-          <button
-            className={statusFilter === "open" ? "active" : ""}
-            onClick={() => setStatusFilter("open")}
-          >
-            Abertas
-          </button>
-          <button
-            className={statusFilter === "closed" ? "active" : ""}
-            onClick={() => setStatusFilter("closed")}
-          >
-            Encerradas
-          </button>
-        </div>
+        {loading && <div className="cbh-loading">Carregando histórico do bot...</div>}
 
-        <div className="filter-group">
-          <span className="filter-label">Resultado:</span>
-          <button
-            className={outcomeFilter === "all" ? "active" : ""}
-            onClick={() => setOutcomeFilter("all")}
-          >
-            Todos
-          </button>
-          <button
-            className={outcomeFilter === "bot_resolved" ? "active" : ""}
-            onClick={() => setOutcomeFilter("bot_resolved")}
-          >
-            Resolvido pelo bot
-          </button>
-          <button
-            className={outcomeFilter === "transferred" ? "active" : ""}
-            onClick={() => setOutcomeFilter("transferred")}
-          >
-            Transferido para humano
-          </button>
-          <button
-            className={outcomeFilter === "in_bot" ? "active" : ""}
-            onClick={() => setOutcomeFilter("in_bot")}
-          >
-            Em andamento com o bot
-          </button>
-        </div>
-      </section>
-
-      <section className="chatbot-history-list">
-        {loading && (
-          <div className="chatbot-history-empty">
-            Carregando histórico do bot...
-          </div>
+        {!loading && !error && filteredConversations.length === 0 && (
+          <div className="cbh-empty">Nenhuma conversa encontrada com os filtros atuais.</div>
         )}
 
-        {!loading && filteredConversations.length === 0 && (
-          <div className="chatbot-history-empty">
-            Nenhuma conversa encontrada com os filtros atuais.
-          </div>
-        )}
+        {!loading && !error && filteredConversations.length > 0 && (
+          <div className="cbh-list">
+            {filteredConversations.map((c) => {
+              const outcome = classifyOutcome(c);
+              const status = String(c?.status || "").toLowerCase();
+              const phone = c?.phone || "—";
+              const displayName = c?.contactName || phone;
 
-        {!loading &&
-          filteredConversations.map((c) => {
-            const outcome = classifyOutcome(c);
-            let outcomeLabel = "";
-            if (outcome === "bot_resolved") outcomeLabel = "Resolvido pelo bot";
-            else if (outcome === "transferred")
-              outcomeLabel = "Transferido para humano";
-            else if (outcome === "in_bot")
-              outcomeLabel = "Em andamento com o bot";
-            else outcomeLabel = "Misto";
+              let outcomeClass = "res-running";
+              if (outcome === "bot_resolved") outcomeClass = "res-bot";
+              else if (outcome === "transferred") outcomeClass = "res-human";
+              else if (outcome === "in_bot") outcomeClass = "res-running";
 
-            return (
-              <article key={c.id} className="chatbot-history-item">
-                <header className="chatbot-history-item-header">
-                  <div>
-                    <div className="chatbot-history-contact-name">
-                      {c.contactName || c.phone}
+              return (
+                <button
+                  key={c.id || `${phone}-${c.updatedAt}`}
+                  type="button"
+                  className="cbh-item cbh-clickable"
+                  onClick={() => openConversation(c)}
+                  style={{ textAlign: "left" }}
+                  aria-label={`Abrir conversa ${displayName}`}
+                >
+                  <div style={{ flex: 1 }}>
+                    <div className="cbh-item-title">
+                      <span className="cbh-name">{displayName}</span>
+                      <span className="cbh-dot" />
+                      <span className="cbh-phone">{phone}</span>
                     </div>
-                    <div className="chatbot-history-phone">{c.phone}</div>
-                  </div>
-                  <div className="chatbot-history-tags">
-                    <span className={`tag status-${c.status}`}>
-                      {c.status === "open" ? "Aberta" : "Encerrada"}
-                    </span>
-                    <span className={`tag outcome-${outcome}`}>
-                      {outcomeLabel}
-                    </span>
-                    <span className="tag bot-attempts">
-                      Bot x{c.botAttempts || 0}
-                    </span>
-                  </div>
-                </header>
 
-                <div className="chatbot-history-last-message">
-                  {c.lastMessage || "Sem mensagem registrada."}
+                    <div className="cbh-last">{c?.lastMessage || "Sem mensagem registrada."}</div>
+
+                    <div className="cbh-meta">
+                      <span className={`cbh-badge ${status}`}>
+                        {status === "open" ? "Aberta" : "Encerrada"}
+                      </span>
+
+                      <span className={`cbh-badge ${outcomeClass}`}>{outcomeLabel(outcome)}</span>
+
+                      <span className="cbh-badge">Bot x{Number(c?.botAttempts || 0)}</span>
+
+                      <span className="cbh-time">Última atualização: {safeLocale(c?.updatedAt)}</span>
+                    </div>
+                  </div>
+
+                  <div className="cbh-item-actions" style={{ alignSelf: "center" }}>
+                    <span className="cbh-chevron" aria-hidden="true">
+                      ›
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Drawer */}
+      {openId && (
+        <div className="cbh-drawer-overlay" onClick={closeDrawer} role="presentation">
+          <aside
+            className="cbh-drawer"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="cbh-drawer-header">
+              <div>
+                <div className="cbh-drawer-title">
+                  {openConv?.contactName || openConv?.phone || "Conversa"}
                 </div>
+                <div className="cbh-drawer-sub">
+                  {openConv?.phone ? `Telefone: ${openConv.phone}` : ""}{" "}
+                  {openConv?.updatedAt ? `• Atualizado: ${safeLocale(openConv.updatedAt)}` : ""}
+                </div>
+              </div>
 
-                <footer className="chatbot-history-meta">
-                  <span>
-                    Última atualização:{" "}
-                    {c.updatedAt
-                      ? new Date(c.updatedAt).toLocaleString()
-                      : "—"}
-                  </span>
-                  {/* espaço para futuras métricas: tempo de atendimento, NPS, etc */}
-                </footer>
-              </article>
-            );
-          })}
-      </section>
+              <button type="button" className="cbh-btn cbh-btn-ghost" onClick={closeDrawer}>
+                Fechar
+              </button>
+            </div>
+
+            <div className="cbh-drawer-body">
+              {msgLoading && <div className="cbh-loading">Carregando mensagens…</div>}
+              {msgError && <div className="cbh-alert">{msgError}</div>}
+
+              {!msgLoading && !msgError && messages.length === 0 && (
+                <div className="cbh-empty">Sem mensagens para exibir.</div>
+              )}
+
+              {!msgLoading && !msgError && messages.length > 0 && (
+                <div className="cbh-msg-list">
+                  {messages.map((m, idx) => {
+                    const from = String(m?.from || m?.direction || m?.sender || "").toLowerCase();
+                    const mine = from.includes("out") || from.includes("agent") || from.includes("human");
+                    const ts = m?.timestamp || m?.createdAt || m?.sentAt;
+
+                    return (
+                      <div
+                        key={m?.id || `${openId}-${idx}`}
+                        className={`cbh-msg ${mine ? "is-mine" : "is-theirs"}`}
+                      >
+                        <div className="cbh-msg-bubble">
+                          <div className="cbh-msg-text">{msgText(m)}</div>
+                          <div className="cbh-msg-time">{safeLocale(ts)}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }
