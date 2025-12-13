@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-13T22:43:27.305Z"
+      "updatedAt": "2025-12-13T23:04:56.638Z"
     },
     {
       "id": 3,
@@ -516,6 +516,21 @@
       "lastMessage": "Oi",
       "status": "closed",
       "updatedAt": "2025-12-13T18:23:15.855Z",
+      "currentMode": "human",
+      "botAttempts": 3,
+      "tags": [],
+      "notes": ""
+    },
+    {
+      "id": 32,
+      "sessionId": "S-99989978-1765667507770",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "Boa noite em que posso ajudar?",
+      "status": "closed",
+      "updatedAt": "2025-12-13T23:13:47.750Z",
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
@@ -2879,6 +2894,83 @@
         "location": null,
         "timestamp": "2025-12-13T18:23:00.000Z",
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IxMDdBOTlBNTQxNUNDNTkzQzgA"
+      }
+    ],
+    "32": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-13T23:11:46.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JGRDlDN0NEMzM1ODg5QTRGODQA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-13T23:11:50.539Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMjQzQzA0RDFCNTkyMUQ2RDdBAA=="
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "Quero falar com vendas",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-13T23:12:13.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I3NTg2QzYyRDZCOEQ5NkIzNTAA"
+      },
+      {
+        "id": 4,
+        "direction": "out",
+        "type": "text",
+        "text": "Claro! Posso ajudar a direcionar sua solicitação para o time de vendas. Por favor, poderia informar qual produto ou serviço você tem interesse? Assim, podemos atendê-lo da melhor forma.",
+        "timestamp": "2025-12-13T23:12:17.915Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSQjc0QUFGNTAwRkU4REE1NUM1AA=="
+      },
+      {
+        "id": 5,
+        "direction": "in",
+        "type": "text",
+        "text": "Obrigado, quero um site.",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-13T23:12:31.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JBODBDRDJBRDU1NjY4MzM2OEQA"
+      },
+      {
+        "id": 6,
+        "direction": "out",
+        "type": "text",
+        "text": "Perfeito! Vou encaminhar sua solicitação para o time de vendas especializado em desenvolvimento de sites. Para agilizar, poderia me informar qual tipo de site você deseja (institucional, e-commerce, blog, etc.) e se já tem alguma ideia ou necessidade específica?",
+        "timestamp": "2025-12-13T23:12:35.424Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSNjE2QzNDMTVGODE2QkY5MEM3AA=="
+      },
+      {
+        "id": 7,
+        "direction": "in",
+        "type": "text",
+        "text": "Será um site de insitucional com umas 5 paginas",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-13T23:13:09.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1RDRCMDUxMzEyRTMwRUIyRDgA"
+      },
+      {
+        "id": 8,
+        "direction": "out",
+        "type": "text",
+        "text": "Boa noite em que posso ajudar?",
+        "timestamp": "2025-12-13T23:13:38.334Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMzAwMDcwREQ1RDIxMEY3MzQwAA=="
       }
     ]
   },
