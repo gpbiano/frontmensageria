@@ -1,6 +1,10 @@
-// backend/src/settings/groupMembersStorage.js
+// backend/src/settings/groupMembersRouter.js
+import express from "express";
 import crypto from "crypto";
 import { loadDB, saveDB, ensureArray } from "../utils/db.js";
+import { requireAuth, requireRole } from "../middleware/requireAuth.js";
+
+const router = express.Router({ mergeParams: true });
 
 function nowIso() {
   return new Date().toISOString();
@@ -16,16 +20,8 @@ function normalizeRole(role) {
   return "agent";
 }
 
-function normalizeGroupId(groupId) {
-  const v = String(groupId || "").trim();
-  return v ? v : null;
-}
-
-function normalizeUserId(userId) {
-  if (userId === undefined || userId === null) return null;
-  const n = Number(userId);
-  if (!Number.isFinite(n)) return null;
-  return n;
+function getGroupId(req) {
+  return req.params.id || req.params.groupId || null;
 }
 
 function findGroup(db, groupId) {
@@ -38,105 +34,100 @@ function findUser(db, userId) {
   return db.users.find((u) => String(u.id) === String(userId)) || null;
 }
 
-function findMember(db, groupId, userId) {
-  db.groupMembers = ensureArray(db.groupMembers);
-  return (
-    db.groupMembers.find(
-      (m) =>
-        String(m.groupId) === String(groupId) &&
-        String(m.userId) === String(userId)
-    ) || null
-  );
-}
-
-function toMemberView(db, member) {
-  const u = findUser(db, member.userId);
-  return {
-    id: member.id,
-    groupId: member.groupId,
-    userId: member.userId,
-    memberRole: member.role || "agent",
-    isActive: member.isActive !== false,
-    createdAt: member.createdAt,
-    updatedAt: member.updatedAt,
-
-    // snapshot do user (pra UI)
-    name: u?.name || "Usuário removido",
-    email: u?.email || "",
-    userRole: u?.role || "agent",
-    userIsActive: u?.isActive !== false
-  };
-}
-
 /**
- * Lista membros do grupo (com join no user)
+ * GET /settings/groups/:id/members
  */
-export function listMembers(groupId, { includeInactive = false } = {}) {
+router.get("/", requireAuth, requireRole("admin", "manager"), (req, res) => {
   const db = loadDB();
-  const gid = normalizeGroupId(groupId);
-  if (!gid) {
-    return { error: "groupId inválido (param ausente)." };
+  const groupId = getGroupId(req);
+
+  if (!groupId) {
+    return res.status(400).json({ error: "groupId inválido (param ausente)." });
   }
 
-  const group = findGroup(db, gid);
-  if (!group) {
-    return { error: "Grupo não encontrado.", status: 404 };
-  }
+  const group = findGroup(db, groupId);
+  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
 
   db.groupMembers = ensureArray(db.groupMembers);
+  db.users = ensureArray(db.users);
 
-  const items = db.groupMembers
-    .filter((m) => String(m.groupId) === String(gid))
+  const includeInactive = String(req.query.includeInactive || "false") === "true";
+
+  const members = db.groupMembers
+    .filter((m) => String(m.groupId) === String(groupId))
     .filter((m) => (includeInactive ? true : m.isActive !== false))
-    .map((m) => toMemberView(db, m));
+    .map((m) => {
+      const u = findUser(db, m.userId);
+      return {
+        id: m.id,
+        groupId: m.groupId,
+        userId: m.userId,
+        memberRole: m.role || "agent",
+        isActive: m.isActive !== false,
+        createdAt: m.createdAt,
+        updatedAt: m.updatedAt,
+        name: u?.name || "Usuário removido",
+        email: u?.email || "",
+        userRole: u?.role || "agent",
+        userIsActive: u?.isActive !== false
+      };
+    });
 
-  return { group, items, total: items.length };
-}
+  return res.json({ items: members, total: members.length, group });
+});
 
 /**
- * Adiciona (ou reativa) membro
+ * POST /settings/groups/:id/members
+ * Body: { userId, role }
  */
-export function addMember(groupId, userId, { role = "agent" } = {}) {
+router.post("/", requireAuth, requireRole("admin", "manager"), (req, res) => {
   const db = loadDB();
-  const gid = normalizeGroupId(groupId);
-  const uid = normalizeUserId(userId);
+  const groupId = getGroupId(req);
 
-  if (!gid) return { error: "groupId inválido (param ausente)." };
-  if (!uid && uid !== 0) return { error: "userId é obrigatório." };
+  if (!groupId) {
+    return res.status(400).json({ error: "groupId inválido (param ausente)." });
+  }
 
-  const group = findGroup(db, gid);
-  if (!group) return { error: "Grupo não encontrado.", status: 404 };
+  const group = findGroup(db, groupId);
+  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
 
-  const user = findUser(db, uid);
-  if (!user) return { error: "Usuário não encontrado.", status: 404 };
+  const userId = req.body?.userId;
+  if (userId === undefined || userId === null || String(userId).trim() === "") {
+    return res.status(400).json({ error: "userId é obrigatório." });
+  }
+
+  const user = findUser(db, userId);
+  if (!user) return res.status(404).json({ error: "Usuário não encontrado." });
 
   db.groupMembers = ensureArray(db.groupMembers);
 
+  const role = normalizeRole(req.body?.role);
   const ts = nowIso();
-  const normalizedRole = normalizeRole(role);
 
-  const existing = findMember(db, gid, uid);
+  const existing = db.groupMembers.find(
+    (m) =>
+      String(m.groupId) === String(groupId) &&
+      String(m.userId) === String(userId)
+  );
+
   if (existing) {
-    existing.role = normalizedRole;
+    existing.role = role;
     existing.isActive = true;
     existing.updatedAt = ts;
     saveDB(db);
 
-    return {
+    return res.status(200).json({
       success: true,
-      created: false,
       member: existing,
-      memberView: toMemberView(db, existing),
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
-      group
-    };
+      user: { id: user.id, name: user.name, email: user.email, role: user.role }
+    });
   }
 
   const member = {
     id: newId("gm"),
-    groupId: String(gid),
-    userId: uid,
-    role: normalizedRole,
+    groupId: String(groupId),
+    userId: Number(userId),
+    role,
     isActive: true,
     createdAt: ts,
     updatedAt: ts
@@ -145,54 +136,102 @@ export function addMember(groupId, userId, { role = "agent" } = {}) {
   db.groupMembers.push(member);
   saveDB(db);
 
-  return {
+  return res.status(201).json({
     success: true,
-    created: true,
     member,
-    memberView: toMemberView(db, member),
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
-    group
-  };
-}
+    user: { id: user.id, name: user.name, email: user.email, role: user.role }
+  });
+});
 
-/**
- * Atualiza papel e/ou status do membro
- */
-export function updateMember(groupId, userId, { role, isActive } = {}) {
+router.patch("/:userId", requireAuth, requireRole("admin", "manager"), (req, res) => {
   const db = loadDB();
-  const gid = normalizeGroupId(groupId);
-  const uid = normalizeUserId(userId);
+  const groupId = getGroupId(req);
 
-  if (!gid) return { error: "groupId inválido (param ausente)." };
-  if (!uid && uid !== 0) return { error: "userId inválido." };
+  if (!groupId) {
+    return res.status(400).json({ error: "groupId inválido (param ausente)." });
+  }
 
-  const group = findGroup(db, gid);
-  if (!group) return { error: "Grupo não encontrado.", status: 404 };
+  const group = findGroup(db, groupId);
+  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
 
-  const member = findMember(db, gid, uid);
-  if (!member) return { error: "Membro não encontrado.", status: 404 };
+  const userId = req.params.userId;
 
-  if (role !== undefined) member.role = normalizeRole(role);
-  if (isActive !== undefined) member.isActive = !!isActive;
+  db.groupMembers = ensureArray(db.groupMembers);
+
+  const member = db.groupMembers.find(
+    (m) =>
+      String(m.groupId) === String(groupId) &&
+      String(m.userId) === String(userId)
+  );
+  if (!member) return res.status(404).json({ error: "Membro não encontrado." });
+
+  if (req.body?.role !== undefined) member.role = normalizeRole(req.body.role);
+  if (req.body?.isActive !== undefined) member.isActive = !!req.body.isActive;
 
   member.updatedAt = nowIso();
   saveDB(db);
 
-  return { success: true, member, memberView: toMemberView(db, member), group };
-}
+  return res.json({ success: true, member });
+});
 
-/**
- * Soft delete (desativar)
- */
-export function deactivateMember(groupId, userId) {
-  return updateMember(groupId, userId, { isActive: false });
-}
+router.patch("/:userId/deactivate", requireAuth, requireRole("admin", "manager"), (req, res) => {
+  const db = loadDB();
+  const groupId = getGroupId(req);
 
-/**
- * Reativar (resolve o 404 /activate)
- */
-export function activateMember(groupId, userId, { role } = {}) {
-  const payload = { isActive: true };
-  if (role !== undefined) payload.role = role;
-  return updateMember(groupId, userId, payload);
-}
+  if (!groupId) {
+    return res.status(400).json({ error: "groupId inválido (param ausente)." });
+  }
+
+  const group = findGroup(db, groupId);
+  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
+
+  const userId = req.params.userId;
+
+  db.groupMembers = ensureArray(db.groupMembers);
+
+  const member = db.groupMembers.find(
+    (m) =>
+      String(m.groupId) === String(groupId) &&
+      String(m.userId) === String(userId)
+  );
+  if (!member) return res.status(404).json({ error: "Membro não encontrado." });
+
+  member.isActive = false;
+  member.updatedAt = nowIso();
+  saveDB(db);
+
+  return res.json({ success: true, member });
+});
+
+router.patch("/:userId/activate", requireAuth, requireRole("admin", "manager"), (req, res) => {
+  const db = loadDB();
+  const groupId = getGroupId(req);
+
+  if (!groupId) {
+    return res.status(400).json({ error: "groupId inválido (param ausente)." });
+  }
+
+  const group = findGroup(db, groupId);
+  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
+
+  const userId = req.params.userId;
+
+  db.groupMembers = ensureArray(db.groupMembers);
+
+  const member = db.groupMembers.find(
+    (m) =>
+      String(m.groupId) === String(groupId) &&
+      String(m.userId) === String(userId)
+  );
+  if (!member) return res.status(404).json({ error: "Membro não encontrado." });
+
+  member.isActive = true;
+  if (req.body?.role !== undefined) member.role = normalizeRole(req.body.role);
+
+  member.updatedAt = nowIso();
+  saveDB(db);
+
+  return res.json({ success: true, member });
+});
+
+export default router;
