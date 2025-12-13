@@ -22,12 +22,28 @@ body {
   box-sizing: border-box;
 }
 
+/* ✅ RESET DE BOTÕES (evita "desconfigurar listas" por estilo padrão do browser)
+   - importante no macOS/chrome/safari quando button recebe padding/line-height diferentes
+*/
+button {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+button:focus {
+  outline: none;
+}
+
 /* ===============================
    LAYOUT GERAL DA APLICAÇÃO
 ================================ */
 
 .app-shell {
-  min-height: 100vh;          /* ocupa a tela toda */
+  min-height: 100vh; /* ocupa a tela toda */
   display: flex;
   flex-direction: column;
   background: #020617;
@@ -109,7 +125,7 @@ body {
 .app-body {
   flex: 1;
   display: flex;
-  min-height: 0;       /* permite o filho usar height:100% */
+  min-height: 0; /* permite o filho usar height:100% */
 }
 
 /* SIDEBAR LATERAL */
@@ -127,6 +143,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+
+  /* ✅ evita “empurrar” conteúdo e mantém itens alinhados quando tem muitos links */
+  overflow-y: auto;
 }
 
 /* Título das seções (Atendimento / Chatbot etc.) */
@@ -174,9 +193,13 @@ body {
   gap: 4px;
   padding-left: 6px;
   margin-bottom: 4px;
+
+  /* ✅ dá “respiro” visual e evita parecer que saiu do lugar */
+  margin-top: 6px;
 }
 
 .sidebar-link {
+  width: 100%;
   border: none;
   background: transparent;
   color: #9ca3af;
@@ -205,7 +228,7 @@ body {
 .app-main {
   flex: 1;
   min-width: 0;
-  min-height: 0;          /* <- ESSENCIAL pro filho ocupar 100% */
+  min-height: 0; /* <- ESSENCIAL pro filho ocupar 100% */
   padding: 24px 28px;
   display: flex;
 }
@@ -214,7 +237,7 @@ body {
 .page-full {
   flex: 1;
   display: flex;
-  min-height: 0;          /* junto com chat-history-layout height:100% */
+  min-height: 0; /* junto com chat-history-layout height:100% */
 }
 
 /* Placeholders de telas */
@@ -246,4 +269,3 @@ body {
   font-size: 14px;
   opacity: 0.9;
 }
-

@@ -1,0 +1,64 @@
+.su-page {
+  padding: 16px;
+}
+
+.su-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.su-input {
+  width: 100%;
+  margin: 8px 0;
+  padding: 8px;
+}
+
+.su-btn {
+  padding: 8px 12px;
+  margin-right: 6px;
+}
+
+.su-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.su-table th,
+.su-table td {
+  border-bottom: 1px solid #333;
+  padding: 8px;
+}
+
+.inactive {
+  opacity: 0.5;
+}
+
+.su-alert {
+  color: #ff6b6b;
+}
+
+.su-toast {
+  color: #22c55e;
+}
+
+.su-linkbox {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.su-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.su-modal form {
+  background: #111;
+  padding: 16px;
+  width: 400px;
+}

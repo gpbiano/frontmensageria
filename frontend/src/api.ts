@@ -43,6 +43,40 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
 }
 
 // ======================================================
+// HELPERS INTERNOS
+// ======================================================
+
+async function safeReadText(res: Response) {
+  return res.text().catch(() => "");
+}
+
+async function safeReadJson<T = any>(res: Response): Promise<T | null> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function buildApiError(
+  status: number,
+  path: string,
+  payload: any,
+  text: string
+) {
+  // tenta extrair uma msg amigável quando backend devolve JSON com {error/message}
+  const msg =
+    payload?.error ||
+    payload?.message ||
+    payload?.details ||
+    (typeof payload === "string" ? payload : "") ||
+    text ||
+    "sem corpo";
+
+  return new Error(`Erro na API (${status}) ${path}: ${msg}`);
+}
+
+// ======================================================
 // HELPER FETCH JSON
 // ======================================================
 
@@ -59,19 +93,14 @@ async function request<T = any>(
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    console.error("❌ API ERROR:", res.status, path, text);
-    throw new Error(
-      `Erro na API (${res.status}) ${path}: ${text || "sem corpo"}`
-    );
+    const payload = await safeReadJson(res);
+    const text = payload ? "" : await safeReadText(res);
+    console.error("❌ API ERROR:", res.status, path, payload || text);
+    throw buildApiError(res.status, path, payload, text);
   }
 
-  // tenta JSON; se não for JSON, retorna null
-  try {
-    return (await res.json()) as T;
-  } catch {
-    return null as T;
-  }
+  const json = await safeReadJson<T>(res);
+  return (json ?? (null as T)) as T;
 }
 
 // ======================================================
@@ -91,18 +120,48 @@ async function requestForm<T = any>(
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    console.error("❌ API FORM ERROR:", res.status, path, text);
-    throw new Error(
-      `Erro na API (${res.status}) ${path}: ${text || "sem corpo"}`
-    );
+    const payload = await safeReadJson(res);
+    const text = payload ? "" : await safeReadText(res);
+    console.error("❌ API FORM ERROR:", res.status, path, payload || text);
+    throw buildApiError(res.status, path, payload, text);
   }
 
-  try {
-    return (await res.json()) as T;
-  } catch {
-    return null as T;
+  const json = await safeReadJson<T>(res);
+  return (json ?? (null as T)) as T;
+}
+
+// ======================================================
+// HELPER DOWNLOAD (BLOB)
+// ======================================================
+
+async function downloadBlob(path: string, filename: string) {
+  if (typeof window === "undefined") {
+    throw new Error("downloadBlob só pode ser executado no browser");
   }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "GET",
+    headers: buildHeaders()
+  });
+
+  if (!res.ok) {
+    const payload = await safeReadJson(res);
+    const text = payload ? "" : await safeReadText(res);
+    console.error("❌ DOWNLOAD ERROR:", res.status, path, payload || text);
+    throw buildApiError(res.status, path, payload, text);
+  }
+
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  window.URL.revokeObjectURL(url);
 }
 
 // ======================================================
@@ -128,6 +187,75 @@ export async function login(
 export function logout(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(AUTH_KEY);
+}
+
+// (PÚBLICO) Criar senha por token (invite/reset)
+export async function verifyPasswordToken(token: string) {
+  return request(`/auth/password/verify?token=${encodeURIComponent(token)}`);
+}
+
+export async function setPasswordWithToken(token: string, password: string) {
+  return request(`/auth/password/set`, {
+    method: "POST",
+    body: JSON.stringify({ token, password })
+  });
+}
+
+// ======================================================
+// SETTINGS — USERS (Configurações → Usuários)
+// ======================================================
+
+export type UserRole = "admin" | "manager" | "agent" | "viewer";
+
+export interface UserRecord {
+  id: number;
+  name: string;
+  email: string;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export async function fetchUsers(): Promise<{ data: UserRecord[]; total: number }> {
+  return request<{ data: UserRecord[]; total: number }>("/settings/users");
+}
+
+export async function createUser(payload: {
+  name: string;
+  email: string;
+  role: UserRole;
+}): Promise<{ success: boolean; user: UserRecord; token?: { id: string; type: string; expiresAt: string } }> {
+  return request("/settings/users", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateUser(
+  id: number,
+  payload: Partial<Pick<UserRecord, "name" | "role" | "isActive">>
+): Promise<{ success: boolean; user: UserRecord }> {
+  return request(`/settings/users/${encodeURIComponent(String(id))}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deactivateUser(
+  id: number
+): Promise<{ success: boolean; user: UserRecord }> {
+  return request(`/settings/users/${encodeURIComponent(String(id))}/deactivate`, {
+    method: "PATCH"
+  });
+}
+
+export async function resetUserPassword(
+  id: number
+): Promise<{ success: boolean; token?: { id: string; type: string; expiresAt: string } }> {
+  return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, {
+    method: "POST"
+  });
 }
 
 // ======================================================
@@ -232,14 +360,14 @@ export async function createTemplate(payload: {
   language: string;
   components: any[];
 }): Promise<Template> {
-  const res = await request<{ success: boolean; template: Template }>(
-    "/outbound/templates",
-    {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }
-  );
-  return res.template;
+  const res = await request<any>("/outbound/templates", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  // compatível com: { success, template } OU template direto
+  if (res?.template) return res.template as Template;
+  return res as Template;
 }
 
 // ===============================
@@ -281,9 +409,16 @@ export interface CampaignAudience {
 
 export interface CampaignResultItem {
   phone: string;
-  status: "sent" | "failed";
+  status: "sent" | "failed" | "delivered" | "read";
   waMessageId?: string | null;
-  error?: string;
+  updatedAt?: string | null;
+
+  // novo (meta)
+  errorCode?: string | number | null;
+  errorMessage?: string | null;
+
+  // legado/fallback (não quebra)
+  error?: any;
 }
 
 export interface CampaignRecord {
@@ -346,7 +481,7 @@ export async function startCampaign(
   );
 }
 
-// (ainda não implementados no backend — deixamos, mas tipados como opcionais)
+// (ainda não implementados no backend — se der 404, é porque a rota não existe)
 export async function pauseCampaign(
   campaignId: string
 ): Promise<{ success: boolean }> {
@@ -370,6 +505,34 @@ export async function fetchCampaignById(
 ): Promise<CampaignRecord> {
   return request<CampaignRecord>(
     `/outbound/campaigns/${encodeURIComponent(campaignId)}`
+  );
+}
+
+// ======================================================
+// CAMPAIGNS — REPORT / EXPORTS (Report 2.0)
+// ======================================================
+
+// Link curto interno (backend redireciona pro doc oficial da Meta/WhatsApp)
+export function metaErrorShortLink(code: string | number) {
+  return `${API_BASE}/r/meta-error/${encodeURIComponent(String(code))}`;
+}
+
+/**
+ * ✅ Rotas alinhadas com o progresso mais recente:
+ * CSV: /outbound/campaigns/:id/report/export.csv
+ * PDF: /outbound/campaigns/:id/report/export.pdf
+ */
+export async function downloadCampaignReportCSV(campaignId: string) {
+  return downloadBlob(
+    `/outbound/campaigns/${encodeURIComponent(campaignId)}/report/export.csv`,
+    `campaign_${campaignId}.csv`
+  );
+}
+
+export async function downloadCampaignReportPDF(campaignId: string) {
+  return downloadBlob(
+    `/outbound/campaigns/${encodeURIComponent(campaignId)}/report/export.pdf`,
+    `campaign_${campaignId}.pdf`
   );
 }
 
@@ -403,13 +566,13 @@ export async function fetchOptOut(params?: {
   if (params?.from) qs.set("from", params.from);
   if (params?.to) qs.set("to", params.to);
 
-  // backend retorna { data, total, page, limit }
+  const suffix = qs.toString();
   return request<{
     data: OptOutItem[];
     total: number;
     page: number;
     limit: number;
-  }>(`/outbound/optout?${qs.toString()}`);
+  }>(`/outbound/optout${suffix ? `?${suffix}` : ""}`);
 }
 
 export async function createOptOut(payload: {
@@ -434,12 +597,15 @@ export async function deleteOptOut(id: string) {
   );
 }
 
-// (seu backend pode não ter isso ainda; mantenho pra não quebrar UI,
-// mas se 404, é porque a rota ainda não foi criada)
+/**
+ * ⚠️ Se seu backend estiver usando outro path, ajuste aqui.
+ * Alguns docs antigos usam /outbound/optout/import  (sem /csv).
+ */
 export async function importOptOutCSV(file: File) {
   const fd = new FormData();
   fd.append("file", file);
 
+  // se der 404, troque para: "/outbound/optout/import"
   return requestForm<{
     total: number;
     imported: number;
@@ -467,28 +633,11 @@ export async function downloadOptOutExport(params?: {
   if (params?.from) qs.set("from", params.from);
   if (params?.to) qs.set("to", params.to);
 
-  const res = await fetch(
-    `${API_BASE}/outbound/optout/export?${qs.toString()}`,
-    { headers: buildHeaders() }
+  const suffix = qs.toString();
+  await downloadBlob(
+    `/outbound/optout/export${suffix ? `?${suffix}` : ""}`,
+    `optout-${new Date().toISOString().slice(0, 10)}.csv`
   );
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    console.error("❌ EXPORT ERROR:", res.status, text);
-    throw new Error(`Erro ao exportar opt-out (${res.status})`);
-  }
-
-  const blob = await res.blob();
-  const url = window.URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `optout-${new Date().toISOString().slice(0, 10)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-
-  window.URL.revokeObjectURL(url);
 
   return { success: true };
 }

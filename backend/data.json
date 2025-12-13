@@ -2,9 +2,12 @@
   "users": [
     {
       "id": 1,
-      "name": "Administrador",
-      "email": "admin@gplabs.com.br",
-      "password": "gplabs123"
+      "name": "Adriano",
+      "email": "gperes@gphparticipacoes.com.br",
+      "role": "manager",
+      "isActive": true,
+      "createdAt": "2025-12-13T05:04:56.371Z",
+      "updatedAt": "2025-12-13T05:04:56.371Z"
     }
   ],
   "conversations": [
@@ -402,8 +405,23 @@
       "phone": "556499477939",
       "channel": "whatsapp",
       "lastMessage": "Obrigado",
-      "status": "open",
-      "updatedAt": "2025-12-12T16:48:53.000Z",
+      "status": "closed",
+      "updatedAt": "2025-12-12T17:33:10.589Z",
+      "currentMode": "human",
+      "botAttempts": 3,
+      "tags": [],
+      "notes": ""
+    },
+    {
+      "id": 28,
+      "sessionId": "S-96086426-1765574952890",
+      "contactId": 5,
+      "contactName": "Rodrigo",
+      "phone": "556496086426",
+      "channel": "whatsapp",
+      "lastMessage": "Oi Rodrigo",
+      "status": "closed",
+      "updatedAt": "2025-12-12T21:37:29.412Z",
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
@@ -2492,6 +2510,83 @@
         "timestamp": "2025-12-12T16:48:53.000Z",
         "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAEhgUM0EyNTZFNzE0QjFDMUY2QkE2MzkA"
       }
+    ],
+    "28": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T21:29:14.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk2MDg2NDI2FQIAEhggQUMxM0VEN0ZERkRBRTYzRUYxRDM3ODc1MjMwRjgyODEA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-12T21:29:15.392Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk2MDg2NDI2FQIAERgSQTJGNDhDMjFBN0RBOUQ5N0Y0AA=="
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "Oq é GP?",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T21:29:48.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk2MDg2NDI2FQIAEhggQUNFNDNENzE1QTRGNzVCN0QyNkNGMkI2MDRBQzZDNTYA"
+      },
+      {
+        "id": 4,
+        "direction": "out",
+        "type": "text",
+        "text": "GP pode ter diferentes significados dependendo do contexto. Você poderia informar em qual área ou assunto você viu essa sigla? Assim, posso te ajudar de forma mais precisa.  \n\nPor exemplo:  \n- GP pode significar **General Practitioner** (médico generalista) na área de saúde.  \n- Em tecnologia, pode ser **Game Pass** ou **General Purpose**.  \n- Na GP Labs, GP pode estar relacionado ao nome da empresa.  \n\nSe quiser, me diga mais detalhes!",
+        "timestamp": "2025-12-12T21:29:49.064Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk2MDg2NDI2FQIAERgSNjhENUZEOUI1RDgyNEE4N0Q3AA=="
+      },
+      {
+        "id": 5,
+        "direction": "in",
+        "type": "text",
+        "text": "Gp labs",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T21:30:26.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk2MDg2NDI2FQIAEhggQUNFNTUyMzk0QzRCQzlCRjUzOTMwRDQzODREQUQ1NDQA"
+      },
+      {
+        "id": 6,
+        "direction": "out",
+        "type": "text",
+        "text": "A GP Labs é uma empresa especializada em soluções tecnológicas, desenvolvimento de software e inovação. Nosso foco é oferecer produtos e serviços que atendam às necessidades dos clientes de forma eficiente e personalizada.\n\nSe quiser, posso te fornecer mais informações específicas sobre a GP Labs, como áreas de atuação, serviços oferecidos ou qualquer outra dúvida que você tenha!",
+        "timestamp": "2025-12-12T21:30:26.010Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk2MDg2NDI2FQIAERgSNTNCQkY1RkM1M0FBQ0ExRTQ0AA=="
+      },
+      {
+        "id": 7,
+        "direction": "in",
+        "type": "text",
+        "text": "Quero falar com um atendente",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-12T21:30:58.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk2MDg2NDI2FQIAEhggQUM3MUQ0OUE2REJCRUIzMENDOTA3RTcxNUFGOUNBOTIA"
+      },
+      {
+        "id": 8,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi Rodrigo",
+        "timestamp": "2025-12-12T21:31:18.725Z",
+        "waMessageId": "wamid.HBgMNTU2NDk2MDg2NDI2FQIAERgSRDAyRjM4RUEyNzk3NDQ1OTkwAA=="
+      }
     ]
   },
   "settings": {
@@ -2526,6 +2621,12 @@
       "phone": "5511911911160",
       "name": "Genivaldo Peres",
       "createdAt": "2025-12-10T16:10:55.388Z"
+    },
+    {
+      "id": 5,
+      "phone": "556496086426",
+      "name": "Rodrigo",
+      "createdAt": "2025-12-12T21:29:12.887Z"
     }
   ],
   "numbers": [
@@ -2575,6 +2676,77 @@
     }
   ],
   "outboundCampaigns": [
+    {
+      "id": "cmp_1765580498387_24770",
+      "name": "teste_4",
+      "numberId": "890327707503654",
+      "templateName": "conheca_gp",
+      "templateLanguage": "pt_BR",
+      "excludeOptOut": true,
+      "status": "done",
+      "createdAt": "2025-12-12T23:01:38.387Z",
+      "updatedAt": "2025-12-12T23:02:13.630Z",
+      "audience": {
+        "fileName": "exemplo_audiencia_conheca_gp - exemplo_audiencia_conheca_gp.csv",
+        "totalRows": 2,
+        "validRows": 2,
+        "invalidRows": 0
+      },
+      "audienceRows": [
+        {
+          "phone": "5564999477939",
+          "vars": [
+            "Adriano"
+          ]
+        },
+        {
+          "phone": "5564999989978",
+          "vars": [
+            "Genivaldo"
+          ]
+        }
+      ],
+      "results": [
+        {
+          "phone": "5564999477939",
+          "status": "sent",
+          "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSQTczRDE3MDE4MzdBQUNFQzZGAA==",
+          "updatedAt": "2025-12-12T23:02:12.955Z"
+        },
+        {
+          "phone": "5564999989978",
+          "status": "sent",
+          "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRDQwMzkyRjMyMjVERTk5N0NBAA==",
+          "updatedAt": "2025-12-12T23:02:13.630Z"
+        }
+      ],
+      "logs": [
+        {
+          "at": "2025-12-12T23:01:38.387Z",
+          "type": "created",
+          "message": "Campanha criada"
+        },
+        {
+          "at": "2025-12-12T23:01:50.236Z",
+          "type": "audience_uploaded",
+          "message": "Audiência carregada (2 válidos, 0 inválidos)"
+        },
+        {
+          "at": "2025-12-12T23:02:12.287Z",
+          "type": "start_requested",
+          "message": "Início solicitado (2 destinatários)"
+        },
+        {
+          "at": "2025-12-12T23:02:13.630Z",
+          "type": "finished",
+          "message": "Finalizada: 2 enviados, 0 falhas"
+        }
+      ],
+      "timeline": {
+        "startedAt": "2025-12-12T23:02:12.287Z",
+        "finishedAt": "2025-12-12T23:02:13.630Z"
+      }
+    },
     {
       "id": "cmp_1765557366872_49049",
       "name": "teste_3",
@@ -2699,6 +2871,16 @@
       "audiencePhones": [
         "5599999999999"
       ]
+    }
+  ],
+  "passwordTokens": [
+    {
+      "id": "invite_1765602296371_9e5d2cc476c02f5e",
+      "userId": 1,
+      "type": "invite",
+      "expiresAt": "2025-12-14T05:04:56.375Z",
+      "used": false,
+      "createdAt": "2025-12-13T05:04:56.375Z"
     }
   ]
 }

@@ -15,7 +15,6 @@ import pinoHttp from "pino-http";
 
 // ===============================
 // ENV – CARREGAR .env.{ENV} ANTES DE IMPORTAR ROUTERS
-// (evita bug: routers lendo process.env antes do dotenv)
 // ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +40,13 @@ const { default: assetsRouter } = await import("./outbound/assetsRouter.js");
 
 const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js");
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
+
+// ✅ Settings / Users + Password (convite / reset / criar senha)
+const { default: usersRouter } = await import("./settings/usersRouter.js");
+const { default: passwordRouter } = await import("./auth/passwordRouter.js");
+
+// ✅ Password verify helper (login com hash)
+const { verifyPassword } = await import("./security/passwords.js");
 
 // Chatbot engine
 const { getChatbotSettingsForAccount, decideRoute } = await import(
@@ -72,7 +78,10 @@ logger.info(
     OPENAI_API_KEY_defined: !!OPENAI_API_KEY,
     OPENAI_MODEL,
     WABA_ID: WABA_ID || "N/A",
-    PORT
+    PORT,
+    RESEND_API_KEY_defined: !!process.env.RESEND_API_KEY,
+    RESEND_FROM_defined: !!process.env.RESEND_FROM,
+    APP_BASE_URL: process.env.APP_BASE_URL || "N/A"
   },
   "✅ Configurações de ambiente carregadas"
 );
@@ -100,12 +109,14 @@ let state = loadStateFromDisk();
 
 // garante estruturas básicas
 if (!state.users) state.users = [];
+if (!state.passwordTokens) state.passwordTokens = []; // ✅ novo (convite/reset)
 if (!state.conversations) state.conversations = [];
 if (!state.messagesByConversation) state.messagesByConversation = {};
 if (!state.settings) {
   state.settings = { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] };
 }
 if (!state.contacts) state.contacts = [];
+if (!Array.isArray(state.outboundCampaigns)) state.outboundCampaigns = [];
 
 // migra contatos a partir das conversas existentes
 ensureContactsFromConversations();
@@ -121,10 +132,12 @@ function loadStateFromDisk() {
       logger.warn({ DB_FILE }, "📁 data.json não encontrado, criando inicial.");
       const initial = {
         users: [],
+        passwordTokens: [], // ✅ novo
         contacts: [],
         conversations: [],
         messagesByConversation: {},
-        settings: { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] }
+        settings: { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] },
+        outboundCampaigns: []
       };
       fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), "utf8");
       return initial;
@@ -133,12 +146,18 @@ function loadStateFromDisk() {
     const raw = fs.readFileSync(DB_FILE, "utf8");
     const parsed = JSON.parse(raw);
 
+    if (!parsed.users) parsed.users = [];
+    if (!Array.isArray(parsed.passwordTokens)) parsed.passwordTokens = []; // ✅ novo
     if (!parsed.contacts) parsed.contacts = [];
+    if (!Array.isArray(parsed.outboundCampaigns)) parsed.outboundCampaigns = [];
 
     logger.info(
       {
         conversationsCount: parsed.conversations?.length || 0,
         contactsCount: parsed.contacts?.length || 0,
+        campaignsCount: parsed.outboundCampaigns?.length || 0,
+        usersCount: parsed.users?.length || 0,
+        tokensCount: parsed.passwordTokens?.length || 0,
         DB_FILE
       },
       "💾 Estado carregado"
@@ -149,10 +168,12 @@ function loadStateFromDisk() {
     logger.error({ err }, "❌ Erro ao carregar data.json");
     return {
       users: [],
+      passwordTokens: [],
       contacts: [],
       conversations: [],
       messagesByConversation: {},
-      settings: { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] }
+      settings: { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] },
+      outboundCampaigns: []
     };
   }
 }
@@ -210,6 +231,7 @@ function ensureContactsFromConversations() {
 }
 
 // Sempre garante o admin@gplabs.com.br com senha em TEXTO PURO (DEV)
+// ✅ Agora também garante role/isActive e mantém compat com passwordHash
 function ensureDefaultAdminUser() {
   const email = "admin@gplabs.com.br";
   const password = "gplabs123";
@@ -222,7 +244,21 @@ function ensureDefaultAdminUser() {
 
   if (existingIndex >= 0) {
     state.users[existingIndex].name = "Administrador";
+    state.users[existingIndex].email = email;
+    state.users[existingIndex].role = state.users[existingIndex].role || "admin";
+    state.users[existingIndex].isActive =
+      typeof state.users[existingIndex].isActive === "boolean"
+        ? state.users[existingIndex].isActive
+        : true;
+
+    // mantém senha dev em texto (legado). Se quiser forçar hash, a gente troca depois.
     state.users[existingIndex].password = password;
+    if (state.users[existingIndex].passwordHash === undefined) {
+      state.users[existingIndex].passwordHash = null;
+    }
+    if (!state.users[existingIndex].createdAt)
+      state.users[existingIndex].createdAt = new Date().toISOString();
+    state.users[existingIndex].updatedAt = new Date().toISOString();
   } else {
     const ids = state.users.map((u) => u.id || 0);
     const nextId = ids.length ? Math.max(...ids) + 1 : 1;
@@ -231,7 +267,12 @@ function ensureDefaultAdminUser() {
       id: nextId,
       name: "Administrador",
       email,
-      password
+      password, // legado dev
+      passwordHash: null,
+      role: "admin",
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     });
   }
 
@@ -326,7 +367,13 @@ function createNewConversation(phone, contactName, channel) {
   saveStateToDisk();
 
   logger.info(
-    { conversationId: id, sessionId, phone, contactName: conv.contactName, channel },
+    {
+      conversationId: id,
+      sessionId,
+      phone,
+      contactName: conv.contactName,
+      channel
+    },
     "🆕 Nova conversa criada"
   );
 
@@ -370,7 +417,10 @@ function findOrCreateConversationByPhone(phone, contactName, channel) {
     latest.updatedAt = new Date().toISOString();
     saveStateToDisk();
 
-    logger.info({ conversationId: latest.id, phone }, "⏱️ Sessão auto-closed (24h)");
+    logger.info(
+      { conversationId: latest.id, phone },
+      "⏱️ Sessão auto-closed (24h)"
+    );
     return createNewConversation(phone, contactName, channel);
   }
 
@@ -427,6 +477,133 @@ function getConversationHistoryForBot(conversationId, maxMessages = 10) {
 }
 
 // ===============================
+// 🔎 CAMPANHAS – TRACK STATUS (sent/delivered/read/failed)
+// ===============================
+const META_ERROR_DOCS_BASE =
+  "https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes?locale=pt_BR";
+
+function normalizeWaStatus(s) {
+  const v = String(s || "").toLowerCase();
+  if (v === "sent") return "sent";
+  if (v === "delivered") return "delivered";
+  if (v === "read") return "read";
+  if (v === "failed") return "failed";
+  return v || "unknown";
+}
+
+function findCampaignResultByWaMessageId(waMessageId) {
+  if (!waMessageId) return null;
+
+  const campaigns = Array.isArray(state.outboundCampaigns)
+    ? state.outboundCampaigns
+    : [];
+
+  for (const c of campaigns) {
+    const results = Array.isArray(c?.results) ? c.results : [];
+    const r = results.find(
+      (x) => x && String(x.waMessageId) === String(waMessageId)
+    );
+    if (r) return { campaign: c, result: r };
+  }
+
+  return null;
+}
+
+function applyWebhookStatusToCampaign(statusObj) {
+  const waMessageId = statusObj?.id;
+  const found = findCampaignResultByWaMessageId(waMessageId);
+  if (!found) return false;
+
+  const { campaign, result } = found;
+
+  const newStatus = normalizeWaStatus(statusObj?.status);
+
+  const tsIso = statusObj?.timestamp
+    ? new Date(Number(statusObj.timestamp) * 1000).toISOString()
+    : new Date().toISOString();
+
+  result.phone = result.phone || statusObj?.recipient_id || result.phone;
+  result.status = newStatus;
+  result.updatedAt = tsIso;
+
+  if (!Array.isArray(result.statusHistory)) result.statusHistory = [];
+  result.statusHistory.push({ at: tsIso, status: newStatus });
+
+  const err0 = Array.isArray(statusObj?.errors) ? statusObj.errors[0] : null;
+
+  if (newStatus !== "failed") {
+    result.errorCode = result.errorCode ?? null;
+    result.errorMessage = result.errorMessage ?? null;
+    result.errorLink = result.errorLink ?? null;
+
+    result.metaErrorCode = result.metaErrorCode ?? null;
+    result.metaErrorTitle = result.metaErrorTitle ?? null;
+    result.metaErrorMessage = result.metaErrorMessage ?? null;
+    result.metaErrorDetails = result.metaErrorDetails ?? null;
+    result.metaErrorLink = result.metaErrorLink ?? null;
+  }
+
+  if (newStatus === "failed") {
+    const code =
+      err0?.code != null && String(err0.code).trim()
+        ? String(err0.code).trim()
+        : null;
+
+    const title = err0?.title || null;
+    const message = err0?.message || null;
+    const details = err0?.error_data?.details || null;
+
+    result.errorCode = code;
+    result.errorMessage = message || title || details || "Falha no envio";
+    result.errorLink = code
+      ? `/r/meta-error/${encodeURIComponent(code)}`
+      : "/r/meta-error";
+
+    result.metaErrorCode = code;
+    result.metaErrorTitle = title;
+    result.metaErrorMessage = message;
+    result.metaErrorDetails = details;
+    result.metaErrorLink = result.errorLink;
+
+    result.error = { code, title, message, details };
+  }
+
+  campaign.logs = campaign.logs || [];
+  campaign.logs.push({
+    at: tsIso,
+    type: "wa_status",
+    message: `Status webhook: ${newStatus} (msgId=${waMessageId})`
+  });
+
+  if (!campaign.timeline) campaign.timeline = {};
+
+  if (
+    !campaign.timeline.startedAt &&
+    (newStatus === "sent" || newStatus === "delivered" || newStatus === "read")
+  ) {
+    campaign.timeline.startedAt = tsIso;
+  }
+  campaign.timeline.lastStatusAt = tsIso;
+
+  const results = Array.isArray(campaign.results) ? campaign.results : [];
+  const pending = results.some((x) => {
+    const st = String(x?.status || "unknown");
+    return !st || st === "unknown" || st === "sent";
+  });
+
+  if (!pending && !campaign.timeline.finishedAt) {
+    campaign.timeline.finishedAt = tsIso;
+  }
+
+  if (campaign.timeline.finishedAt && campaign.status === "sending") {
+    campaign.status = "done";
+  }
+
+  saveStateToDisk();
+  return true;
+}
+
+// ===============================
 // HELPERS – WHATSAPP CLOUD API (SAÍDA)
 // ===============================
 async function sendWhatsAppText(to, text) {
@@ -459,7 +636,10 @@ async function sendWhatsAppText(to, text) {
   const data = await res.json();
 
   if (!res.ok) {
-    logger.error({ status: res.status, data }, "❌ Erro ao enviar texto WhatsApp");
+    logger.error(
+      { status: res.status, data },
+      "❌ Erro ao enviar texto WhatsApp"
+    );
     throw new Error("Erro ao enviar mensagem de texto");
   }
 
@@ -506,7 +686,10 @@ async function sendWhatsAppMedia(to, type, mediaUrl, caption) {
     throw new Error("Erro ao enviar mídia");
   }
 
-  logger.info({ to, type, waMessageId: data?.messages?.[0]?.id }, "📤 Mídia enviada");
+  logger.info(
+    { to, type, waMessageId: data?.messages?.[0]?.id },
+    "📤 Mídia enviada"
+  );
   return data;
 }
 
@@ -542,9 +725,12 @@ async function downloadWhatsappMedia(mediaObj, logicalType) {
     let fileUrl = mediaObj.url;
 
     if (!fileUrl) {
-      const metaRes = await fetch(`https://graph.facebook.com/v22.0/${mediaId}`, {
-        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
-      });
+      const metaRes = await fetch(
+        `https://graph.facebook.com/v22.0/${mediaId}`,
+        {
+          headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+        }
+      );
       const meta = await metaRes.json();
       if (!metaRes.ok) {
         logger.error({ status: metaRes.status, meta }, "❌ Erro metadata mídia");
@@ -633,6 +819,18 @@ app.use(cors());
 app.use(express.json());
 app.use("/uploads", express.static(UPLOADS_DIR));
 
+// ===============================
+// ✅ LINK CURTO (REDIRECT) – META ERROR CODES
+// Ex: /r/meta-error/2388073
+// ===============================
+app.get("/r/meta-error/:code?", (req, res) => {
+  const code = (req.params.code || "").trim();
+  const target = code
+    ? `${META_ERROR_DOCS_BASE}#${encodeURIComponent(code)}`
+    : META_ERROR_DOCS_BASE;
+  return res.redirect(302, target);
+});
+
 // ============================
 // ROTAS PRINCIPAIS
 // =============================
@@ -640,9 +838,19 @@ app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
 
 // ===============================
+// ✅ SETTINGS / USERS + AUTH PASSWORD (token público)
+// ⚠️ IMPORTANTE: o usersRouter já tem paths "/users", então o mount é "/settings"
+// Resultado final: GET /settings/users ✅
+// ===============================
+app.use("/settings", usersRouter);
+app.use("/auth", passwordRouter);
+
+// ===============================
 // ✅ OUTBOUND – ORDEM CORRETA + SEM DUPLICAÇÃO
 // ===============================
-logger.info("🧩 Montando rotas Outbound (assets/numbers/templates/campaigns/optout/outbound)");
+logger.info(
+  "🧩 Montando rotas Outbound (assets/numbers/templates/campaigns/optout/outbound)"
+);
 
 // ✅ ASSETS PRIMEIRO (antes de qualquer "/outbound" genérico)
 app.use("/outbound/assets", assetsRouter);
@@ -653,9 +861,7 @@ app.use("/outbound/templates", templatesRouter);
 app.use("/outbound/campaigns", campaignsRouter);
 
 // ✅ Opt-Out (compatibilidade dupla para evitar 404)
-// - Se o optoutRouter tiver rotas começando com "/whatsapp-contacts", funciona via /outbound/optout/...
 app.use("/outbound/optout", optoutRouter);
-// - Se o optoutRouter tiver rotas começando com "/optout/whatsapp-contacts", funciona via /outbound/optout/...
 app.use("/outbound", optoutRouter);
 
 // ✅ Agregador outbound (deixa por último)
@@ -668,7 +874,7 @@ app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "GP Labs – WhatsApp Plataforma API",
-    version: "1.0.4",
+    version: "1.0.5",
     wabaId: WABA_ID || null,
     phoneNumberId: PHONE_NUMBER_ID || null
   });
@@ -682,6 +888,7 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     conversationsCount: state.conversations.length,
     contactsCount: (state.contacts || []).length,
+    usersCount: (state.users || []).length,
     memory: { rss: memory.rss, heapUsed: memory.heapUsed },
     wabaId: WABA_ID || null,
     phoneNumberId: PHONE_NUMBER_ID || null
@@ -689,7 +896,7 @@ app.get("/health", (req, res) => {
 });
 
 // ===============================
-// LOGIN (DEV) – /login
+// LOGIN – /login (legado + hash + role + isActive)
 // ===============================
 app.post("/login", (req, res) => {
   const { email, password } = req.body || {};
@@ -702,22 +909,34 @@ app.post("/login", (req, res) => {
 
   const users = state.users || [];
   const user = users.find(
-    (u) => u.email && u.email.toLowerCase() === email.toLowerCase()
+    (u) => u.email && u.email.toLowerCase() === String(email).toLowerCase()
   );
 
   if (!user) return res.status(401).json({ error: "Usuário não encontrado." });
-  if (password !== user.password)
-    return res.status(401).json({ error: "Senha incorreta." });
+  if (user.isActive === false)
+    return res.status(403).json({ error: "Usuário inativo." });
 
-  const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, {
-    expiresIn: "8h"
-  });
+  const ok =
+    (user.passwordHash &&
+      verifyPassword(String(password), user.passwordHash)) ||
+    (!user.passwordHash && String(password) === String(user.password));
 
-  logger.info({ email: user.email }, "✅ Login realizado");
+  if (!ok) return res.status(401).json({ error: "Senha incorreta." });
+
+  const token = jwt.sign(
+    { id: user.id, email: user.email, role: user.role || "agent" },
+    JWT_SECRET,
+    { expiresIn: "8h" }
+  );
+
+  logger.info(
+    { email: user.email, role: user.role || "agent" },
+    "✅ Login realizado"
+  );
 
   return res.json({
     token,
-    user: { id: user.id, name: user.name, email: user.email }
+    user: { id: user.id, name: user.name, email: user.email, role: user.role || "agent" }
   });
 });
 
@@ -890,6 +1109,28 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
       "📩 Webhook recebido"
     );
 
+    // ✅ 1) STATUS FIRST (sent/delivered/read/failed)
+    if (Array.isArray(statuses) && statuses.length > 0) {
+      let updated = 0;
+      for (const st of statuses) {
+        try {
+          const ok = applyWebhookStatusToCampaign(st);
+          if (ok) updated++;
+        } catch (e) {
+          logger.error(
+            { e, stId: st?.id },
+            "❌ Falha ao aplicar status na campanha"
+          );
+        }
+      }
+      if (updated > 0)
+        logger.info(
+          { updated },
+          "📊 Status de campanha atualizados via webhook"
+        );
+    }
+
+    // ✅ 2) MENSAGENS INBOUND
     for (const msg of messages) {
       const waId = msg.from;
       const profileName = value?.contacts?.[0]?.profile?.name;
@@ -936,7 +1177,10 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
 
       const existingMsgs = state.messagesByConversation[conv.id] || [];
       if (existingMsgs.some((m) => m.waMessageId === msg.id)) {
-        logger.warn({ waMessageId: msg.id }, "⚠️ Mensagem duplicada, ignorando");
+        logger.warn(
+          { waMessageId: msg.id },
+          "⚠️ Mensagem duplicada, ignorando"
+        );
         continue;
       }
 
@@ -1006,10 +1250,7 @@ app.post("/webhook/whatsapp", async (req, res, next) => {
 // MIDDLEWARE GLOBAL DE ERRO
 // ===============================
 app.use((err, req, res, next) => {
-  logger.error(
-    { err, path: req.path, method: req.method },
-    "💥 Erro não tratado"
-  );
+  logger.error({ err, path: req.path, method: req.method }, "💥 Erro não tratado");
   if (res.headersSent) return next(err);
   res.status(500).json({ error: "Internal server error" });
 });
@@ -1019,5 +1260,7 @@ app.use((err, req, res, next) => {
 // ===============================
 app.listen(PORT, () => {
   logger.info({ port: PORT, WABA_ID, PHONE_NUMBER_ID }, "🚀 API rodando");
-  logger.info("✅ Rotas esperadas: /outbound/assets, /outbound/assets/upload, /uploads/*");
+  logger.info(
+    "✅ Rotas esperadas: /settings/users, /auth/*, /outbound/assets, /outbound/numbers, /outbound/templates, /outbound/campaigns, /outbound/optout, /uploads/*"
+  );
 });

@@ -1,5 +1,5 @@
 // frontend/src/App.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import LoginPage from "./pages/LoginPage.jsx";
 
 // Atendimento (HUMANO)
@@ -18,15 +18,26 @@ import TemplatesPage from "./pages/outbound/TemplatesPage.jsx";
 import CampaignsLegacyPage from "./pages/outbound/campaigns/CampaignsPage.jsx";
 import CampaignCreateWizard from "./pages/outbound/campaigns/CampaignCreateWizard.jsx";
 
+// ✅ Reportes (Analytics “Meta-like”)
+import CampaignsAnalyticsPage from "./pages/outbound/campaigns/CampaignsAnalyticsPage.jsx";
+
 // Assets
 import AssetsPage from "./pages/outbound/AssetsPage.jsx";
-
-// CSS global
-import "./styles/App.css";
 
 // Opt-Out
 import OptOutPage from "./pages/outbound/OptOutPage.tsx";
 
+// ✅ Settings — Users
+import SettingsUsersPage from "./pages/settings/SettingsUsersPage.jsx";
+
+// Criar Senha (Público)
+import CreatePasswordPage from "./pages/auth/CreatePasswordPage.jsx";
+
+// CSS global
+import "./styles/App.css";
+
+// CSS específico de outbound / reports / analytics
+import "./styles/outbound.css";
 
 const AUTH_KEY = "gpLabsAuthToken";
 
@@ -36,20 +47,33 @@ const AUTH_KEY = "gpLabsAuthToken";
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
+  // ✅ Página pública (sem login): /criar-senha?token=...
+  const isCreatePasswordRoute = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const path = window.location.pathname || "/";
+    return path === "/criar-senha";
+  }, []);
+
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const token = localStorage.getItem(AUTH_KEY);
     if (token) setIsAuthenticated(true);
   }, []);
 
   function handleLogin(data) {
+    if (typeof window === "undefined") return;
     if (data?.token) localStorage.setItem(AUTH_KEY, data.token);
     setIsAuthenticated(true);
   }
 
   function handleLogout() {
+    if (typeof window === "undefined") return;
     localStorage.removeItem(AUTH_KEY);
     setIsAuthenticated(false);
   }
+
+  // ✅ importante: criar senha precisa funcionar SEM autenticação
+  if (isCreatePasswordRoute) return <CreatePasswordPage />;
 
   if (!isAuthenticated) return <LoginPage onLogin={handleLogin} />;
 
@@ -81,19 +105,22 @@ const MENU = [
     id: "campanhas",
     label: "Campanhas",
     items: [
-      { id: "reportes", label: "Reportes" }, // placeholder por enquanto
-      { id: "campanhas", label: "Campanhas" }, // legacy
-      { id: "nova", label: "Criar campanha" }, // wizard
+      { id: "reportes", label: "Reportes" },
+      { id: "campanhas", label: "Campanhas" },
+      { id: "nova", label: "Criar campanha" },
       { id: "templates", label: "Templates" },
       { id: "numeros", label: "Números" },
       { id: "arquivos", label: "Arquivos" },
-      { id: "optout", label: "Opt-Out" } // vamos implementar agora
+      { id: "optout", label: "Opt-Out" }
     ]
   },
   {
     id: "configuracoes",
     label: "Configurações",
-    items: [{ id: "canais", label: "Canais" }]
+    items: [
+      { id: "canais", label: "Canais" },
+      { id: "usuarios", label: "Usuários" }
+    ]
   }
 ];
 
@@ -131,9 +158,17 @@ function PlatformShell({ onLogout }) {
         </div>
 
         <div className="app-header-right">
-          <button className="header-pill-btn">Empresa</button>
-          <button className="header-pill-btn">Perfil User</button>
-          <button className="header-pill-btn header-logout" onClick={onLogout}>
+          <button className="header-pill-btn" type="button">
+            Empresa
+          </button>
+          <button className="header-pill-btn" type="button">
+            Perfil User
+          </button>
+          <button
+            className="header-pill-btn header-logout"
+            type="button"
+            onClick={onLogout}
+          >
             Sair
           </button>
         </div>
@@ -150,6 +185,7 @@ function PlatformShell({ onLogout }) {
             return (
               <div className="sidebar-section" key={section.id}>
                 <button
+                  type="button"
                   className={
                     "sidebar-item-header" +
                     (isActive ? " sidebar-item-header-active" : "")
@@ -172,6 +208,7 @@ function PlatformShell({ onLogout }) {
 
                       return (
                         <button
+                          type="button"
                           key={item.id}
                           className={
                             "sidebar-link" +
@@ -253,20 +290,11 @@ function SectionRenderer({ main, sub, goTo }) {
   if (main === "campanhas") {
     if (sub === "reportes") {
       return (
-        <Placeholder
-          title="Campanhas · Reportes"
-          text="Em breve: dashboard e relatórios de campanhas."
-        />
+        <div className="page-full">
+          <CampaignsAnalyticsPage />
+        </div>
       );
     }
-// ✅ Opt-Out
-if (sub === "optout") {
-  return (
-    <div className="page-full">
-      <OptOutPage />
-    </div>
-  );
-}
 
     if (sub === "campanhas") {
       return (
@@ -283,28 +311,13 @@ if (sub === "optout") {
           <div style={{ marginTop: 12 }}>
             <button
               className="cmp-btn"
+              type="button"
               onClick={() => goTo("campanhas", "campanhas")}
               title="Voltar para Campanhas"
             >
               Voltar para Campanhas
             </button>
           </div>
-        </div>
-      );
-    }
-
-    if (sub === "arquivos") {
-      return (
-        <div className="page-full">
-          <AssetsPage />
-        </div>
-      );
-    }
-
-    if (sub === "numeros") {
-      return (
-        <div className="page-full">
-          <NumbersPage />
         </div>
       );
     }
@@ -317,12 +330,27 @@ if (sub === "optout") {
       );
     }
 
+    if (sub === "numeros") {
+      return (
+        <div className="page-full">
+          <NumbersPage />
+        </div>
+      );
+    }
+
+    if (sub === "arquivos") {
+      return (
+        <div className="page-full">
+          <AssetsPage />
+        </div>
+      );
+    }
+
     if (sub === "optout") {
       return (
-        <Placeholder
-          title="Campanhas · Opt-Out"
-          text="Vamos montar agora: cadastro manual, import CSV, listar com filtros, deletar e exportar."
-        />
+        <div className="page-full">
+          <OptOutPage />
+        </div>
       );
     }
 
@@ -334,7 +362,16 @@ if (sub === "optout") {
     );
   }
 
+  // Configurações
   if (main === "configuracoes") {
+    if (sub === "usuarios") {
+      return (
+        <div className="page-full">
+          <SettingsUsersPage />
+        </div>
+      );
+    }
+
     return (
       <Placeholder
         title={`Configurações · ${subSectionLabel(sub)}`}
@@ -395,6 +432,8 @@ function subSectionLabel(sub) {
       return "Opt-Out";
     case "canais":
       return "Canais";
+    case "usuarios":
+      return "Usuários";
     case "config":
       return "Configurações";
     default:

@@ -6,16 +6,11 @@
   "scripts": {
     "dev": "NODE_ENV=development nodemon src/index.js",
     "start": "NODE_ENV=production node src/index.js",
-
     "logs": "NODE_ENV=development node src/index.js | npx pino-pretty",
-
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-
     "clean": "rm -rf uploads/*.tmp",
-
     "health": "curl http://localhost:3010/health",
-
     "test:login": "curl -X POST http://localhost:3010/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@gplabs.com.br\",\"password\":\"gplabs123\"}'"
   },
   "dependencies": {
@@ -26,13 +21,13 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
     "node-fetch": "^3.3.2",
+    "pdfkit": "^0.17.2",
     "pino": "^9.5.0",
     "pino-http": "^10.4.0"
   },
   "devDependencies": {
+    "eslint": "^8.57.1",
     "nodemon": "^3.1.7",
-    "pino-pretty": "^10.3.0",
-    "eslint": "^8.57.1"
+    "pino-pretty": "^10.3.0"
   }
 }
-
