@@ -58,7 +58,9 @@
   function randHex(len) {
     const a = new Uint8Array(len);
     (window.crypto || window.msCrypto).getRandomValues(a);
-    return Array.from(a).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return Array.from(a)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
   }
 
   function getOrCreateVisitorId(storageKey) {
@@ -69,7 +71,6 @@
       localStorage.setItem(storageKey, id);
       return id;
     } catch {
-      // fallback sem storage
       return `vis_${Date.now()}_${randHex(8)}`;
     }
   }
@@ -86,19 +87,16 @@
   // Config (via data-attributes)
   // =============================
   const script = (function findThisScript() {
-    // tenta pegar o último script (mais comum em embed)
     const scripts = document.getElementsByTagName("script");
     return scripts[scripts.length - 1];
   })();
 
-  const WIDGET_KEY = script?.dataset?.widgetKey || "";
-  if (!WIDGET_KEY) return; // sem key, não inicializa
+  const WIDGET_KEY = script && script.dataset ? script.dataset.widgetKey : "";
+  if (!WIDGET_KEY) return;
 
-  // Opcional: permitir override via data-api-base
   const API_BASE =
-    script?.dataset?.apiBase ||
+    (script && script.dataset ? script.dataset.apiBase : "") ||
     (function guessBase() {
-      // tenta inferir a partir do src do script
       try {
         const u = new URL(script.src);
         return `${u.protocol}//${u.host}`;
@@ -107,15 +105,20 @@
       }
     })();
 
-  // Defaults (podem vir do backend na criação de sessão)
   const DEFAULTS = {
-    primaryColor: script?.dataset?.color || "#34d399",
-    position: script?.dataset?.position || "right", // right | left
-    buttonText: script?.dataset?.buttonText || "Ajuda",
-    headerTitle: script?.dataset?.title || "Atendimento",
-    greeting: script?.dataset?.greeting || "Olá! Como posso ajudar?",
-    pollingOpenMs: Number(script?.dataset?.pollingOpenMs || 2500),
-    pollingMinimizedMs: Number(script?.dataset?.pollingMinimizedMs || 12000),
+    primaryColor: (script && script.dataset && script.dataset.color) || "#34d399",
+    position: (script && script.dataset && script.dataset.position) || "right", // right | left
+    buttonText: (script && script.dataset && script.dataset.buttonText) || "Ajuda",
+    headerTitle: (script && script.dataset && script.dataset.title) || "Atendimento",
+    greeting:
+      (script && script.dataset && script.dataset.greeting) ||
+      "Olá! Como posso ajudar?",
+    pollingOpenMs: Number(
+      (script && script.dataset && script.dataset.pollingOpenMs) || 2500
+    ),
+    pollingMinimizedMs: Number(
+      (script && script.dataset && script.dataset.pollingMinimizedMs) || 12000
+    ),
     maxMessageLen: 2000
   };
 
@@ -137,7 +140,7 @@
     isMinimized: false,
     isClosed: false,
 
-    lastCursor: null, // pode ser msgId ou timestamp ISO (depende do backend)
+    lastCursor: null,
     messages: [],
 
     pollTimer: null,
@@ -151,21 +154,18 @@
     const url = `${API_BASE}${path}`;
     const headers = Object.assign(
       { "Content-Type": "application/json" },
-      opts?.headers || {}
+      (opts && opts.headers) || {}
     );
 
-    // Auth do widget: token assinado retornado no /session
     if (state.webchatToken) {
       headers["Authorization"] = `Webchat ${state.webchatToken}`;
     }
-
-    // Identificação do widget
     headers["X-Widget-Key"] = WIDGET_KEY;
 
     const res = await fetch(url, {
-      method: opts?.method || "GET",
+      method: (opts && opts.method) || "GET",
       headers,
-      body: opts?.body ? JSON.stringify(opts.body) : undefined,
+      body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
       credentials: "omit"
     });
 
@@ -178,14 +178,13 @@
     }
 
     if (!res.ok) {
-      const msg = data?.error || data?.message || `HTTP ${res.status}`;
+      const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
       throw new Error(msg);
     }
     return data;
   }
 
   async function createOrResumeSession() {
-    // tenta reusar sessão do storage (se existir e ainda válida)
     try {
       const cached = JSON.parse(localStorage.getItem(STORAGE.session) || "null");
       if (
@@ -201,15 +200,12 @@
         state.lastCursor = cached.lastCursor || null;
         return;
       }
-    } catch {
-      // ignora cache inválido
-    }
+    } catch {}
 
     const payload = {
       visitorId: state.visitorId,
       pageUrl: location.href,
       referrer: document.referrer || "",
-      // utm básico (se existir)
       utm: (function () {
         const p = new URLSearchParams(location.search);
         const utm = {};
@@ -227,13 +223,10 @@
 
     state.conversationId = res.conversationId;
     state.sessionId = res.sessionId || null;
-    state.webchatToken = res.webchatToken; // obrigatório
+    state.webchatToken = res.webchatToken;
     state.isClosed = res.status === "closed";
-
-    // cursor inicial (opcional)
     state.lastCursor = res.lastCursor || null;
 
-    // cache local com expiração
     try {
       const ttlSec = Number(res.expiresInSeconds || 1800);
       const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
@@ -257,21 +250,21 @@
     if (state.lastCursor) q.set("after", state.lastCursor);
     q.set("limit", "50");
 
-    const res = await api(`/webchat/conversations/${encodeURIComponent(state.conversationId)}/messages?${q.toString()}`);
+    const res = await api(
+      `/webchat/conversations/${encodeURIComponent(
+        state.conversationId
+      )}/messages?${q.toString()}`
+    );
 
-    // Esperado: { items: [...], nextCursor: "..." }
     const items = Array.isArray(res.items) ? res.items : [];
     if (items.length) {
       items.forEach((m) => addMessageToUI(m));
       state.lastCursor = res.nextCursor || state.lastCursor;
       persistCursor();
       scrollToBottom();
-    } else {
-      // mesmo sem itens, backend pode atualizar cursor
-      if (res.nextCursor) {
-        state.lastCursor = res.nextCursor;
-        persistCursor();
-      }
+    } else if (res.nextCursor) {
+      state.lastCursor = res.nextCursor;
+      persistCursor();
     }
   }
 
@@ -288,12 +281,14 @@
   async function sendVisitorMessage(text) {
     const msg = safeText(text).trim();
     if (!msg) return;
+
     if (msg.length > DEFAULTS.maxMessageLen) {
-      throw new Error(`Mensagem muito longa (máx ${DEFAULTS.maxMessageLen} caracteres).`);
+      throw new Error(
+        `Mensagem muito longa (máx ${DEFAULTS.maxMessageLen} caracteres).`
+      );
     }
     if (state.isClosed) throw new Error("Atendimento encerrado.");
 
-    // Otimista: renderiza local antes
     addMessageToUI({
       id: `local_${Date.now()}`,
       from: "visitor",
@@ -308,8 +303,7 @@
       body: { conversationId: state.conversationId, text: msg }
     });
 
-    // backend pode devolver cursor
-    if (res?.nextCursor) {
+    if (res && res.nextCursor) {
       state.lastCursor = res.nextCursor;
       persistCursor();
     }
@@ -318,25 +312,24 @@
   async function closeByUser() {
     if (!state.conversationId) return;
     try {
-      await api(`/webchat/conversations/${encodeURIComponent(state.conversationId)}/close`, {
-        method: "POST",
-        body: { reason: "user_closed" }
-      });
-    } catch {
-      // mesmo se falhar, fecha localmente (UX)
-    }
+      await api(
+        `/webchat/conversations/${encodeURIComponent(state.conversationId)}/close`,
+        { method: "POST", body: { reason: "user_closed" } }
+      );
+    } catch {}
+
     state.isClosed = true;
     setClosedUI(true);
     stopPolling();
-    // opcional: limpar cache de sessão ao fechar
-    // localStorage.removeItem(STORAGE.session);
   }
 
- // ✅ SUBSTITUA APENAS ESTE BLOCO INTEIRO (UI > styles + setOpenUI)
-// (Removi as linhas "composer.style..." que você colocou dentro do CSS — aquilo quebra o CSS)
+  // =============================
+  // UI
+  // =============================
+  const root = el("div", { id: "gpl-webchat-root" });
 
-const styles = el("style", null, [
-  `
+  const styles = el("style", null, [
+    `
 #gpl-webchat-root { all: initial; }
 
 #gpl-webchat-btn {
@@ -376,8 +369,7 @@ const styles = el("style", null, [
   box-shadow: 0 20px 60px rgba(0,0,0,.45);
   z-index: 2147483647;
 
-  /* ✅ importante: layout em coluna */
-  display: none;              /* quando abrir, vira flex */
+  display: none; /* ao abrir vira flex */
   flex-direction: column;
 
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -407,7 +399,6 @@ const styles = el("style", null, [
 }
 .gpl-icon-btn:hover { background: rgba(255,255,255,.06); }
 
-/* ✅ corpo ocupa o espaço restante e não briga com o footer */
 #gpl-webchat-body {
   padding: 12px;
   overflow: auto;
@@ -436,7 +427,6 @@ const styles = el("style", null, [
   border-bottom-left-radius: 6px;
 }
 
-/* ✅ footer fixo visualmente e com safe-area */
 #gpl-webchat-footer {
   flex: 0 0 auto;
   display: flex;
@@ -485,13 +475,7 @@ const styles = el("style", null, [
   font-size: 12px;
 }
 `
-]);
-
-function setOpenUI(open) {
-  // ✅ como o painel agora é flex-column, ao abrir precisa ser "flex"
-  panel.style.display = open ? "flex" : "none";
-}
-
+  ]);
 
   const btn = el("button", { id: "gpl-webchat-btn", type: "button" }, [
     el("span", { className: "bubble" }, [
@@ -560,7 +544,7 @@ function setOpenUI(open) {
   const closedEl = $("#gpl-webchat-closed", panel);
 
   function setOpenUI(open) {
-    panel.style.display = open ? "block" : "none";
+    panel.style.display = open ? "flex" : "none";
   }
 
   function setClosedUI(isClosed) {
@@ -573,11 +557,15 @@ function setOpenUI(open) {
   function addMessageToUI(m) {
     const from = m.from || m.sender || "bot";
     const type = m.type || "text";
-    if (type !== "text") return; // v1: só texto
+    if (type !== "text") return;
 
-    // evita duplicar mensagens locais se backend retornar com o mesmo id
     if (m.id && state.messages.some((x) => x.id === m.id)) return;
-    state.messages.push({ id: m.id, from, text: m.text, createdAt: m.createdAt });
+    state.messages.push({
+      id: m.id,
+      from,
+      text: m.text,
+      createdAt: m.createdAt
+    });
 
     const row = el("div", { className: `gpl-msg ${from}` }, [
       el("div", { className: "b" }, [safeText(m.text)])
@@ -586,7 +574,6 @@ function setOpenUI(open) {
   }
 
   function scrollToBottom() {
-    // não “puxa” quando usuário está lendo mensagens antigas
     const nearBottom =
       bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 120;
     if (nearBottom) bodyEl.scrollTop = bodyEl.scrollHeight;
@@ -597,22 +584,19 @@ function setOpenUI(open) {
     inputEl.value = "";
     try {
       await sendVisitorMessage(text);
-      // após enviar, forçar poll rápido para pegar resposta
       schedulePoll(300);
     } catch (e) {
-      // fallback: mostrar msg de erro como bot
       addMessageToUI({
         id: `err_${Date.now()}`,
         from: "bot",
         type: "text",
-        text: `Não consegui enviar: ${safeText(e.message || e)}`,
+        text: `Não consegui enviar: ${safeText(e && e.message ? e.message : e)}`,
         createdAt: nowIso()
       });
       scrollToBottom();
     }
   }
 
-  // Enter para enviar
   inputEl.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) {
       ev.preventDefault();
@@ -668,9 +652,7 @@ function setOpenUI(open) {
         if (!state.isOpen && !state.isMinimized) return;
         await fetchNewMessages();
       } catch {
-        // silêncio no widget (não spammar usuário)
       } finally {
-        // Ajusta intervalo conforme visibilidade
         const hidden = document.hidden;
         const next =
           hidden ? Math.max(state.pollInterval, 15000) : state.pollInterval;
@@ -680,7 +662,6 @@ function setOpenUI(open) {
   }
 
   document.addEventListener("visibilitychange", () => {
-    // reduz polling quando aba escondida
     if (document.hidden) {
       state.pollInterval = Math.max(state.pollInterval, 15000);
     } else {
@@ -700,16 +681,15 @@ function setOpenUI(open) {
     try {
       await createOrResumeSession();
       setClosedUI(state.isClosed);
-      // carrega backlog inicial (se quiser)
       await fetchNewMessages();
       scrollToBottom();
-    } catch (e) {
+    } catch {
       setClosedUI(false);
       addMessageToUI({
         id: `boot_err_${Date.now()}`,
         from: "bot",
         type: "text",
-        text: `Não consegui iniciar o chat agora. Tente novamente em instantes.`,
+        text: "Não consegui iniciar o chat agora. Tente novamente em instantes.",
         createdAt: nowIso()
       });
       scrollToBottom();
