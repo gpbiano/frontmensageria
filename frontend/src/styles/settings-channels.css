@@ -1,0 +1,195 @@
+/* ===============================
+   SETTINGS – CHANNELS
+================================ */
+
+.settings-page {
+  padding: 24px;
+  max-width: 1100px;
+  margin: 0 auto;
+  color: #e5e7eb;
+}
+
+.settings-header h1 {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.settings-header p {
+  opacity: 0.8;
+  margin-bottom: 24px;
+}
+
+/* ===============================
+   CHANNEL CARD
+================================ */
+
+.channel-card {
+  background: #0b1220;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+.channel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.channel-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.channel-header p {
+  font-size: 14px;
+  opacity: 0.75;
+}
+
+/* ===============================
+   CHANNEL BODY
+================================ */
+
+.channel-body {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.channel-body.muted {
+  opacity: 0.6;
+}
+
+/* ===============================
+   FORM
+================================ */
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.form-row label {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.form-row input,
+.form-row textarea,
+.form-row select {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #e5e7eb;
+  outline: none;
+}
+
+.form-row textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.form-row input:focus,
+.form-row textarea:focus,
+.form-row select:focus {
+  border-color: #34d399;
+}
+
+/* ===============================
+   INLINE (Widget Key)
+================================ */
+
+.inline {
+  display: flex;
+  gap: 8px;
+}
+
+.inline input {
+  flex: 1;
+}
+
+/* ===============================
+   BUTTONS
+================================ */
+
+button {
+  cursor: pointer;
+  border-radius: 10px;
+  padding: 10px 14px;
+  border: none;
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fecaca;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+/* ===============================
+   SWITCH (TOGGLE)
+================================ */
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: #374151;
+  transition: 0.3s;
+  border-radius: 999px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+.switch input:checked + .slider {
+  background-color: #34d399;
+}
+
+.switch input:checked + .slider:before {
+  transform: translateX(20px);
+}
+
+/* ===============================
+   STATES
+================================ */
+
+.error {
+  margin: 12px 0;
+  color: #fecaca;
+}

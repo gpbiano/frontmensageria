@@ -16,50 +16,70 @@ function envInfo() {
   return { env };
 }
 
+function ensureChannelsAndReturn(db) {
+  // getChannels garante defaults e agora retorna LISTA (array)
+  const channelsList = getChannels(db);
+  const channelsMap = db?.settings?.channels || {};
+  return { channelsList, channelsMap };
+}
+
+// ======================================================
 // GET /settings/channels
-router.get("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  const db = loadDB();
-  const channels = getChannels(db);
-  saveDB(db);
+// Retorna lista (array) para o front
+// ======================================================
+router.get(
+  "/",
+  requireAuth,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    const db = loadDB();
+    const { channelsList, channelsMap } = ensureChannelsAndReturn(db);
+    saveDB(db);
 
-  res.json({
-    ...envInfo(),
-    channels
-  });
-});
+    return res.json({
+      ...envInfo(),
+      channels: channelsList, // ✅ formato pro front
+      channelsMap // ✅ retrocompatibilidade (se algo antigo usava objeto)
+    });
+  }
+);
 
+// ======================================================
 // GET /settings/channels/webchat
+// ======================================================
 router.get(
   "/webchat",
   requireAuth,
   requireRole("admin", "manager"),
   async (req, res) => {
     const db = loadDB();
-    const channels = getChannels(db);
+    ensureChannelsAndReturn(db);
     saveDB(db);
 
-    res.json({
+    return res.json({
       ...envInfo(),
-      webchat: channels.webchat
+      webchat: db?.settings?.channels?.webchat || null
     });
   }
 );
 
+// ======================================================
 // PATCH /settings/channels/webchat
+// ======================================================
 router.patch(
   "/webchat",
   requireAuth,
   requireRole("admin", "manager"),
   async (req, res) => {
     const db = loadDB();
-    getChannels(db); // garante defaults
+    ensureChannelsAndReturn(db); // garante defaults
 
     const patch = req.body || {};
     const webchat = updateWebchatChannel(db, patch);
 
     saveDB(db);
 
-    res.json({
+    return res.json({
       ok: true,
       ...envInfo(),
       webchat
@@ -67,19 +87,21 @@ router.patch(
   }
 );
 
+// ======================================================
 // POST /settings/channels/webchat/rotate-key
+// ======================================================
 router.post(
   "/webchat/rotate-key",
   requireAuth,
   requireRole("admin", "manager"),
   async (req, res) => {
     const db = loadDB();
-    getChannels(db); // garante defaults
+    ensureChannelsAndReturn(db); // garante defaults
 
     const out = rotateWebchatKey(db);
     saveDB(db);
 
-    res.json({
+    return res.json({
       ok: true,
       ...envInfo(),
       ...out
@@ -87,41 +109,46 @@ router.post(
   }
 );
 
+// ======================================================
 // GET /settings/channels/webchat/snippet
+// ======================================================
 router.get(
   "/webchat/snippet",
   requireAuth,
   requireRole("admin", "manager"),
   async (req, res) => {
     const db = loadDB();
-    const channels = getChannels(db);
+    ensureChannelsAndReturn(db);
     saveDB(db);
+
+    const webchat = db?.settings?.channels?.webchat || {};
 
     // URL pública do widget.js (você pode setar no .env)
     const widgetJsUrl =
       process.env.WIDGET_PUBLIC_URL ||
       "https://widget.gplabs.com.br/widget.js";
 
-    // API base opcional (dev costuma precisar)
+    // API base opcional
     // - prioriza query ?apiBase=
     // - depois env PUBLIC_API_BASE
+    // - fallback: api.gplabs.com.br (sua API)
     const apiBase =
       (req.query.apiBase ? String(req.query.apiBase) : "") ||
       process.env.PUBLIC_API_BASE ||
-      "";
+      "https://api.gplabs.com.br";
 
     const scriptTag = buildWebchatSnippet({
       widgetJsUrl,
-      widgetKey: channels.webchat.widgetKey,
+      widgetKey: webchat.widgetKey,
       apiBase
     });
 
-    res.json({
+    return res.json({
       ok: true,
       ...envInfo(),
       widgetJsUrl,
-      widgetKey: channels.webchat.widgetKey,
-      allowedOrigins: channels.webchat.allowedOrigins || [],
+      widgetKey: webchat.widgetKey,
+      allowedOrigins: webchat.allowedOrigins || [],
       scriptTag
     });
   }

@@ -1,4 +1,3 @@
-// backend/src/settings/channelsStorage.js
 import crypto from "crypto";
 
 function nowIso() {
@@ -15,12 +14,17 @@ function ensureDbShape(db) {
   return db;
 }
 
+/**
+ * Retorna TODOS os canais normalizados
+ * (formato amigável pro front)
+ */
 export function getChannels(db) {
   ensureDbShape(db);
-
   const ch = db.settings.channels;
 
-  // Defaults (mantém retrocompatibilidade e evita quebrar o front)
+  // =========================
+  // WEBCHAT
+  // =========================
   if (!ch.webchat) {
     ch.webchat = {
       enabled: false,
@@ -29,7 +33,7 @@ export function getChannels(db) {
       allowedOrigins: [],
       config: {
         color: "#34d399",
-        position: "right", // right | left
+        position: "right",
         buttonText: "Ajuda",
         title: "Atendimento",
         greeting: "Olá! Como posso ajudar?"
@@ -39,47 +43,91 @@ export function getChannels(db) {
     };
   }
 
+  // =========================
+  // WHATSAPP
+  // =========================
   if (!ch.whatsapp) {
     ch.whatsapp = {
       enabled: true,
       status: "connected", // connected | not_connected | disabled
+      createdAt: nowIso(),
       updatedAt: nowIso()
     };
   }
 
+  // =========================
+  // MESSENGER (FUTURO)
+  // =========================
   if (!ch.messenger) {
     ch.messenger = {
       enabled: false,
       status: "soon",
+      createdAt: nowIso(),
       updatedAt: nowIso()
     };
   }
 
+  // =========================
+  // INSTAGRAM (FUTURO)
+  // =========================
   if (!ch.instagram) {
     ch.instagram = {
       enabled: false,
       status: "soon",
+      createdAt: nowIso(),
       updatedAt: nowIso()
     };
   }
 
   db.settings.channels = ch;
-  return db.settings.channels;
+
+  // 🔹 Retorno NORMALIZADO para o front
+  return [
+    {
+      id: "whatsapp",
+      name: "WhatsApp Cloud API",
+      description: "Canal oficial do WhatsApp via Meta Cloud API.",
+      ...ch.whatsapp
+    },
+    {
+      id: "webchat",
+      name: "Web Chat (Widget)",
+      description: "Widget de atendimento para seu site.",
+      ...ch.webchat
+    },
+    {
+      id: "messenger",
+      name: "Facebook Messenger",
+      description: "Integração com Facebook Messenger (em breve).",
+      ...ch.messenger
+    },
+    {
+      id: "instagram",
+      name: "Instagram Direct",
+      description: "Atendimento via Instagram Direct (em breve).",
+      ...ch.instagram
+    }
+  ];
 }
 
+/**
+ * Atualiza APENAS o canal Webchat
+ */
 export function updateWebchatChannel(db, patch) {
-  const channels = getChannels(db);
+  ensureDbShape(db);
+  const ch = db.settings.channels;
 
-  const next = { ...channels.webchat };
+  const next = { ...ch.webchat };
 
-  if (typeof patch.enabled === "boolean") next.enabled = patch.enabled;
+  if (typeof patch.enabled === "boolean") {
+    next.enabled = patch.enabled;
+  }
 
   if (Array.isArray(patch.allowedOrigins)) {
-    // normaliza origins
     next.allowedOrigins = patch.allowedOrigins
       .map((o) => String(o || "").trim())
       .filter(Boolean)
-      .map((o) => o.replace(/\/+$/, "")); // remove trailing slash
+      .map((o) => o.replace(/\/+$/, ""));
   }
 
   if (patch.config && typeof patch.config === "object") {
@@ -88,11 +136,8 @@ export function updateWebchatChannel(db, patch) {
       ...patch.config
     };
 
-    // normalizações simples
     if (next.config.position !== "left") next.config.position = "right";
-    if (typeof next.config.color !== "string" || !next.config.color.trim()) {
-      next.config.color = "#34d399";
-    }
+    if (!next.config.color) next.config.color = "#34d399";
   }
 
   // status derivado
@@ -100,29 +145,36 @@ export function updateWebchatChannel(db, patch) {
   else next.status = "connected";
 
   next.updatedAt = nowIso();
+  ch.webchat = next;
 
-  channels.webchat = next;
-  db.settings.channels = channels;
-
-  return channels.webchat;
+  return ch.webchat;
 }
 
+/**
+ * Rotaciona a widgetKey do Webchat
+ */
 export function rotateWebchatKey(db) {
-  const channels = getChannels(db);
-  channels.webchat.widgetKey = newWidgetKey();
-  channels.webchat.updatedAt = nowIso();
-  db.settings.channels = channels;
-  return { widgetKey: channels.webchat.widgetKey };
+  ensureDbShape(db);
+  db.settings.channels.webchat.widgetKey = newWidgetKey();
+  db.settings.channels.webchat.updatedAt = nowIso();
+
+  return {
+    widgetKey: db.settings.channels.webchat.widgetKey
+  };
 }
 
+/**
+ * Gera o snippet do Webchat
+ */
 export function buildWebchatSnippet({ widgetJsUrl, widgetKey, apiBase }) {
   const attrs = [
     `src="${widgetJsUrl}"`,
     `data-widget-key="${widgetKey}"`
   ];
 
-  // opcional (útil no dev / multicliente / ambientes)
-  if (apiBase) attrs.push(`data-api-base="${apiBase}"`);
+  if (apiBase) {
+    attrs.push(`data-api-base="${apiBase}"`);
+  }
 
   return `<script ${attrs.join(" ")} async></script>`;
 }
