@@ -332,13 +332,13 @@
     // localStorage.removeItem(STORAGE.session);
   }
 
-  // =============================
-  // UI
-  // =============================
-  const root = el("div", { id: "gpl-webchat-root" });
-  const styles = el("style", null, [
-    `
+ // ✅ SUBSTITUA APENAS ESTE BLOCO INTEIRO (UI > styles + setOpenUI)
+// (Removi as linhas "composer.style..." que você colocou dentro do CSS — aquilo quebra o CSS)
+
+const styles = el("style", null, [
+  `
 #gpl-webchat-root { all: initial; }
+
 #gpl-webchat-btn {
   all: unset;
   position: fixed;
@@ -359,6 +359,7 @@
   box-shadow: 0 10px 30px rgba(0,0,0,.35);
   user-select: none;
 }
+
 #gpl-webchat-panel {
   position: fixed;
   bottom: 78px;
@@ -367,15 +368,21 @@
   max-width: calc(100vw - 36px);
   height: 440px;
   max-height: calc(100vh - 120px);
+
   border-radius: 18px;
   overflow: hidden;
   background: #0a0f1c;
   color: #e5e7eb;
   box-shadow: 0 20px 60px rgba(0,0,0,.45);
   z-index: 2147483647;
-  display: none;
+
+  /* ✅ importante: layout em coluna */
+  display: none;              /* quando abrir, vira flex */
+  flex-direction: column;
+
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
 }
+
 #gpl-webchat-header {
   display: flex;
   align-items: center;
@@ -383,9 +390,11 @@
   padding: 12px 12px;
   background: rgba(255,255,255,.04);
   border-bottom: 1px solid rgba(255,255,255,.06);
+  flex: 0 0 auto;
 }
 #gpl-webchat-title { font-size: 14px; font-weight: 600; }
 #gpl-webchat-actions { display: flex; gap: 6px; }
+
 .gpl-icon-btn {
   all: unset;
   width: 34px;
@@ -397,15 +406,15 @@
   color: #e5e7eb;
 }
 .gpl-icon-btn:hover { background: rgba(255,255,255,.06); }
+
+/* ✅ corpo ocupa o espaço restante e não briga com o footer */
 #gpl-webchat-body {
   padding: 12px;
-  height: calc(100% - 54px - 54px);
   overflow: auto;
+  flex: 1 1 auto;
 }
-.gpl-msg {
-  display: flex;
-  margin: 10px 0;
-}
+
+.gpl-msg { display: flex; margin: 10px 0; }
 .gpl-msg .b {
   max-width: 85%;
   padding: 10px 12px;
@@ -416,38 +425,57 @@
   word-break: break-word;
 }
 .gpl-msg.visitor { justify-content: flex-end; }
-.gpl-msg.visitor .b { background: ${DEFAULTS.primaryColor}; color: #0b1220; border-bottom-right-radius: 6px; }
-.gpl-msg.agent .b, .gpl-msg.bot .b { background: rgba(255,255,255,.06); color: #e5e7eb; border-bottom-left-radius: 6px; }
+.gpl-msg.visitor .b {
+  background: ${DEFAULTS.primaryColor};
+  color: #0b1220;
+  border-bottom-right-radius: 6px;
+}
+.gpl-msg.agent .b, .gpl-msg.bot .b {
+  background: rgba(255,255,255,.06);
+  color: #e5e7eb;
+  border-bottom-left-radius: 6px;
+}
+
+/* ✅ footer fixo visualmente e com safe-area */
 #gpl-webchat-footer {
-  padding: 10px 10px;
-  border-top: 1px solid rgba(255,255,255,.06);
+  flex: 0 0 auto;
   display: flex;
   gap: 8px;
   align-items: center;
+
+  padding: 10px 10px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+
+  border-top: 1px solid rgba(255,255,255,.06);
   background: rgba(0,0,0,.12);
+  box-sizing: border-box;
 }
+
 #gpl-webchat-input {
   all: unset;
   flex: 1;
-  padding: 10px 12px;
+  height: 40px;
+  line-height: 40px;
+  padding: 0 12px;
   border-radius: 12px;
   background: rgba(255,255,255,.06);
   color: #e5e7eb;
   font-size: 13px;
+  box-sizing: border-box;
 }
+
 #gpl-webchat-send {
   all: unset;
   cursor: pointer;
-  padding: 10px 12px;
+  height: 40px;
+  line-height: 40px;
+  padding: 0 12px;
   border-radius: 12px;
   background: rgba(255,255,255,.10);
+  box-sizing: border-box;
 }
 #gpl-webchat-send:hover { background: rgba(255,255,255,.14); }
-#gpl-webchat-hint {
-  font-size: 12px;
-  color: rgba(229,231,235,.75);
-  margin: 6px 2px 0;
-}
+
 #gpl-webchat-closed {
   display: none;
   padding: 10px 12px;
@@ -456,22 +484,14 @@
   margin-top: 10px;
   font-size: 12px;
 }
-  // no container do input (footer / composer)
-composer.style.padding = "10px";
-composer.style.paddingBottom = "calc(12px + env(safe-area-inset-bottom))";
-composer.style.boxSizing = "border-box";
+`
+]);
 
-// garante altura mínima decente pro campo
-input.style.height = "40px";
-input.style.lineHeight = "40px";
-input.style.padding = "0 12px";
-input.style.boxSizing = "border-box";
+function setOpenUI(open) {
+  // ✅ como o painel agora é flex-column, ao abrir precisa ser "flex"
+  panel.style.display = open ? "flex" : "none";
+}
 
-// evita ficar escondido por overflow
-panel.style.overflow = "hidden";
-
-    `
-  ]);
 
   const btn = el("button", { id: "gpl-webchat-btn", type: "button" }, [
     el("span", { className: "bubble" }, [

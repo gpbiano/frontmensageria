@@ -3319,6 +3319,30 @@
   "webchat": {
     "conversations": [
       {
+        "id": "conv_web_1765728939795_d9ba4a5c64004cfd",
+        "channel": "web",
+        "widgetKey": "wkey_test",
+        "visitorId": "vis_1765728936795_e22fa24d9b07fb60",
+        "pageUrl": "https://widg.netlify.app/",
+        "referrer": null,
+        "utm": null,
+        "status": "open",
+        "createdAt": "2025-12-14T16:15:39.803Z",
+        "updatedAt": "2025-12-14T16:15:39.803Z",
+        "closedAt": null,
+        "closedBy": null,
+        "closedReason": null,
+        "messages": [
+          {
+            "id": "msg_1765728939803_6ca349687873d1f5",
+            "from": "bot",
+            "type": "text",
+            "text": "Olá! Como posso ajudar?",
+            "createdAt": "2025-12-14T16:15:39.803Z"
+          }
+        ]
+      },
+      {
         "id": "conv_web_1765728808263_ba14296bb97cbd1e",
         "channel": "web",
         "widgetKey": "wkey_test",
