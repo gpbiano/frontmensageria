@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-14T22:11:58.990Z"
+      "updatedAt": "2025-12-14T22:41:37.963Z"
     },
     {
       "id": 3,
@@ -581,12 +581,12 @@
       "channel": "whatsapp",
       "lastMessage": "",
       "status": "closed",
-      "updatedAt": "2025-12-14T21:35:33.949Z",
+      "updatedAt": "2025-12-14T22:16:16.032Z",
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
       "notes": "",
-      "lastMessageAt": "2025-12-14T21:35:33.949Z",
+      "lastMessageAt": "2025-12-14T22:16:16.032Z",
       "lastMessagePreview": "Atendimento encerrado.",
       "source": "whatsapp",
       "peerId": "wa:556499989978"
@@ -3447,6 +3447,17 @@
         "isBot": false,
         "text": "Atendimento encerrado.",
         "createdAt": "2025-12-14T21:35:33.945Z"
+      },
+      {
+        "id": "msg_1765750576029_bee76057e495",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-14T22:16:16.029Z"
       }
     ]
   },

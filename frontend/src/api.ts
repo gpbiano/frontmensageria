@@ -795,3 +795,36 @@ export async function downloadOptOutExport(params?: {
 
   return { success: true };
 }
+// ============================
+// SMS CAMPAIGNS (IAGENTE)
+// ============================
+
+export async function fetchSmsCampaigns() {
+  return request(`/outbound/sms-campaigns`, { method: "GET" });
+}
+
+export async function createSmsCampaign(payload: { name: string; message: string }) {
+  return request(`/outbound/sms-campaigns`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function uploadSmsCampaignAudience(id: string, file: File) {
+  const csvText = await file.text();
+
+  return request(`/outbound/sms-campaigns/${id}/audience`, {
+    method: "POST",
+    body: JSON.stringify({ csvText })
+  });
+}
+
+export async function startSmsCampaign(id: string) {
+  return request(`/outbound/sms-campaigns/${id}/start`, {
+    method: "POST"
+  });
+}
+
+export async function fetchSmsCampaignReport(id: string) {
+  return request(`/outbound/sms-campaigns/${id}/report`, { method: "GET" });
+}

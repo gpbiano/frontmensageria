@@ -15,6 +15,7 @@ import pinoHttp from "pino-http";
 import webchatRouter from "./routes/webchat.js";
 import channelsRouter from "./routes/channels.js";
 import conversationsRouter from "./routes/conversations.js";
+import smsCampaignsRouter from "./outbound/smsCampaignsRouter.js";
 
 // ===============================
 // ENV – CARREGAR .env.{ENV} ANTES DE IMPORTAR ROUTERS
@@ -863,6 +864,8 @@ app.use("/outbound/campaigns", campaignsRouter);
 // Opt-Out (compat dupla)
 app.use("/outbound/optout", optoutRouter);
 app.use("/outbound", optoutRouter);
+app.use("/outbound/sms-campaigns", smsCampaignsRouter);
+
 
 // agregador por último
 app.use("/outbound", outboundRouter);

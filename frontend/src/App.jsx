@@ -21,6 +21,9 @@ import CampaignCreateWizard from "./pages/outbound/campaigns/CampaignCreateWizar
 // ✅ Reportes (Analytics “Meta-like”)
 import CampaignsAnalyticsPage from "./pages/outbound/campaigns/CampaignsAnalyticsPage.jsx";
 
+// ✅ SMS Campaigns (NOVO)
+import SmsCampaignsPage from "./pages/outbound/sms/SmsCampaignsPage.jsx";
+
 // Assets
 import AssetsPage from "./pages/outbound/AssetsPage.jsx";
 
@@ -50,7 +53,6 @@ import "./styles/settings-groups.css";
 
 // ✅ CSS da página de canais
 import "./styles/settings-channels.css";
-
 
 const AUTH_KEY = "gpLabsAuthToken";
 
@@ -120,6 +122,10 @@ const MENU = [
     items: [
       { id: "reportes", label: "Reportes" },
       { id: "campanhas", label: "Campanhas" },
+
+      // ✅ NOVO: SMS logo abaixo de "Campanhas"
+      { id: "sms", label: "Campanhas de SMS" },
+
       { id: "nova", label: "Criar campanha" },
       { id: "templates", label: "Templates" },
       { id: "numeros", label: "Números" },
@@ -317,6 +323,15 @@ function SectionRenderer({ main, sub, goTo }) {
       );
     }
 
+    // ✅ NOVO: Campanhas de SMS
+    if (sub === "sms") {
+      return (
+        <div className="page-full">
+          <SmsCampaignsPage />
+        </div>
+      );
+    }
+
     if (sub === "nova") {
       return (
         <div className="page-full">
@@ -368,7 +383,10 @@ function SectionRenderer({ main, sub, goTo }) {
     }
 
     return (
-      <Placeholder title={`Campanhas · ${subSectionLabel(sub)}`} text="Seção em construção." />
+      <Placeholder
+        title={`Campanhas · ${subSectionLabel(sub)}`}
+        text="Seção em construção."
+      />
     );
   }
 
@@ -438,6 +456,8 @@ function subSectionLabel(sub) {
       return "Reportes";
     case "campanhas":
       return "Campanhas";
+    case "sms":
+      return "Campanhas de SMS";
     case "nova":
       return "Criar campanha";
     case "templates":
