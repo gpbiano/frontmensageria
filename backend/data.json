@@ -3094,9 +3094,23 @@
       "results": [
         {
           "phone": "5564999477939",
-          "status": "sent",
+          "status": "read",
           "waMessageId": "wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSQTczRDE3MDE4MzdBQUNFQzZGAA==",
-          "updatedAt": "2025-12-12T23:02:12.955Z"
+          "updatedAt": "2025-12-14T16:53:11.000Z",
+          "statusHistory": [
+            {
+              "at": "2025-12-14T16:53:11.000Z",
+              "status": "read"
+            }
+          ],
+          "errorCode": null,
+          "errorMessage": null,
+          "errorLink": null,
+          "metaErrorCode": null,
+          "metaErrorTitle": null,
+          "metaErrorMessage": null,
+          "metaErrorDetails": null,
+          "metaErrorLink": null
         },
         {
           "phone": "5564999989978",
@@ -3125,11 +3139,17 @@
           "at": "2025-12-12T23:02:13.630Z",
           "type": "finished",
           "message": "Finalizada: 2 enviados, 0 falhas"
+        },
+        {
+          "at": "2025-12-14T16:53:11.000Z",
+          "type": "wa_status",
+          "message": "Status webhook: read (msgId=wamid.HBgMNTU2NDk5NDc3OTM5FQIAERgSQTczRDE3MDE4MzdBQUNFQzZGAA==)"
         }
       ],
       "timeline": {
         "startedAt": "2025-12-12T23:02:12.287Z",
-        "finishedAt": "2025-12-12T23:02:13.630Z"
+        "finishedAt": "2025-12-12T23:02:13.630Z",
+        "lastStatusAt": "2025-12-14T16:53:11.000Z"
       }
     },
     {
@@ -3315,112 +3335,5 @@
       "createdAt": "2025-12-13T19:02:22.597Z",
       "updatedAt": "2025-12-13T19:02:22.597Z"
     }
-  ],
-  "webchat": {
-    "conversations": [
-      {
-        "id": "conv_web_1765728939795_d9ba4a5c64004cfd",
-        "channel": "web",
-        "widgetKey": "wkey_test",
-        "visitorId": "vis_1765728936795_e22fa24d9b07fb60",
-        "pageUrl": "https://widg.netlify.app/",
-        "referrer": null,
-        "utm": null,
-        "status": "open",
-        "createdAt": "2025-12-14T16:15:39.803Z",
-        "updatedAt": "2025-12-14T16:15:39.803Z",
-        "closedAt": null,
-        "closedBy": null,
-        "closedReason": null,
-        "messages": [
-          {
-            "id": "msg_1765728939803_6ca349687873d1f5",
-            "from": "bot",
-            "type": "text",
-            "text": "Olá! Como posso ajudar?",
-            "createdAt": "2025-12-14T16:15:39.803Z"
-          }
-        ]
-      },
-      {
-        "id": "conv_web_1765728808263_ba14296bb97cbd1e",
-        "channel": "web",
-        "widgetKey": "wkey_test",
-        "visitorId": "vis_1765728803659_baf7788bdf6389d1",
-        "pageUrl": "https://widg.netlify.app/",
-        "referrer": null,
-        "utm": null,
-        "status": "closed",
-        "createdAt": "2025-12-14T16:13:28.267Z",
-        "updatedAt": "2025-12-14T16:13:38.246Z",
-        "closedAt": "2025-12-14T16:13:38.246Z",
-        "closedBy": "user",
-        "closedReason": "user_closed",
-        "messages": [
-          {
-            "id": "msg_1765728808267_4812701cdce82402",
-            "from": "bot",
-            "type": "text",
-            "text": "Olá! Como posso ajudar?",
-            "createdAt": "2025-12-14T16:13:28.267Z"
-          }
-        ]
-      },
-      {
-        "id": "conv_web_1765728156391_e32409f20f08db08",
-        "channel": "web",
-        "widgetKey": "wkey_test",
-        "visitorId": "vis_1765728144069_8edb2377a18f48f4",
-        "pageUrl": "https://widg.netlify.app/",
-        "referrer": null,
-        "utm": null,
-        "status": "closed",
-        "createdAt": "2025-12-14T16:02:36.398Z",
-        "updatedAt": "2025-12-14T16:11:15.969Z",
-        "closedAt": "2025-12-14T16:11:15.969Z",
-        "closedBy": "user",
-        "closedReason": "user_closed",
-        "messages": [
-          {
-            "id": "msg_1765728156398_d62c4d9d040a7243",
-            "from": "bot",
-            "type": "text",
-            "text": "Olá! Como posso ajudar?",
-            "createdAt": "2025-12-14T16:02:36.398Z"
-          },
-          {
-            "id": "msg_1765728162321_9f5487b209ba1d8d",
-            "from": "visitor",
-            "type": "text",
-            "text": "Oi",
-            "createdAt": "2025-12-14T16:02:42.321Z"
-          }
-        ]
-      },
-      {
-        "id": "conv_web_1765727761932_3bb6dd109780f91d",
-        "channel": "web",
-        "widgetKey": "wkey_test",
-        "visitorId": "vis_test",
-        "pageUrl": null,
-        "referrer": null,
-        "utm": null,
-        "status": "open",
-        "createdAt": "2025-12-14T15:56:01.939Z",
-        "updatedAt": "2025-12-14T15:56:01.939Z",
-        "closedAt": null,
-        "closedBy": null,
-        "closedReason": null,
-        "messages": [
-          {
-            "id": "msg_1765727761940_570bf3af6c747a4d",
-            "from": "bot",
-            "type": "text",
-            "text": "Olá! Como posso ajudar?",
-            "createdAt": "2025-12-14T15:56:01.939Z"
-          }
-        ]
-      }
-    ]
-  }
+  ]
 }

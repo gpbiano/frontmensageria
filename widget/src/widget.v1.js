@@ -1,6 +1,6 @@
 /* GP Labs Web Chat Widget — v1
  * Embed via:
- * <script src="https://cliente.gplabs.com.br/widget.js" data-widget-key="wkey_xxx" async></script>
+ * <script src="https://widget.gplabs.com.br/widget.js" data-widget-key="wkey_xxx" async></script>
  *
  * Requisitos (backend):
  * - POST   /webchat/session
@@ -15,6 +15,9 @@
 
 (function () {
   "use strict";
+
+  // Evita duplicar se injetar duas vezes
+  if (document.getElementById("gpl-webchat-root")) return;
 
   // =============================
   // Helpers
@@ -46,7 +49,6 @@
     return n;
   }
 
-  // Nunca renderize HTML vindo do usuário: texto puro
   function safeText(str) {
     return String(str ?? "");
   }
@@ -58,9 +60,7 @@
   function randHex(len) {
     const a = new Uint8Array(len);
     (window.crypto || window.msCrypto).getRandomValues(a);
-    return Array.from(a)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    return Array.from(a).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
 
   function getOrCreateVisitorId(storageKey) {
@@ -86,16 +86,23 @@
   // =============================
   // Config (via data-attributes)
   // =============================
-  const script = (function findThisScript() {
-    const scripts = document.getElementsByTagName("script");
-    return scripts[scripts.length - 1];
-  })();
+  const script =
+    document.currentScript ||
+    (function findScript() {
+      const scripts = document.getElementsByTagName("script");
+      for (let i = scripts.length - 1; i >= 0; i--) {
+        const s = scripts[i];
+        const src = (s.getAttribute("src") || "").toLowerCase();
+        if (src.includes("widget.v1.js")) return s;
+      }
+      return scripts[scripts.length - 1];
+    })();
 
-  const WIDGET_KEY = script && script.dataset ? script.dataset.widgetKey : "";
+  const WIDGET_KEY = script?.dataset?.widgetKey || "";
   if (!WIDGET_KEY) return;
 
   const API_BASE =
-    (script && script.dataset ? script.dataset.apiBase : "") ||
+    script?.dataset?.apiBase ||
     (function guessBase() {
       try {
         const u = new URL(script.src);
@@ -106,19 +113,13 @@
     })();
 
   const DEFAULTS = {
-    primaryColor: (script && script.dataset && script.dataset.color) || "#34d399",
-    position: (script && script.dataset && script.dataset.position) || "right", // right | left
-    buttonText: (script && script.dataset && script.dataset.buttonText) || "Ajuda",
-    headerTitle: (script && script.dataset && script.dataset.title) || "Atendimento",
-    greeting:
-      (script && script.dataset && script.dataset.greeting) ||
-      "Olá! Como posso ajudar?",
-    pollingOpenMs: Number(
-      (script && script.dataset && script.dataset.pollingOpenMs) || 2500
-    ),
-    pollingMinimizedMs: Number(
-      (script && script.dataset && script.dataset.pollingMinimizedMs) || 12000
-    ),
+    primaryColor: script?.dataset?.color || "#34d399",
+    position: script?.dataset?.position || "right", // right | left
+    buttonText: script?.dataset?.buttonText || "Ajuda",
+    headerTitle: script?.dataset?.title || "Atendimento",
+    greeting: script?.dataset?.greeting || "Olá! Como posso ajudar?",
+    pollingOpenMs: Number(script?.dataset?.pollingOpenMs || 2500),
+    pollingMinimizedMs: Number(script?.dataset?.pollingMinimizedMs || 12000),
     maxMessageLen: 2000
   };
 
@@ -154,7 +155,7 @@
     const url = `${API_BASE}${path}`;
     const headers = Object.assign(
       { "Content-Type": "application/json" },
-      (opts && opts.headers) || {}
+      opts?.headers || {}
     );
 
     if (state.webchatToken) {
@@ -163,9 +164,9 @@
     headers["X-Widget-Key"] = WIDGET_KEY;
 
     const res = await fetch(url, {
-      method: (opts && opts.method) || "GET",
+      method: opts?.method || "GET",
       headers,
-      body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
+      body: opts?.body ? JSON.stringify(opts.body) : undefined,
       credentials: "omit"
     });
 
@@ -178,7 +179,7 @@
     }
 
     if (!res.ok) {
-      const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
+      const msg = data?.error || data?.message || `HTTP ${res.status}`;
       throw new Error(msg);
     }
     return data;
@@ -261,7 +262,7 @@
       items.forEach((m) => addMessageToUI(m));
       state.lastCursor = res.nextCursor || state.lastCursor;
       persistCursor();
-      scrollToBottom();
+      scrollToBottom(true);
     } else if (res.nextCursor) {
       state.lastCursor = res.nextCursor;
       persistCursor();
@@ -281,7 +282,6 @@
   async function sendVisitorMessage(text) {
     const msg = safeText(text).trim();
     if (!msg) return;
-
     if (msg.length > DEFAULTS.maxMessageLen) {
       throw new Error(
         `Mensagem muito longa (máx ${DEFAULTS.maxMessageLen} caracteres).`
@@ -296,14 +296,14 @@
       text: msg,
       createdAt: nowIso()
     });
-    scrollToBottom();
+    scrollToBottom(true);
 
     const res = await api("/webchat/messages", {
       method: "POST",
       body: { conversationId: state.conversationId, text: msg }
     });
 
-    if (res && res.nextCursor) {
+    if (res?.nextCursor) {
       state.lastCursor = res.nextCursor;
       persistCursor();
     }
@@ -311,6 +311,7 @@
 
   async function closeByUser() {
     if (!state.conversationId) return;
+
     try {
       await api(
         `/webchat/conversations/${encodeURIComponent(state.conversationId)}/close`,
@@ -321,6 +322,11 @@
     state.isClosed = true;
     setClosedUI(true);
     stopPolling();
+
+    // ✅ recomendação: se fechou pelo X, limpa cache pra reabrir virar sessão nova
+    try {
+      localStorage.removeItem(STORAGE.session);
+    } catch {}
   }
 
   // =============================
@@ -369,7 +375,7 @@
   box-shadow: 0 20px 60px rgba(0,0,0,.45);
   z-index: 2147483647;
 
-  display: none; /* ao abrir vira flex */
+  display: none;            /* ao abrir -> flex */
   flex-direction: column;
 
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -490,20 +496,12 @@
       el("div", { id: "gpl-webchat-actions" }, [
         el(
           "button",
-          {
-            className: "gpl-icon-btn",
-            title: "Minimizar",
-            onClick: () => toggleMinimize()
-          },
+          { className: "gpl-icon-btn", title: "Minimizar", onClick: () => toggleMinimize() },
           ["—"]
         ),
         el(
           "button",
-          {
-            className: "gpl-icon-btn",
-            title: "Encerrar atendimento",
-            onClick: () => closeByUser()
-          },
+          { className: "gpl-icon-btn", title: "Encerrar atendimento", onClick: () => closeByUser() },
           ["✕"]
         )
       ])
@@ -524,11 +522,7 @@
       }),
       el(
         "button",
-        {
-          id: "gpl-webchat-send",
-          type: "button",
-          onClick: () => handleSend()
-        },
+        { id: "gpl-webchat-send", type: "button", onClick: () => handleSend() },
         ["Enviar"]
       )
     ])
@@ -542,6 +536,7 @@
   const bodyEl = $("#gpl-webchat-body", panel);
   const inputEl = $("#gpl-webchat-input", panel);
   const closedEl = $("#gpl-webchat-closed", panel);
+  const sendBtnEl = $("#gpl-webchat-send", panel);
 
   function setOpenUI(open) {
     panel.style.display = open ? "flex" : "none";
@@ -551,7 +546,7 @@
     state.isClosed = !!isClosed;
     closedEl.style.display = state.isClosed ? "block" : "none";
     inputEl.disabled = state.isClosed;
-    $("#gpl-webchat-send", panel).disabled = state.isClosed;
+    sendBtnEl.disabled = state.isClosed;
   }
 
   function addMessageToUI(m) {
@@ -573,10 +568,10 @@
     bodyEl.appendChild(row);
   }
 
-  function scrollToBottom() {
+  function scrollToBottom(force) {
     const nearBottom =
       bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 120;
-    if (nearBottom) bodyEl.scrollTop = bodyEl.scrollHeight;
+    if (force || nearBottom) bodyEl.scrollTop = bodyEl.scrollHeight;
   }
 
   async function handleSend() {
@@ -590,10 +585,10 @@
         id: `err_${Date.now()}`,
         from: "bot",
         type: "text",
-        text: `Não consegui enviar: ${safeText(e && e.message ? e.message : e)}`,
+        text: `Não consegui enviar: ${safeText(e.message || e)}`,
         createdAt: nowIso()
       });
-      scrollToBottom();
+      scrollToBottom(true);
     }
   }
 
@@ -613,6 +608,7 @@
       if (state.isOpen) {
         await ensureReady();
         startPolling();
+        scrollToBottom(true);
       } else {
         stopPolling();
       }
@@ -652,10 +648,10 @@
         if (!state.isOpen && !state.isMinimized) return;
         await fetchNewMessages();
       } catch {
+        // silêncio
       } finally {
         const hidden = document.hidden;
-        const next =
-          hidden ? Math.max(state.pollInterval, 15000) : state.pollInterval;
+        const next = hidden ? Math.max(state.pollInterval, 15000) : state.pollInterval;
         schedulePoll(next);
       }
     }, ms);
@@ -677,12 +673,11 @@
   // =============================
   async function ensureReady() {
     if (state.conversationId && state.webchatToken) return;
-
     try {
       await createOrResumeSession();
       setClosedUI(state.isClosed);
       await fetchNewMessages();
-      scrollToBottom();
+      scrollToBottom(true);
     } catch {
       setClosedUI(false);
       addMessageToUI({
@@ -692,9 +687,7 @@
         text: "Não consegui iniciar o chat agora. Tente novamente em instantes.",
         createdAt: nowIso()
       });
-      scrollToBottom();
+      scrollToBottom(true);
     }
   }
-
-  // Inicializa “quieto” (só cria sessão quando abrir)
 })();
