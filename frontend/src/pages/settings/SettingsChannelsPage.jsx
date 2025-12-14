@@ -1,5 +1,7 @@
 // frontend/src/settings/SettingsChannelsPage.jsx
 import { useEffect, useMemo, useState } from "react";
+import "../styles/settings-channels.css"; // ✅ ajuste o caminho se necessário
+
 
 import {
   fetchChannels,

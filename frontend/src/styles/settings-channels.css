@@ -1,195 +1,280 @@
 /* ===============================
-   SETTINGS – CHANNELS
+   SETTINGS – CHANNELS (NEW)
 ================================ */
 
+:root {
+  --sc-bg: #070b16;
+  --sc-card: #0b1220;
+  --sc-border: rgba(255, 255, 255, 0.08);
+  --sc-border-strong: rgba(255, 255, 255, 0.12);
+  --sc-text: #e5e7eb;
+  --sc-muted: rgba(229, 231, 235, 0.75);
+  --sc-muted2: rgba(229, 231, 235, 0.6);
+
+  --sc-green: #34d399;
+  --sc-green-2: rgba(52, 211, 153, 0.14);
+  --sc-red: #f87171;
+  --sc-red-2: rgba(248, 113, 113, 0.14);
+  --sc-yellow: #fbbf24;
+  --sc-yellow-2: rgba(251, 191, 36, 0.12);
+
+  --sc-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  --sc-radius: 18px;
+}
+
+/* página */
 .settings-page {
   padding: 24px;
-  max-width: 1100px;
+  max-width: 1120px;
   margin: 0 auto;
-  color: #e5e7eb;
+  color: var(--sc-text);
 }
 
-.settings-header h1 {
-  font-size: 24px;
-  font-weight: 700;
-  margin-bottom: 4px;
+/* topo */
+.settings-title {
+  font-size: 26px;
+  font-weight: 800;
+  margin: 0;
+  letter-spacing: -0.02em;
 }
 
-.settings-header p {
-  opacity: 0.8;
-  margin-bottom: 24px;
+.settings-subtitle {
+  margin: 8px 0 18px 0;
+  opacity: 0.82;
+  line-height: 1.4;
 }
 
-/* ===============================
-   CHANNEL CARD
-================================ */
-
-.channel-card {
-  background: #0b1220;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  padding: 16px;
-  margin-bottom: 16px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
-}
-
-.channel-header {
-  display: flex;
+.settings-env-info {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.channel-header h2 {
-  font-size: 18px;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.channel-header p {
-  font-size: 14px;
-  opacity: 0.75;
-}
-
-/* ===============================
-   CHANNEL BODY
-================================ */
-
-.channel-body {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.channel-body.muted {
-  opacity: 0.6;
-}
-
-/* ===============================
-   FORM
-================================ */
-
-.form-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-
-.form-row label {
-  font-size: 12px;
-  opacity: 0.8;
-}
-
-.form-row input,
-.form-row textarea,
-.form-row select {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
-  padding: 10px 12px;
-  color: #e5e7eb;
-  outline: none;
-}
-
-.form-row textarea {
-  resize: vertical;
-  min-height: 80px;
-}
-
-.form-row input:focus,
-.form-row textarea:focus,
-.form-row select:focus {
-  border-color: #34d399;
-}
-
-/* ===============================
-   INLINE (Widget Key)
-================================ */
-
-.inline {
-  display: flex;
   gap: 8px;
+  margin-bottom: 18px;
+  padding: 8px 10px;
+  border: 1px solid var(--sc-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+  opacity: 0.9;
 }
 
-.inline input {
-  flex: 1;
+.settings-section {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius);
+  background: rgba(255, 255, 255, 0.02);
 }
 
-/* ===============================
-   BUTTONS
-================================ */
+.settings-section-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
 
-button {
+.settings-section-description {
+  margin: 8px 0 0 0;
+  color: var(--sc-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* grid cards */
+.settings-channels-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .settings-channels-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* card */
+.settings-channel-card {
+  background: var(--sc-card);
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius);
+  padding: 16px;
+  box-shadow: var(--sc-shadow);
+  transition: transform 0.15s ease, border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.settings-channel-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(52, 211, 153, 0.25);
+  background: rgba(11, 18, 32, 0.96);
+}
+
+.settings-channel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-channel-title {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.settings-channel-description {
+  margin: 10px 0 0 0;
+  font-size: 13px;
+  color: var(--sc-muted);
+  line-height: 1.4;
+}
+
+/* buttons */
+.settings-primary-btn {
+  appearance: none;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.12);
+  color: #d1fae5;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 800;
   cursor: pointer;
-  border-radius: 10px;
-  padding: 10px 14px;
-  border: none;
-  font-weight: 600;
+  transition: transform 0.12s ease, background 0.12s ease,
+    border-color 0.12s ease, opacity 0.12s ease;
+  user-select: none;
 }
 
-button:disabled {
+.settings-primary-btn:hover {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(52, 211, 153, 0.5);
+}
+
+.settings-primary-btn:active {
+  transform: translateY(1px);
+}
+
+.settings-primary-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-button.danger {
-  background: rgba(239, 68, 68, 0.15);
-  color: #fecaca;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-}
-
-/* ===============================
-   SWITCH (TOGGLE)
-================================ */
-
-.switch {
-  position: relative;
-  display: inline-block;
-  width: 46px;
-  height: 26px;
-}
-
-.switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.slider {
-  position: absolute;
-  cursor: pointer;
-  inset: 0;
-  background-color: #374151;
-  transition: 0.3s;
+/* status pill */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
   border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid var(--sc-border);
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.slider:before {
-  position: absolute;
+.status-pill::before {
   content: "";
-  height: 20px;
-  width: 20px;
-  left: 3px;
-  bottom: 3px;
-  background-color: white;
-  transition: 0.3s;
-  border-radius: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
 }
 
-.switch input:checked + .slider {
-  background-color: #34d399;
+.status-pill-on {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: var(--sc-green-2);
+  color: #d1fae5;
 }
 
-.switch input:checked + .slider:before {
-  transform: translateX(20px);
+.status-pill-on::before {
+  background: var(--sc-green);
 }
 
-/* ===============================
-   STATES
-================================ */
-
-.error {
-  margin: 12px 0;
+.status-pill-off {
+  border-color: rgba(248, 113, 113, 0.35);
+  background: var(--sc-red-2);
   color: #fecaca;
+}
+
+.status-pill-off::before {
+  background: var(--sc-red);
+}
+
+.status-pill-soon {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: var(--sc-yellow-2);
+  color: #fde68a;
+}
+
+.status-pill-soon::before {
+  background: var(--sc-yellow);
+}
+
+/* steps block */
+.settings-steps {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--sc-border);
+}
+
+.settings-steps-title {
+  margin: 0 0 6px 0;
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.settings-steps-description {
+  margin: 0;
+  font-size: 13px;
+  color: var(--sc-muted);
+  line-height: 1.4;
+}
+
+.settings-steps-list {
+  margin: 10px 0 0 18px;
+  padding: 0;
+  color: var(--sc-muted2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* small code look */
+code {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+/* optional: textarea monospace in modal */
+textarea {
+  font-family: inherit;
+}
+
+textarea[readonly] {
+  opacity: 0.95;
+}
+
+/* modal close button hover */
+button[title="Fechar"]:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* focus states */
+.settings-primary-btn:focus,
+input:focus,
+textarea:focus,
+select:focus,
+button:focus {
+  outline: none;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+.settings-primary-btn:focus-visible {
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.22);
+  border-color: rgba(52, 211, 153, 0.45) !important;
 }
