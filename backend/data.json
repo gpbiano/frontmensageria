@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-14T20:50:49.027Z"
+      "updatedAt": "2025-12-14T22:11:58.990Z"
     },
     {
       "id": 3,
@@ -3457,7 +3457,41 @@
       "Reclamação",
       "Financeiro"
     ],
-    "channels": {}
+    "channels": {
+      "webchat": {
+        "enabled": false,
+        "status": "not_connected",
+        "widgetKey": "wkey_1765750433783_075fe458d9d41cf6",
+        "allowedOrigins": [],
+        "config": {
+          "color": "#34d399",
+          "position": "right",
+          "buttonText": "Ajuda",
+          "title": "Atendimento",
+          "greeting": "Olá! Como posso ajudar?"
+        },
+        "createdAt": "2025-12-14T22:13:53.784Z",
+        "updatedAt": "2025-12-14T22:13:53.784Z"
+      },
+      "whatsapp": {
+        "enabled": true,
+        "status": "connected",
+        "createdAt": "2025-12-14T22:13:53.784Z",
+        "updatedAt": "2025-12-14T22:13:53.784Z"
+      },
+      "messenger": {
+        "enabled": false,
+        "status": "soon",
+        "createdAt": "2025-12-14T22:13:53.784Z",
+        "updatedAt": "2025-12-14T22:13:53.784Z"
+      },
+      "instagram": {
+        "enabled": false,
+        "status": "soon",
+        "createdAt": "2025-12-14T22:13:53.784Z",
+        "updatedAt": "2025-12-14T22:13:53.784Z"
+      }
+    }
   },
   "contacts": [
     {

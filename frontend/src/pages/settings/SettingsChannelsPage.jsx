@@ -10,7 +10,7 @@ import {
   updateWebchatChannel,
   rotateWebchatKey,
   fetchWebchatSnippet
-} from "../api"; // ✅ ok
+} from "../../api"; // ✅ ok
 
 /**
  * Settings > Canais (compatível com backend atual)
