@@ -1,5 +1,5 @@
 // frontend/src/components/ChatPanel.jsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const EMOJI_PALETTE = [
   "😀","😁","😂","🤣","😊","😍","😘","😎",
@@ -8,56 +8,64 @@ const EMOJI_PALETTE = [
   "❤️","💚","💙","💛","🧡","🤍","🤝","✅"
 ];
 
-// ------------------------------
-// Normalização do remetente
-// ------------------------------
-function normalizeFrom(msg) {
-  const raw = (
-    msg?.from ??
-    msg?.sender ??
-    msg?.role ??
-    msg?.author ??
-    msg?.direction ??
-    msg?.meta?.direction ??
+function inferSender(msg) {
+  const from = (msg?.from ?? msg?.sender ?? msg?.role ?? "").toString().toLowerCase();
+  const dir = (msg?.direction ?? msg?.dir ?? "").toString().toLowerCase();
+  const channel = (msg?.channel ?? msg?.origin ?? msg?.source ?? "").toString().toLowerCase();
+
+  // ✅ prioridade máxima: se o backend separar por "chatbot"
+  if (channel === "chatbot" || channel === "bot") return "bot";
+
+  // ✅ flags clássicas do bot
+  if (from === "bot" || msg?.isBot || msg?.fromBot) return "bot";
+
+  // ✅ WebChat
+  if (from === "visitor" || from === "client" || from === "customer" || from === "user") return "client";
+  if (from === "agent" || from === "attendant" || from === "human") return "agent";
+
+  // ✅ direction in/out
+  if (dir === "in" || dir === "inbound") return "client";
+  if (dir === "out" || dir === "outbound") return "agent";
+
+  // ✅ WhatsApp webhook
+  if (typeof msg?.fromMe === "boolean") return msg.fromMe ? "agent" : "client";
+
+  return "client";
+}
+
+
+function formatMessageText(msg) {
+  if (msg?.type === "system") {
+    return (
+      msg?.textPublic ||
+      msg?.text ||
+      msg?.message ||
+      msg?.event ||
+      "Atualização do atendimento"
+    );
+  }
+
+  return (
+    msg?.text?.body ??
+    msg?.text ??
+    msg?.body ??
+    msg?.message ??
+    msg?.content ??
+    msg?.payload?.text ??
     ""
-  )
-    .toString()
-    .trim()
-    .toLowerCase();
-
-  // Alguns backends usam direction: "in"/"out" ou "inbound"/"outbound"
-  if (raw === "in") return "visitor";
-  if (raw === "out") return "agent";
-  if (raw === "inbound") return "visitor";
-  if (raw === "outbound") return "agent";
-
-  // Nomes comuns
-  if (raw === "client" || raw === "customer" || raw === "user" || raw === "visitor")
-    return "visitor";
-  if (raw === "agent" || raw === "human" || raw === "attendant" || raw === "support")
-    return "agent";
-  if (raw === "bot" || raw === "chatbot" || raw === "assistant") return "bot";
-
-  // Seu código antigo: from === "client"
-  if (raw === "client") return "visitor";
-
-  // Seu código antigo: direction === "in"
-  if ((msg?.direction || "").toString().toLowerCase() === "in") return "visitor";
-
-  // Fallback: se marcado como bot
-  if (msg?.isBot || msg?.fromBot) return "bot";
-
-  // Fallback final: assume inbound (cliente) quando não dá pra saber
-  return "visitor";
+  );
 }
 
-function isInboundMessage(msg) {
-  const from = normalizeFrom(msg);
-  return from === "visitor";
-}
+function formatTimestamp(msg) {
+  const raw = msg?.timestamp ?? msg?.createdAt ?? msg?.sentAt ?? msg?.updatedAt ?? null;
+  if (!raw) return "";
 
-function isBotMessage(msg) {
-  return normalizeFrom(msg) === "bot";
+  let date;
+  if (typeof raw === "number") date = raw > 10_000_000_000 ? new Date(raw) : new Date(raw * 1000);
+  else date = new Date(raw);
+
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
 }
 
 export default function ChatPanel({
@@ -65,7 +73,7 @@ export default function ChatPanel({
   messages,
   loadingMessages,
   onSendText,
-  onSendMedia, // mantido (uso futuro)
+  onSendMedia, // (ainda não usado)
   onChangeStatus
 }) {
   const [draft, setDraft] = useState("");
@@ -76,57 +84,43 @@ export default function ChatPanel({
 
   const isClosed = conversation?.status === "closed";
 
+  const headerName =
+    conversation?.contactName ||
+    conversation?.contact?.name ||
+    conversation?.phone ||
+    conversation?.contactPhone ||
+    "Contato sem nome";
+
+  const headerPhone =
+    conversation?.phone ||
+    conversation?.contactPhone ||
+    conversation?.contact?.phone ||
+    "—";
+
+  // evita key instável e evita rerender “doido”
+  const normalizedMessages = useMemo(() => {
+    const arr = Array.isArray(messages) ? messages : [];
+    return arr.map((m, idx) => ({
+      __key:
+        m?.id ||
+        m?._id ||
+        m?.messageId ||
+        m?.waMessageId ||
+        m?.timestamp ||
+        `${conversation?.id || "c"}_${idx}_${m?.createdAt || ""}`,
+      ...m
+    }));
+  }, [messages, conversation?.id]);
+
   useEffect(() => {
     if (!bottomRef.current) return;
     bottomRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, loadingMessages]);
+  }, [normalizedMessages, loadingMessages]);
 
   useEffect(() => {
     setDraft("");
     setShowEmoji(false);
   }, [conversation?.id]);
-
-  function formatMessageText(msg) {
-    if (msg?.type === "system") {
-      return (
-        msg?.textPublic ||
-        msg?.text ||
-        msg?.message ||
-        msg?.event ||
-        "Atualização do atendimento"
-      );
-    }
-
-    return (
-      msg?.text?.body ??
-      msg?.text ??
-      msg?.body ??
-      msg?.message ??
-      msg?.content ??
-      ""
-    );
-  }
-
-  function formatTimestamp(msg) {
-    const raw =
-      msg.timestamp ??
-      msg.createdAt ??
-      msg.sentAt ??
-      msg.updatedAt ??
-      null;
-
-    if (!raw) return "";
-
-    let date;
-    if (typeof raw === "number") {
-      date = raw > 10_000_000_000 ? new Date(raw) : new Date(raw * 1000);
-    } else {
-      date = new Date(raw);
-    }
-
-    if (Number.isNaN(date.getTime())) return "";
-    return date.toLocaleString();
-  }
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -155,18 +149,12 @@ export default function ChatPanel({
     onChangeStatus(conversation.id, "closed");
   }
 
-  const headerName =
-    conversation?.contactName ||
-    conversation?.phone ||
-    "Contato sem nome";
-  const headerPhone = conversation?.phone || "—";
-
   return (
     <div className="chat-panel">
       <header className="chat-panel-header">
         <div className="chat-panel-header-left">
           <div className="chat-panel-avatar">
-            {headerName.toString().charAt(0).toUpperCase()}
+            {String(headerName).charAt(0).toUpperCase()}
           </div>
           <div>
             <div className="chat-header-name">{headerName}</div>
@@ -187,7 +175,7 @@ export default function ChatPanel({
                 color: "#e5e7eb",
                 fontSize: 12,
                 outline: "none",
-                cursor: "pointer"
+                cursor: conversation ? "pointer" : "default"
               }}
             >
               <option value="open">Aberta</option>
@@ -212,28 +200,20 @@ export default function ChatPanel({
           <div className="chat-history-empty">Carregando mensagens...</div>
         )}
 
-        {!loadingMessages && (!messages || messages.length === 0) && (
+        {!loadingMessages && (!normalizedMessages || normalizedMessages.length === 0) && (
           <div className="chat-history-empty">
             Nenhuma mensagem nesta conversa ainda.
           </div>
         )}
 
-        {messages?.map((msg, idx) => {
-          const key =
-            msg.id ||
-            msg._id ||
-            msg.messageId ||
-            msg.timestamp ||
-            msg.createdAt ||
-            `msg_${idx}`;
-
+        {normalizedMessages.map((msg) => {
           // ✅ Mensagens de sistema (centralizadas)
           if (msg?.type === "system") {
             const text = formatMessageText(msg);
             const ts = formatTimestamp(msg);
             return (
               <div
-                key={key}
+                key={msg.__key}
                 className="message-row"
                 style={{ justifyContent: "center" }}
               >
@@ -262,15 +242,14 @@ export default function ChatPanel({
             );
           }
 
-          // ✅ Correção principal: inbound/outbound/bot
-          const inbound = isInboundMessage(msg);
-          const bot = isBotMessage(msg);
+          const sender = inferSender(msg); // client | agent | bot
+          const isInbound = sender === "client";
+          const isBot = sender === "bot";
 
-          const rowClass = inbound
+          const rowClass = isInbound
             ? "message-row message-row-in"
             : "message-row message-row-out";
-
-          const bubbleClass = inbound
+          const bubbleClass = isInbound
             ? "message-bubble-in"
             : "message-bubble-out";
 
@@ -278,17 +257,14 @@ export default function ChatPanel({
           const ts = formatTimestamp(msg);
 
           // ✅ Label correto
-          const senderLabel = inbound
+          const senderLabel = isInbound
             ? (conversation?.contactName || conversation?.phone || "Cliente")
-            : (bot
+            : (isBot
                 ? "🤖 Bot"
                 : `👤 ${msg.senderName || msg.byName || msg.agentName || "Atendente"}`);
 
-          // ✅ Rodapé correto (sem “tudo Humano”)
-          const footerLabel = bot ? " · Bot" : " · Humano";
-
           return (
-            <div key={key} className={rowClass}>
+            <div key={msg.__key} className={rowClass}>
               <div className={bubbleClass}>
                 <div
                   style={{
@@ -306,7 +282,7 @@ export default function ChatPanel({
 
                 <div className="message-timestamp">
                   {ts}
-                  {footerLabel}
+                  {isBot ? " · Bot" : (isInbound ? " · Cliente" : " · Humano")}
                 </div>
               </div>
             </div>

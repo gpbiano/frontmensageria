@@ -570,7 +570,7 @@
       "assignedUserId": null,
       "notes": "",
       "createdAt": "2025-12-14T18:04:11.194Z",
-      "updatedAt": "2025-12-14T18:07:38.683Z"
+      "updatedAt": "2025-12-14T18:40:25.332Z"
     },
     {
       "id": null,
@@ -3082,6 +3082,60 @@
         "type": "text",
         "text": "Oi",
         "createdAt": "2025-12-14T18:07:38.683Z"
+      },
+      {
+        "id": "msg_1765737439830_1e76da9aa4e4",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Oi",
+        "createdAt": "2025-12-14T18:37:19.837Z"
+      },
+      {
+        "id": "msg_1765737451002_c9a5c226eba9",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "agent",
+        "type": "text",
+        "text": "tudo bem?",
+        "createdAt": "2025-12-14T18:37:31.002Z"
+      },
+      {
+        "id": "msg_1765737468319_ac6c2b931a84",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Bem demais e você?",
+        "createdAt": "2025-12-14T18:37:48.319Z"
+      },
+      {
+        "id": "msg_1765737471049_04a85ebc5c22",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": ":)",
+        "createdAt": "2025-12-14T18:37:51.049Z"
+      },
+      {
+        "id": "msg_1765737480776_90c6e68ad81c",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "agent",
+        "type": "text",
+        "text": "🤍",
+        "createdAt": "2025-12-14T18:38:00.777Z"
+      },
+      {
+        "id": "msg_1765737625329_e2819eba61b6",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "tchau",
+        "createdAt": "2025-12-14T18:40:25.332Z"
       }
     ],
     "NaN": [
