@@ -49,7 +49,8 @@ import "./styles/outbound.css";
 import "./styles/settings-groups.css";
 
 // ✅ CSS da página de canais
-import "./styles/settings-channels.css";
+import "../../styles/settings-channels.css";
+
 
 const AUTH_KEY = "gpLabsAuthToken";
 
