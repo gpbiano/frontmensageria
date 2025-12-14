@@ -1,280 +1,351 @@
+// backend/src/routes/webchat.js
 import express from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
-import fs from "fs";
-import path from "path";
+
+import { loadDB, saveDB, ensureArray } from "../utils/db.js";
+import logger from "../logger.js";
 
 const router = express.Router();
 
-// ============================
-// DB (data.json) helpers
-// ============================
-const DB_PATH = path.join(process.cwd(), "data.json");
+// ===============================
+// ENV
+// ===============================
+const WEBCHAT_JWT_SECRET =
+  process.env.WEBCHAT_JWT_SECRET || process.env.JWT_SECRET || "dev_webchat_secret";
 
-function loadDB() {
-  try {
-    const raw = fs.readFileSync(DB_PATH, "utf-8");
-    const data = raw ? JSON.parse(raw) : {};
-    return data && typeof data === "object" ? data : {};
-  } catch {
-    return {};
-  }
-}
+const WEBCHAT_TOKEN_TTL_SEC = Number(process.env.WEBCHAT_TOKEN_TTL_SEC || 1800); // 30min
+const WEBCHAT_SESSION_MAX_AGE_HOURS = Number(process.env.WEBCHAT_SESSION_MAX_AGE_HOURS || 24); // janela web
+const DEV_ALLOW_LOCALHOST = (process.env.WEBCHAT_DEV_ALLOW_LOCALHOST || "true") === "true";
 
-function saveDB(db) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
-}
-
-function ensureArray(x) {
-  return Array.isArray(x) ? x : [];
-}
-
+// ===============================
+// Helpers
+// ===============================
 function nowIso() {
   return new Date().toISOString();
 }
-
-function newId(prefix) {
+function msHours(h) {
+  return h * 60 * 60 * 1000;
+}
+function newId(prefix = "id") {
   return `${prefix}_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
 }
-
-function ms(iso) {
-  const t = Date.parse(iso);
-  return Number.isFinite(t) ? t : 0;
+function normalizeOrigin(o) {
+  if (!o) return "";
+  try {
+    const u = new URL(o);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return String(o).trim();
+  }
 }
+function isOriginAllowed(origin, allowedOrigins = []) {
+  const o = normalizeOrigin(origin);
 
-// ============================
-// CORS DEV (para testar local)
-// ============================
-router.use((req, res, next) => {
-  const origin = req.headers.origin;
-
-  const allowed =
-    !origin ||
-    origin.includes("http://localhost") ||
-    origin.includes("http://127.0.0.1");
-
-  if (allowed && origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
+  // DEV
+  if (DEV_ALLOW_LOCALHOST) {
+    if (
+      o.startsWith("http://localhost") ||
+      o.startsWith("http://127.0.0.1") ||
+      o.startsWith("http://0.0.0.0")
+    ) return true;
   }
 
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Widget-Key"
-  );
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-
-  if (req.method === "OPTIONS") return res.status(204).send();
-  next();
-});
-
-// ============================
-// Auth Webchat (JWT curto)
-// ============================
-function getJwtSecret() {
-  return process.env.JWT_SECRET || "dev_secret_change_me";
+  const list = (allowedOrigins || []).map(normalizeOrigin).filter(Boolean);
+  return !!o && list.includes(o);
 }
-
-function requireWebchatAuth(req, res, next) {
+function getAuthToken(req) {
   const h = req.headers.authorization || "";
   const m = h.match(/^Webchat\s+(.+)$/i);
-  if (!m) return res.status(401).json({ error: "Missing Webchat token" });
-
-  try {
-    const payload = jwt.verify(m[1], getJwtSecret());
-    if (!payload || payload.typ !== "webchat") {
-      return res.status(401).json({ error: "Invalid token type" });
-    }
-    req.webchat = payload;
-    return next();
-  } catch {
-    return res.status(401).json({ error: "Invalid/expired token" });
-  }
+  return m ? m[1] : null;
 }
-
-// ============================
-// MODELO DB (se não existir)
-// ============================
-function ensureWebchatSchema(db) {
-  if (!db.webchat) db.webchat = {};
-  if (!db.webchat.conversations) db.webchat.conversations = [];
-  return db;
+function signWebchatToken(payload, ttlSec = WEBCHAT_TOKEN_TTL_SEC) {
+  return jwt.sign(payload, WEBCHAT_JWT_SECRET, { expiresIn: ttlSec });
 }
-
-function findConversation(db, conversationId) {
-  db = ensureWebchatSchema(db);
-  return db.webchat.conversations.find((c) => c.id === conversationId);
+function verifyWebchatToken(token) {
+  return jwt.verify(token, WEBCHAT_JWT_SECRET);
 }
+function ensureWebchatChannel(db, widgetKey) {
+  db.channels = ensureArray(db.channels);
 
-// ============================
-// 1) POST /webchat/session
-// ============================
-router.post("/session", (req, res) => {
-  const widgetKey = req.headers["x-widget-key"];
-  if (!widgetKey) return res.status(400).json({ error: "Missing X-Widget-Key" });
-
-  const { visitorId, pageUrl, referrer, utm } = req.body || {};
-
-  const db = ensureWebchatSchema(loadDB());
-
-  const convId = newId("conv_web");
-  const sessionId = newId("wsess");
-
-  const createdAt = nowIso();
-
-  const conversation = {
-    id: convId,
-    channel: "web",
-    widgetKey,
-    visitorId: visitorId || null,
-    pageUrl: pageUrl || null,
-    referrer: referrer || null,
-    utm: utm || null,
-    status: "open",
-    createdAt,
-    updatedAt: createdAt,
-    closedAt: null,
-    closedBy: null,
-    closedReason: null,
-    messages: [
-      {
-        id: newId("msg"),
-        from: "bot",
-        type: "text",
-        text: "Olá! Como posso ajudar?",
-        createdAt
-      }
-    ]
-  };
-
-  db.webchat.conversations.unshift(conversation);
-  saveDB(db);
-
-  const expiresInSeconds = 60 * 30; // 30 min
-
-  const webchatToken = jwt.sign(
-    { typ: "webchat", widgetKey, conversationId: convId, sessionId },
-    getJwtSecret(),
-    { expiresIn: expiresInSeconds }
+  // Canal webchat é armazenado em channels[] com type="webchat"
+  const ch = db.channels.find(
+    (c) => c?.type === "webchat" && c?.security?.widgetKey === widgetKey
   );
+  return ch || null;
+}
+function ensureConversationStructures(db) {
+  db.conversations = ensureArray(db.conversations);
+  db.webchatMessages = ensureArray(db.webchatMessages); // mensagens do webchat
+}
 
-  const lastCursor = conversation.messages.at(-1)?.createdAt || null;
+// ===============================
+// Middleware: valida widgetKey + Origin allowlist + canal ativo
+// ===============================
+async function validateWidget(req, res, next) {
+  try {
+    const widgetKey = req.header("X-Widget-Key") || "";
+    if (!widgetKey) {
+      return res.status(401).json({ error: "missing_widget_key" });
+    }
 
-  res.json({
-    sessionId,
-    conversationId: convId,
-    status: "open",
-    expiresInSeconds,
-    webchatToken,
-    lastCursor
-  });
+    const db = await loadDB();
+    const ch = ensureWebchatChannel(db, widgetKey);
+
+    if (!ch || !ch.active) {
+      return res.status(403).json({ error: "webchat_channel_inactive" });
+    }
+
+    const origin = req.headers.origin || "";
+    const allowed = ch.security?.allowedOrigins || [];
+    if (!isOriginAllowed(origin, allowed)) {
+      return res.status(403).json({ error: "origin_not_allowed" });
+    }
+
+    // CORS curto para widget
+    res.setHeader("Access-Control-Allow-Origin", normalizeOrigin(origin));
+    res.setHeader("Vary", "Origin");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Widget-Key"
+    );
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+
+    req.webchatChannel = ch;
+    req.webchatWidgetKey = widgetKey;
+    next();
+  } catch (e) {
+    logger.error({ err: e }, "validateWidget failed");
+    res.status(500).json({ error: "internal_error" });
+  }
+}
+
+// Preflight
+router.options("/*", validateWidget, (req, res) => res.sendStatus(204));
+
+// ===============================
+// POST /webchat/session
+// Cria (ou reaproveita) sessão/conversa para visitorId
+// ===============================
+router.post("/session", validateWidget, async (req, res) => {
+  try {
+    const ch = req.webchatChannel;
+    const { visitorId, pageUrl, referrer, utm } = req.body || {};
+    if (!visitorId) return res.status(400).json({ error: "missing_visitorId" });
+
+    const db = await loadDB();
+    ensureConversationStructures(db);
+
+    // Reutiliza conversa OPEN recente desse visitor + canal
+    const cutoff = Date.now() - msHours(WEBCHAT_SESSION_MAX_AGE_HOURS);
+    const existing = db.conversations
+      .filter((c) => c?.channel === "webchat")
+      .filter((c) => c?.channelId === ch.id)
+      .filter((c) => c?.visitorId === visitorId)
+      .filter((c) => c?.status === "open")
+      .find((c) => new Date(c.createdAt).getTime() >= cutoff);
+
+    let conv = existing;
+    if (!conv) {
+      conv = {
+        id: newId("conv"),
+        channel: "webchat",
+        channelId: ch.id,
+        widgetKey: ch.security?.widgetKey,
+        visitorId,
+        status: "open",
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+        meta: {
+          pageUrl: pageUrl || "",
+          referrer: referrer || "",
+          utm: utm || null,
+          origin: normalizeOrigin(req.headers.origin || "")
+        }
+      };
+      db.conversations.unshift(conv);
+      await saveDB(db);
+    }
+
+    const tokenPayload = {
+      typ: "webchat",
+      channelId: ch.id,
+      conversationId: conv.id,
+      visitorId
+    };
+
+    const webchatToken = signWebchatToken(tokenPayload, WEBCHAT_TOKEN_TTL_SEC);
+
+    // Cursor inicial: último id de msg (se existir)
+    const lastMsg = db.webchatMessages
+      .filter((m) => m?.conversationId === conv.id)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+      .slice(-1)[0];
+
+    return res.json({
+      conversationId: conv.id,
+      sessionId: null,
+      status: conv.status,
+      webchatToken,
+      expiresInSeconds: WEBCHAT_TOKEN_TTL_SEC,
+      lastCursor: lastMsg ? lastMsg.id : null
+    });
+  } catch (e) {
+    logger.error({ err: e }, "POST /webchat/session failed");
+    res.status(500).json({ error: "internal_error" });
+  }
 });
 
-// ============================
-// 2) POST /webchat/messages
-// ============================
-router.post("/messages", requireWebchatAuth, (req, res) => {
-  const { conversationId, text } = req.body || {};
-  if (!conversationId) return res.status(400).json({ error: "Missing conversationId" });
+// ===============================
+// Auth middleware por token
+// ===============================
+function requireWebchatToken(req, res, next) {
+  try {
+    const token = getAuthToken(req);
+    if (!token) return res.status(401).json({ error: "missing_webchat_token" });
 
-  const msgText = String(text || "").trim();
-  if (!msgText) return res.status(400).json({ error: "Empty message" });
-  if (msgText.length > 2000) return res.status(400).json({ error: "Message too long" });
-
-  // Token só pode mexer na própria conversa
-  if (req.webchat.conversationId !== conversationId) {
-    return res.status(403).json({ error: "Forbidden" });
+    const payload = verifyWebchatToken(token);
+    req.webchatAuth = payload;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: "invalid_webchat_token" });
   }
+}
 
-  const db = ensureWebchatSchema(loadDB());
-  const conv = findConversation(db, conversationId);
-  if (!conv) return res.status(404).json({ error: "Conversation not found" });
+// ===============================
+// POST /webchat/messages
+// Envia msg do visitor
+// ===============================
+router.post("/messages", validateWidget, requireWebchatToken, async (req, res) => {
+  try {
+    const { conversationId, text } = req.body || {};
+    const auth = req.webchatAuth;
 
-  if (conv.status !== "open") {
-    return res.status(409).json({ error: "Conversation is closed" });
+    if (!conversationId) return res.status(400).json({ error: "missing_conversationId" });
+    if (!text) return res.status(400).json({ error: "missing_text" });
+
+    // Segurança: token deve bater com a conversa
+    if (auth.conversationId !== conversationId) {
+      return res.status(403).json({ error: "token_conversation_mismatch" });
+    }
+
+    const db = await loadDB();
+    ensureConversationStructures(db);
+
+    const conv = db.conversations.find((c) => c?.id === conversationId);
+    if (!conv) return res.status(404).json({ error: "conversation_not_found" });
+    if (conv.status !== "open") return res.status(409).json({ error: "conversation_closed" });
+
+    const msg = {
+      id: newId("msg"),
+      conversationId,
+      from: "visitor",
+      type: "text",
+      text: String(text),
+      createdAt: nowIso()
+    };
+
+    db.webchatMessages.push(msg);
+
+    // Atualiza updatedAt
+    conv.updatedAt = nowIso();
+
+    await saveDB(db);
+
+    return res.json({
+      ok: true,
+      messageId: msg.id,
+      nextCursor: msg.id
+    });
+  } catch (e) {
+    logger.error({ err: e }, "POST /webchat/messages failed");
+    res.status(500).json({ error: "internal_error" });
   }
-
-  const createdAt = nowIso();
-
-  const message = {
-    id: newId("msg"),
-    from: "visitor",
-    type: "text",
-    text: msgText,
-    createdAt
-  };
-
-  conv.messages = ensureArray(conv.messages);
-  conv.messages.push(message);
-  conv.updatedAt = createdAt;
-
-  saveDB(db);
-
-  // cursor: último createdAt
-  res.json({
-    ok: true,
-    messageId: message.id,
-    nextCursor: createdAt
-  });
 });
 
-// ============================
-// 3) GET /webchat/conversations/:id/messages?after=<ISO>&limit=50
-// ============================
-router.get("/conversations/:id/messages", requireWebchatAuth, (req, res) => {
-  const conversationId = req.params.id;
+// ===============================
+// GET /webchat/conversations/:id/messages?after=<cursor>&limit=50
+// ===============================
+router.get(
+  "/conversations/:id/messages",
+  validateWidget,
+  requireWebchatToken,
+  async (req, res) => {
+    try {
+      const conversationId = req.params.id;
+      const auth = req.webchatAuth;
 
-  if (req.webchat.conversationId !== conversationId) {
-    return res.status(403).json({ error: "Forbidden" });
+      if (auth.conversationId !== conversationId) {
+        return res.status(403).json({ error: "token_conversation_mismatch" });
+      }
+
+      const after = req.query.after ? String(req.query.after) : null;
+      const limit = Math.min(Number(req.query.limit || 50), 200);
+
+      const db = await loadDB();
+      ensureConversationStructures(db);
+
+      const all = db.webchatMessages
+        .filter((m) => m?.conversationId === conversationId)
+        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+      let startIdx = 0;
+      if (after) {
+        const idx = all.findIndex((m) => m.id === after);
+        startIdx = idx >= 0 ? idx + 1 : 0;
+      }
+
+      const items = all.slice(startIdx, startIdx + limit);
+      const last = items.length ? items[items.length - 1] : null;
+
+      return res.json({
+        items,
+        nextCursor: last ? last.id : after
+      });
+    } catch (e) {
+      logger.error({ err: e }, "GET /webchat/conversations/:id/messages failed");
+      res.status(500).json({ error: "internal_error" });
+    }
   }
+);
 
-  const db = ensureWebchatSchema(loadDB());
-  const conv = findConversation(db, conversationId);
-  if (!conv) return res.status(404).json({ error: "Conversation not found" });
+// ===============================
+// POST /webchat/conversations/:id/close
+// ===============================
+router.post(
+  "/conversations/:id/close",
+  validateWidget,
+  requireWebchatToken,
+  async (req, res) => {
+    try {
+      const conversationId = req.params.id;
+      const auth = req.webchatAuth;
 
-  const after = req.query.after ? String(req.query.after) : null;
-  const limitRaw = req.query.limit ? Number(req.query.limit) : 50;
-  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+      if (auth.conversationId !== conversationId) {
+        return res.status(403).json({ error: "token_conversation_mismatch" });
+      }
 
-  const items = ensureArray(conv.messages)
-    .filter((m) => !after || ms(m.createdAt) > ms(after))
-    .slice(0, limit);
+      const reason = req.body?.reason || "user_closed";
 
-  const nextCursor = items.length ? items[items.length - 1].createdAt : after;
+      const db = await loadDB();
+      ensureConversationStructures(db);
 
-  res.json({ items, nextCursor });
-});
+      const conv = db.conversations.find((c) => c?.id === conversationId);
+      if (!conv) return res.status(404).json({ error: "conversation_not_found" });
 
-// ============================
-// 4) POST /webchat/conversations/:id/close
-// ============================
-router.post("/conversations/:id/close", requireWebchatAuth, (req, res) => {
-  const conversationId = req.params.id;
+      conv.status = "closed";
+      conv.closedAt = nowIso();
+      conv.closeReason = reason;
+      conv.updatedAt = nowIso();
 
-  if (req.webchat.conversationId !== conversationId) {
-    return res.status(403).json({ error: "Forbidden" });
+      await saveDB(db);
+
+      return res.json({ ok: true });
+    } catch (e) {
+      logger.error({ err: e }, "POST /webchat/conversations/:id/close failed");
+      res.status(500).json({ error: "internal_error" });
+    }
   }
-
-  const db = ensureWebchatSchema(loadDB());
-  const conv = findConversation(db, conversationId);
-  if (!conv) return res.status(404).json({ error: "Conversation not found" });
-
-  if (conv.status === "closed") {
-    return res.json({ ok: true, status: "closed" });
-  }
-
-  const createdAt = nowIso();
-  const reason = (req.body && req.body.reason) ? String(req.body.reason) : "user_closed";
-
-  conv.status = "closed";
-  conv.closedAt = createdAt;
-  conv.closedBy = "user";
-  conv.closedReason = reason;
-  conv.updatedAt = createdAt;
-
-  saveDB(db);
-
-  res.json({ ok: true, status: "closed" });
-});
+);
 
 export default router;

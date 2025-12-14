@@ -58,7 +58,12 @@ async function safeReadJson<T = any>(res: Response): Promise<T | null> {
   }
 }
 
-function buildApiError(status: number, path: string, payload: any, text: string) {
+function buildApiError(
+  status: number,
+  path: string,
+  payload: any,
+  text: string
+) {
   const msg =
     payload?.error ||
     payload?.message ||
@@ -162,7 +167,10 @@ async function downloadBlob(path: string, filename: string) {
 // AUTH
 // ======================================================
 
-export async function login(email: string, password: string): Promise<LoginResponse> {
+export async function login(
+  email: string,
+  password: string
+): Promise<LoginResponse> {
   const data = await request<LoginResponse>("/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
@@ -193,6 +201,79 @@ export async function setPasswordWithToken(token: string, password: string) {
 }
 
 // ======================================================
+// SETTINGS — CHANNELS (Configurações → Canais)
+// ======================================================
+
+export type ChannelStatus = "connected" | "disconnected" | "soon";
+
+export interface WebchatChannelConfig {
+  primaryColor?: string;
+  position?: "left" | "right";
+  buttonText?: string;
+  title?: string;
+  greeting?: string;
+}
+
+export interface WebchatChannelRecord {
+  enabled: boolean;
+  status: ChannelStatus;
+  widgetKey?: string;
+  allowedOrigins?: string[];
+  config?: WebchatChannelConfig;
+  sessionTtlSeconds?: number;
+  updatedAt?: string;
+}
+
+export interface ChannelsState {
+  whatsapp?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
+  webchat?: WebchatChannelRecord;
+  messenger?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
+  instagram?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
+}
+
+export async function fetchChannels(): Promise<ChannelsState> {
+  const res = await request<{ channels: ChannelsState }>("/settings/channels");
+  return (res?.channels || {}) as ChannelsState;
+}
+
+export async function updateWebchatChannel(payload: {
+  enabled?: boolean;
+  allowedOrigins?: string[];
+  config?: WebchatChannelConfig;
+  sessionTtlSeconds?: number;
+}): Promise<{ ok: boolean; webchat: WebchatChannelRecord }> {
+  return request<{ ok: boolean; webchat: WebchatChannelRecord }>(
+    "/settings/channels/webchat",
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function rotateWebchatKey(): Promise<{
+  ok: boolean;
+  widgetKey: string;
+}> {
+  return request<{ ok: boolean; widgetKey: string }>(
+    "/settings/channels/webchat/rotate-key",
+    { method: "POST" }
+  );
+}
+
+export async function fetchWebchatSnippet(): Promise<{
+  ok: boolean;
+  enabled: boolean;
+  status: ChannelStatus;
+  widgetKey: string;
+  allowedOrigins: string[];
+  sessionTtlSeconds: number;
+  snippet: string;
+}> {
+  return request("/settings/channels/webchat/snippet");
+}
+
+// ======================================================
 // SETTINGS — USERS (Configurações → Usuários)
 // ======================================================
 
@@ -213,10 +294,16 @@ type UsersListResponse =
   | { data: UserRecord[]; total: number }
   | { items: UserRecord[]; total: number };
 
-export async function fetchUsers(): Promise<{ data: UserRecord[]; total: number }> {
+export async function fetchUsers(): Promise<{
+  data: UserRecord[];
+  total: number;
+}> {
   const res = await request<UsersListResponse>("/settings/users");
   const data = "data" in res ? res.data : res.items;
-  return { data: Array.isArray(data) ? data : [], total: res.total ?? data?.length ?? 0 };
+  return {
+    data: Array.isArray(data) ? data : [],
+    total: res.total ?? data?.length ?? 0
+  };
 }
 
 export async function createUser(payload: {
@@ -258,9 +345,12 @@ export async function resetUserPassword(
   success: boolean;
   token?: { id: string; type: string; expiresAt: string };
 }> {
-  return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, {
-    method: "POST"
-  });
+  return request(
+    `/settings/users/${encodeURIComponent(String(id))}/reset-password`,
+    {
+      method: "POST"
+    }
+  );
 }
 
 // ======================================================
@@ -359,7 +449,9 @@ export async function fetchGroupMembers(
   const suffix = qs.toString();
 
   return request<{ items: GroupMemberItem[]; total: number; group?: GroupRecord }>(
-    `/settings/groups/${encodeURIComponent(groupId)}/members${suffix ? `?${suffix}` : ""}`
+    `/settings/groups/${encodeURIComponent(groupId)}/members${
+      suffix ? `?${suffix}` : ""
+    }`
   );
 }
 
@@ -379,7 +471,9 @@ export async function updateGroupMember(
   payload: { role?: GroupMemberRole; isActive?: boolean }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}`,
     {
       method: "PATCH",
       body: JSON.stringify(payload)
@@ -392,7 +486,9 @@ export async function deactivateGroupMember(
   userId: number
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/deactivate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}/deactivate`,
     { method: "PATCH" }
   );
 }
@@ -403,7 +499,9 @@ export async function activateGroupMember(
   payload?: { role?: GroupMemberRole }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/activate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}/activate`,
     {
       method: "PATCH",
       body: JSON.stringify(payload || {})
@@ -432,7 +530,10 @@ export async function fetchMessages(conversationId: number): Promise<Message[]> 
   return Array.isArray(data) ? (data as Message[]) : [];
 }
 
-export async function sendTextMessage(conversationId: number, text: string): Promise<Message> {
+export async function sendTextMessage(
+  conversationId: number,
+  text: string
+): Promise<Message> {
   return request<Message>(`/conversations/${conversationId}/messages`, {
     method: "POST",
     body: JSON.stringify({ text })
@@ -464,7 +565,10 @@ export async function updateConversationStatus(
   });
 }
 
-export async function updateConversationNotes(conversationId: number, notes: string): Promise<Conversation> {
+export async function updateConversationNotes(
+  conversationId: number,
+  notes: string
+): Promise<Conversation> {
   return request<Conversation>(`/conversations/${conversationId}/notes`, {
     method: "PATCH",
     body: JSON.stringify({ notes })
@@ -531,7 +635,9 @@ export async function uploadAsset(file: File): Promise<MediaItem> {
   return requestForm<MediaItem>("/outbound/assets/upload", form);
 }
 
-export async function deleteAsset(id: string | number): Promise<{ success: boolean }> {
+export async function deleteAsset(
+  id: string | number
+): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(
     `/outbound/assets/${encodeURIComponent(String(id))}`,
     { method: "DELETE" }
@@ -641,7 +747,9 @@ export async function resumeCampaign(
   );
 }
 
-export async function fetchCampaignById(campaignId: string): Promise<CampaignRecord> {
+export async function fetchCampaignById(
+  campaignId: string
+): Promise<CampaignRecord> {
   return request<CampaignRecord>(
     `/outbound/campaigns/${encodeURIComponent(campaignId)}`
   );

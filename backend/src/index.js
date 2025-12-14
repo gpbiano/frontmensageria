@@ -13,6 +13,7 @@ import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 import webchatRouter from "./routes/webchat.js";
+import channelsRouter from "./routes/channels.js";
 
 
 // ===============================
@@ -846,7 +847,7 @@ app.use("/auth", passwordRouter);
 
 //Web Widget
 app.use("/webchat", webchatRouter);
-
+app.use("/settings/channels", channelsRouter);
 
 // ===============================
 // ✅ OUTBOUND – ORDEM CORRETA + SEM DUPLICAÇÃO

@@ -18,6 +18,8 @@ export function ensureArray(v) {
   return Array.isArray(v) ? v : [];
 }
 
+const DEFAULT_TAGS = ["Vendas", "Suporte", "Reclamação", "Financeiro"];
+
 /**
  * Cria estrutura inicial se não existir
  */
@@ -29,10 +31,15 @@ function createInitialDb() {
     conversations: [],
     messagesByConversation: {},
     settings: {
-      tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"]
+      tags: DEFAULT_TAGS,
+      channels: {} // ✅ preparado pro módulo de canais
     },
     outboundCampaigns: []
   };
+}
+
+function ensureObject(v, fallback = {}) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : fallback;
 }
 
 /**
@@ -54,14 +61,16 @@ export function loadDB() {
     parsed.passwordTokens = ensureArray(parsed.passwordTokens);
     parsed.contacts = ensureArray(parsed.contacts);
     parsed.conversations = ensureArray(parsed.conversations);
-    parsed.messagesByConversation =
-      parsed.messagesByConversation && typeof parsed.messagesByConversation === "object"
-        ? parsed.messagesByConversation
-        : {};
-    parsed.settings =
-      parsed.settings && typeof parsed.settings === "object"
-        ? parsed.settings
-        : { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] };
+
+    parsed.messagesByConversation = ensureObject(parsed.messagesByConversation, {});
+
+    // ✅ settings: mantém o que existe, mas garante defaults sem sobrescrever
+    parsed.settings = ensureObject(parsed.settings, {});
+    parsed.settings.tags = ensureArray(parsed.settings.tags);
+    if (!parsed.settings.tags.length) parsed.settings.tags = DEFAULT_TAGS;
+
+    parsed.settings.channels = ensureObject(parsed.settings.channels, {}); // ✅ não quebra canais
+
     parsed.outboundCampaigns = ensureArray(parsed.outboundCampaigns);
 
     return parsed;

@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-14T15:46:10.542Z"
+      "updatedAt": "2025-12-14T17:48:06.295Z"
     },
     {
       "id": 3,
@@ -3334,6 +3334,69 @@
       "isActive": true,
       "createdAt": "2025-12-13T19:02:22.597Z",
       "updatedAt": "2025-12-13T19:02:22.597Z"
+    }
+  ],
+  "webchat": {
+    "conversations": [
+      {
+        "id": "conv_web_1765731986449_96b2a00ef97b8af6",
+        "channel": "web",
+        "widgetKey": "wkey_test",
+        "visitorId": "vis_1765731170884_4c61042f937f6301",
+        "pageUrl": "https://widg.netlify.app/",
+        "referrer": null,
+        "utm": null,
+        "status": "closed",
+        "createdAt": "2025-12-14T17:06:26.454Z",
+        "updatedAt": "2025-12-14T17:12:55.385Z",
+        "closedAt": "2025-12-14T17:12:55.385Z",
+        "closedBy": "user",
+        "closedReason": "user_closed",
+        "messages": [
+          {
+            "id": "msg_1765731986454_9ffc8eeb96eefa44",
+            "from": "bot",
+            "type": "text",
+            "text": "Olá! Como posso ajudar?",
+            "createdAt": "2025-12-14T17:06:26.454Z"
+          }
+        ]
+      }
+    ]
+  },
+  "channels": [
+    {
+      "id": "ch_1765732989920_da223dac2b7cb871",
+      "type": "webchat",
+      "active": true,
+      "createdAt": "2025-12-14T17:23:09.920Z",
+      "updatedAt": "2025-12-14T17:23:09.922Z",
+      "settings": {
+        "name": "Web Chat Site",
+        "color": "#34d399",
+        "position": "right",
+        "buttonText": "Ajuda",
+        "title": "Atendimento",
+        "greeting": "Olá! Como posso ajudar?"
+      },
+      "security": {
+        "widgetKey": "wkey_2c08b958f3b762ecb230ee007f73af08",
+        "allowedOrigins": [
+          "http://localhost:5173",
+          "https://gplabs.com.br"
+        ]
+      }
+    }
+  ],
+  "groupMembers": [
+    {
+      "id": "gm_1765734168426_76bb4880e5a9",
+      "groupId": "grp_1765652542594_e27cd5bf58a5",
+      "userId": 2,
+      "role": "manager",
+      "isActive": true,
+      "createdAt": "2025-12-14T17:42:48.426Z",
+      "updatedAt": "2025-12-14T17:42:48.426Z"
     }
   ]
 }
