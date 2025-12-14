@@ -33,6 +33,9 @@ import SettingsUsersPage from "./pages/settings/SettingsUsersPage.jsx";
 // ✅ Settings — Groups
 import SettingsGroupsPage from "./pages/settings/SettingsGroupsPage.jsx";
 
+// ✅ Settings — Channels (NOVA)
+import SettingsChannelsPage from "./pages/settings/SettingsChannelsPage.jsx";
+
 // Criar Senha (Público)
 import CreatePasswordPage from "./pages/auth/CreatePasswordPage.jsx";
 
@@ -42,8 +45,11 @@ import "./styles/App.css";
 // CSS específico de outbound / reports / analytics
 import "./styles/outbound.css";
 
-// ✅ CSS da página de grupos (se você já criou o arquivo)
+// ✅ CSS da página de grupos
 import "./styles/settings-groups.css";
+
+// ✅ CSS da página de canais
+import "./styles/settings-channels.css";
 
 const AUTH_KEY = "gpLabsAuthToken";
 
@@ -126,7 +132,6 @@ const MENU = [
     items: [
       { id: "canais", label: "Canais" },
       { id: "usuarios", label: "Usuários" }
-      // ⚠️ Se quiser, dá pra duplicar também aqui:
       // { id: "grupos", label: "Grupos" }
     ]
   }
@@ -257,7 +262,7 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // ✅ Atendimento → Grupos (AGORA REAL)
+  // ✅ Atendimento → Grupos
   if (main === "atendimento" && sub === "grupos") {
     return (
       <div className="page-full">
@@ -362,15 +367,20 @@ function SectionRenderer({ main, sub, goTo }) {
     }
 
     return (
-      <Placeholder
-        title={`Campanhas · ${subSectionLabel(sub)}`}
-        text="Seção em construção."
-      />
+      <Placeholder title={`Campanhas · ${subSectionLabel(sub)}`} text="Seção em construção." />
     );
   }
 
-  // Configurações
+  // ✅ Configurações
   if (main === "configuracoes") {
+    if (sub === "canais") {
+      return (
+        <div className="page-full">
+          <SettingsChannelsPage />
+        </div>
+      );
+    }
+
     if (sub === "usuarios") {
       return (
         <div className="page-full">
