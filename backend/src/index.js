@@ -12,6 +12,8 @@ import path from "path";
 import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
+import webchatRouter from "./routes/webchat.js";
+
 
 // ===============================
 // ENV – CARREGAR .env.{ENV} ANTES DE IMPORTAR ROUTERS
@@ -841,6 +843,9 @@ app.use("/settings/groups", groupsRouter);
 
 // ✅ Auth
 app.use("/auth", passwordRouter);
+
+//Web Widget
+app.use("/webchat", webchatRouter);
 
 
 // ===============================
