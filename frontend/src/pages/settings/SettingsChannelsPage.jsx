@@ -1,14 +1,16 @@
 // frontend/src/settings/SettingsChannelsPage.jsx
 import { useEffect, useMemo, useState } from "react";
-import "./styles/settings-channels.css"; // ✅ ajuste o caminho se necessário
 
+// ✅ NÃO importe CSS aqui se você já está importando no App.jsx
+// (e esse caminho estava errado e quebrando o build)
+// import "./styles/settings-channels.css";
 
 import {
   fetchChannels,
   updateWebchatChannel,
   rotateWebchatKey,
   fetchWebchatSnippet
-} from "../api"; // ✅ NÃO use "../api.ts"
+} from "../api"; // ✅ ok
 
 /**
  * Settings > Canais (compatível com backend atual)
@@ -25,8 +27,8 @@ function Pill({ variant, children }) {
     variant === "on"
       ? "status-pill status-pill-on"
       : variant === "off"
-        ? "status-pill status-pill-off"
-        : "status-pill status-pill-soon";
+      ? "status-pill status-pill-off"
+      : "status-pill status-pill-soon";
   return <span className={cls}>{children}</span>;
 }
 
@@ -112,7 +114,7 @@ function normalizeOriginLines(text) {
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((o) => o.replace(/\/+$/, "")); // remove trailing slash
+    .map((o) => o.replace(/\/+$/, ""));
 }
 
 export default function SettingsChannelsPage() {
@@ -133,8 +135,8 @@ export default function SettingsChannelsPage() {
   const isDev = useMemo(() => {
     try {
       return (
-        location.hostname === "localhost" ||
-        location.hostname === "127.0.0.1"
+        window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1"
       );
     } catch {
       return true;
@@ -143,8 +145,8 @@ export default function SettingsChannelsPage() {
 
   const webchat = channelsState?.webchat || null;
   const whatsapp = channelsState?.whatsapp || null;
-  const messenger = channelsState?.messenger || null;
-  const instagram = channelsState?.instagram || null;
+  // const messenger = channelsState?.messenger || null;
+  // const instagram = channelsState?.instagram || null;
 
   async function loadChannels() {
     setLoading(true);
@@ -153,7 +155,7 @@ export default function SettingsChannelsPage() {
       const data = await fetchChannels();
       setChannelsState(data || {});
     } catch (e) {
-      setError(e.message || String(e));
+      setError(e?.message || String(e));
     } finally {
       setLoading(false);
     }
@@ -167,12 +169,11 @@ export default function SettingsChannelsPage() {
     const ch = webchat || {};
     const cfg = ch?.config || {};
 
-    // backend usa config.color; alguns fronts usam primaryColor
     const primaryColor = cfg.primaryColor || cfg.color || "#34d399";
 
     setWebchatDraft({
       enabled: !!ch.enabled,
-      status: ch.status || "not_connected",
+      status: ch.status || "disconnected",
       widgetKey: ch.widgetKey || "",
       allowedOrigins: Array.isArray(ch.allowedOrigins) ? ch.allowedOrigins : [],
       config: {
@@ -194,7 +195,6 @@ export default function SettingsChannelsPage() {
     setSnippetLoading(true);
     try {
       const res = await fetchWebchatSnippet();
-      // backend: { ok, widgetJsUrl, widgetKey, allowedOrigins, scriptTag }
       const scriptTag = res?.scriptTag || res?.snippet || "";
       setSnippet(scriptTag);
       setSnippetMeta(res || null);
@@ -228,14 +228,13 @@ export default function SettingsChannelsPage() {
         webchatDraft.config?.color ||
         "#34d399";
 
-      // ✅ payload no formato do backend (e com compat de cor)
       const payload = {
         enabled: !!webchatDraft.enabled,
         allowedOrigins,
         config: {
           ...(webchatDraft.config || {}),
           primaryColor,
-          color: primaryColor
+          color: primaryColor // backend espera "color"
         }
       };
 
@@ -247,7 +246,7 @@ export default function SettingsChannelsPage() {
 
       await loadSnippet();
     } catch (e) {
-      setError(e.message || String(e));
+      setError(e?.message || String(e));
     } finally {
       setSaving(false);
     }
@@ -274,7 +273,7 @@ export default function SettingsChannelsPage() {
       setToast("widgetKey rotacionada.");
       setTimeout(() => setToast(""), 2000);
     } catch (e) {
-      setError(e.message || String(e));
+      setError(e?.message || String(e));
     } finally {
       setSaving(false);
     }
@@ -303,7 +302,7 @@ export default function SettingsChannelsPage() {
     ? whatsapp.status === "connected"
       ? "Conectado"
       : "Desconectado"
-    : "Conectado";
+    : "Desconectado";
 
   function embedFallbackFromDraft() {
     const widgetKey =
@@ -606,7 +605,10 @@ export default function SettingsChannelsPage() {
                   onChange={(e) =>
                     setWebchatDraft((p) => ({
                       ...p,
-                      config: { ...(p.config || {}), buttonText: e.target.value }
+                      config: {
+                        ...(p.config || {}),
+                        buttonText: e.target.value
+                      }
                     }))
                   }
                   placeholder="Ajuda"
