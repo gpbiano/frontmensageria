@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-14T18:21:34.296Z"
+      "updatedAt": "2025-12-14T19:43:35.808Z"
     },
     {
       "id": 3,
@@ -565,12 +565,12 @@
       "channel": "webchat",
       "visitorId": "vis_1765735449015_c6019a8c0a5586b0",
       "title": "Visitante do site",
-      "status": "open",
+      "status": "closed",
       "assignedGroupId": null,
       "assignedUserId": null,
       "notes": "",
       "createdAt": "2025-12-14T18:04:11.194Z",
-      "updatedAt": "2025-12-14T18:40:25.332Z"
+      "updatedAt": "2025-12-14T18:41:44.877Z"
     },
     {
       "id": null,
@@ -580,12 +580,14 @@
       "phone": "556499989978",
       "channel": "whatsapp",
       "lastMessage": "",
-      "status": "open",
-      "updatedAt": "2025-12-14T18:18:09.485Z",
+      "status": "closed",
+      "updatedAt": "2025-12-14T19:42:55.363Z",
       "currentMode": "human",
-      "botAttempts": 1,
+      "botAttempts": 3,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "lastMessageAt": "2025-12-14T19:42:55.363Z",
+      "lastMessagePreview": "Atendimento encerrado."
     }
   ],
   "messagesByConversation": {
@@ -3082,60 +3084,6 @@
         "type": "text",
         "text": "Oi",
         "createdAt": "2025-12-14T18:07:38.683Z"
-      },
-      {
-        "id": "msg_1765737439830_1e76da9aa4e4",
-        "conversationId": "conv_1765735451191_16fc7ade35cd",
-        "channel": "webchat",
-        "from": "visitor",
-        "type": "text",
-        "text": "Oi",
-        "createdAt": "2025-12-14T18:37:19.837Z"
-      },
-      {
-        "id": "msg_1765737451002_c9a5c226eba9",
-        "conversationId": "conv_1765735451191_16fc7ade35cd",
-        "channel": "webchat",
-        "from": "agent",
-        "type": "text",
-        "text": "tudo bem?",
-        "createdAt": "2025-12-14T18:37:31.002Z"
-      },
-      {
-        "id": "msg_1765737468319_ac6c2b931a84",
-        "conversationId": "conv_1765735451191_16fc7ade35cd",
-        "channel": "webchat",
-        "from": "visitor",
-        "type": "text",
-        "text": "Bem demais e você?",
-        "createdAt": "2025-12-14T18:37:48.319Z"
-      },
-      {
-        "id": "msg_1765737471049_04a85ebc5c22",
-        "conversationId": "conv_1765735451191_16fc7ade35cd",
-        "channel": "webchat",
-        "from": "visitor",
-        "type": "text",
-        "text": ":)",
-        "createdAt": "2025-12-14T18:37:51.049Z"
-      },
-      {
-        "id": "msg_1765737480776_90c6e68ad81c",
-        "conversationId": "conv_1765735451191_16fc7ade35cd",
-        "channel": "webchat",
-        "from": "agent",
-        "type": "text",
-        "text": "🤍",
-        "createdAt": "2025-12-14T18:38:00.777Z"
-      },
-      {
-        "id": "msg_1765737625329_e2819eba61b6",
-        "conversationId": "conv_1765735451191_16fc7ade35cd",
-        "channel": "webchat",
-        "from": "visitor",
-        "type": "text",
-        "text": "tchau",
-        "createdAt": "2025-12-14T18:40:25.332Z"
       }
     ],
     "NaN": [
@@ -3167,6 +3115,97 @@
         "location": null,
         "timestamp": "2025-12-14T18:18:44.000Z",
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JFOEVFQzRBMTZGREE3RDg3RkQA"
+      }
+    ],
+    "null": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-14T18:41:21.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IxN0U1NUU1MDAzNDk4QkM4NzQA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-14T18:41:24.651Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRDU2NzA0MUY0RDA5NUY1ODJCAA=="
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-14T18:46:40.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JGMUExNUM4QkVFRjUzNDk3MUQA"
+      },
+      {
+        "id": 4,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Em que posso ajudar você hoje?",
+        "timestamp": "2025-12-14T18:46:44.561Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSNjJCQkU2MjIxODYyMTREODA4AA=="
+      },
+      {
+        "id": 5,
+        "direction": "in",
+        "type": "text",
+        "text": "Falar com humano",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-14T18:46:55.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JFNjk5MDNERkI2MkUwRUZEM0YA"
+      },
+      {
+        "id": 6,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-14T18:55:29.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JFMjBCNUI1MkM2RUM2MTcwMEIA"
+      },
+      {
+        "id": 7,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-14T18:55:53.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I2RkU1QUU0NzM5MjYyM0NFMkIA"
+      },
+      {
+        "id": 8,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-14T19:36:53.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JEQTc4NjAwQzlBMkUzMTk0RTcA"
+      },
+      {
+        "id": "msg_1765741375363_8a1d0d54e14c",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-14T19:42:55.363Z"
       }
     ]
   },
