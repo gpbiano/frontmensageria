@@ -14,7 +14,7 @@ import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 import webchatRouter from "./routes/webchat.js";
 import channelsRouter from "./routes/channels.js";
-
+import conversationsRouter from "./routes/conversations.js";
 
 // ===============================
 // ENV – CARREGAR .env.{ENV} ANTES DE IMPORTAR ROUTERS
@@ -848,6 +848,7 @@ app.use("/auth", passwordRouter);
 //Web Widget
 app.use("/webchat", webchatRouter);
 app.use("/settings/channels", channelsRouter);
+app.use("/conversations", conversationsRouter);
 
 // ===============================
 // ✅ OUTBOUND – ORDEM CORRETA + SEM DUPLICAÇÃO

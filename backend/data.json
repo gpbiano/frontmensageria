@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-14T18:00:24.814Z"
+      "updatedAt": "2025-12-14T18:14:03.041Z"
     },
     {
       "id": 3,
@@ -553,12 +553,39 @@
       "channel": "webchat",
       "visitorId": "vis_1765735021057_fc649f7824f43d66",
       "title": "Visitante do site",
-      "status": "open",
+      "status": "closed",
       "assignedGroupId": null,
       "assignedUserId": null,
       "notes": "",
       "createdAt": "2025-12-14T17:57:03.077Z",
-      "updatedAt": "2025-12-14T17:57:03.077Z"
+      "updatedAt": "2025-12-14T18:03:34.819Z"
+    },
+    {
+      "id": "conv_1765735451191_16fc7ade35cd",
+      "channel": "webchat",
+      "visitorId": "vis_1765735449015_c6019a8c0a5586b0",
+      "title": "Visitante do site",
+      "status": "open",
+      "assignedGroupId": null,
+      "assignedUserId": null,
+      "notes": "",
+      "createdAt": "2025-12-14T18:04:11.194Z",
+      "updatedAt": "2025-12-14T18:07:38.683Z"
+    },
+    {
+      "id": null,
+      "sessionId": "S-99989978-1765736289485",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "",
+      "status": "open",
+      "updatedAt": "2025-12-14T18:18:09.485Z",
+      "currentMode": "human",
+      "botAttempts": 1,
+      "tags": [],
+      "notes": ""
     }
   ],
   "messagesByConversation": {
@@ -3017,7 +3044,77 @@
         "createdAt": "2025-12-14T17:55:51.493Z"
       }
     ],
-    "conv_1765735023076_57ecb2a8a05a": []
+    "conv_1765735023076_57ecb2a8a05a": [
+      {
+        "id": "msg_1765735372071_345b94ca4768",
+        "conversationId": "conv_1765735023076_57ecb2a8a05a",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "tudo bem?",
+        "createdAt": "2025-12-14T18:02:52.074Z"
+      }
+    ],
+    "conv_1765735451191_16fc7ade35cd": [
+      {
+        "id": "msg_1765735453294_d017baf4b574",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Oi",
+        "createdAt": "2025-12-14T18:04:13.294Z"
+      },
+      {
+        "id": "msg_1765735456771_cdba714965f0",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Tudo bem*",
+        "createdAt": "2025-12-14T18:04:16.771Z"
+      },
+      {
+        "id": "msg_1765735658680_589b1532fd83",
+        "conversationId": "conv_1765735451191_16fc7ade35cd",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Oi",
+        "createdAt": "2025-12-14T18:07:38.683Z"
+      }
+    ],
+    "NaN": [
+      {
+        "id": 1,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-14T18:18:07.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IzNDNCNEIxNkRGRjBGNjk3MTQA"
+      },
+      {
+        "id": 2,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-14T18:18:12.679Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMjQ0OUYzMTMwNTUyMEE4QjhFAA=="
+      },
+      {
+        "id": 3,
+        "direction": "in",
+        "type": "text",
+        "text": "Falar com atendenter",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-14T18:18:44.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JFOEVFQzRBMTZGREE3RDg3RkQA"
+      }
+    ]
   },
   "settings": {
     "tags": [
