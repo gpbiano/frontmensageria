@@ -8,12 +8,64 @@ const EMOJI_PALETTE = [
   "❤️","💚","💙","💛","🧡","🤍","🤝","✅"
 ];
 
+// ------------------------------
+// Normalização do remetente
+// ------------------------------
+function normalizeFrom(msg) {
+  const raw = (
+    msg?.from ??
+    msg?.sender ??
+    msg?.role ??
+    msg?.author ??
+    msg?.direction ??
+    msg?.meta?.direction ??
+    ""
+  )
+    .toString()
+    .trim()
+    .toLowerCase();
+
+  // Alguns backends usam direction: "in"/"out" ou "inbound"/"outbound"
+  if (raw === "in") return "visitor";
+  if (raw === "out") return "agent";
+  if (raw === "inbound") return "visitor";
+  if (raw === "outbound") return "agent";
+
+  // Nomes comuns
+  if (raw === "client" || raw === "customer" || raw === "user" || raw === "visitor")
+    return "visitor";
+  if (raw === "agent" || raw === "human" || raw === "attendant" || raw === "support")
+    return "agent";
+  if (raw === "bot" || raw === "chatbot" || raw === "assistant") return "bot";
+
+  // Seu código antigo: from === "client"
+  if (raw === "client") return "visitor";
+
+  // Seu código antigo: direction === "in"
+  if ((msg?.direction || "").toString().toLowerCase() === "in") return "visitor";
+
+  // Fallback: se marcado como bot
+  if (msg?.isBot || msg?.fromBot) return "bot";
+
+  // Fallback final: assume inbound (cliente) quando não dá pra saber
+  return "visitor";
+}
+
+function isInboundMessage(msg) {
+  const from = normalizeFrom(msg);
+  return from === "visitor";
+}
+
+function isBotMessage(msg) {
+  return normalizeFrom(msg) === "bot";
+}
+
 export default function ChatPanel({
   conversation,
   messages,
   loadingMessages,
   onSendText,
-  onSendMedia,
+  onSendMedia, // mantido (uso futuro)
   onChangeStatus
 }) {
   const [draft, setDraft] = useState("");
@@ -166,15 +218,25 @@ export default function ChatPanel({
           </div>
         )}
 
-        {messages?.map((msg) => {
-          const key = msg.id || msg._id || msg.timestamp || Math.random();
+        {messages?.map((msg, idx) => {
+          const key =
+            msg.id ||
+            msg._id ||
+            msg.messageId ||
+            msg.timestamp ||
+            msg.createdAt ||
+            `msg_${idx}`;
 
           // ✅ Mensagens de sistema (centralizadas)
           if (msg?.type === "system") {
             const text = formatMessageText(msg);
             const ts = formatTimestamp(msg);
             return (
-              <div key={key} className="message-row" style={{ justifyContent: "center" }}>
+              <div
+                key={key}
+                className="message-row"
+                style={{ justifyContent: "center" }}
+              >
                 <div
                   style={{
                     maxWidth: 560,
@@ -188,7 +250,10 @@ export default function ChatPanel({
                 >
                   <div className="chat-message-text">{text}</div>
                   {ts && (
-                    <div className="message-timestamp" style={{ opacity: 0.7, marginTop: 6 }}>
+                    <div
+                      className="message-timestamp"
+                      style={{ opacity: 0.7, marginTop: 6 }}
+                    >
                       {ts}
                     </div>
                   )}
@@ -197,25 +262,30 @@ export default function ChatPanel({
             );
           }
 
-          const isInbound = msg.direction === "in" || msg.from === "client";
-          const isBot = !!(msg.isBot || msg.fromBot || msg.from === "bot");
+          // ✅ Correção principal: inbound/outbound/bot
+          const inbound = isInboundMessage(msg);
+          const bot = isBotMessage(msg);
 
-          const rowClass = isInbound
+          const rowClass = inbound
             ? "message-row message-row-in"
             : "message-row message-row-out";
-          const bubbleClass = isInbound
+
+          const bubbleClass = inbound
             ? "message-bubble-in"
             : "message-bubble-out";
 
           const text = formatMessageText(msg);
           const ts = formatTimestamp(msg);
 
-          // ✅ Label do remetente (resolve teu “Atendente”)
-          const senderLabel = isInbound
+          // ✅ Label correto
+          const senderLabel = inbound
             ? (conversation?.contactName || conversation?.phone || "Cliente")
-            : (isBot
+            : (bot
                 ? "🤖 Bot"
                 : `👤 ${msg.senderName || msg.byName || msg.agentName || "Atendente"}`);
+
+          // ✅ Rodapé correto (sem “tudo Humano”)
+          const footerLabel = bot ? " · Bot" : " · Humano";
 
           return (
             <div key={key} className={rowClass}>
@@ -236,7 +306,7 @@ export default function ChatPanel({
 
                 <div className="message-timestamp">
                   {ts}
-                  {isBot ? " · Bot" : " · Humano"}
+                  {footerLabel}
                 </div>
               </div>
             </div>
@@ -297,3 +367,4 @@ export default function ChatPanel({
     </div>
   );
 }
+
