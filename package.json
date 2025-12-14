@@ -1,4 +1,10 @@
+
 {
+  "name": "whatsapp-plataforma-monorepo",
+  "private": true,
+  "scripts": {
+    "widget:build": "mkdir -p widget/dist && cp widget/src/widget.js widget/dist/widget.js && cp widget/src/widget.v1.js widget/dist/widget.v1.js"
+  },
   "dependencies": {
     "node-fetch": "^3.3.2"
   }
