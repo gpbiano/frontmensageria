@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-14T17:54:00.875Z"
+      "updatedAt": "2025-12-14T18:00:24.814Z"
     },
     {
       "id": 3,
@@ -535,6 +535,30 @@
       "botAttempts": 3,
       "tags": [],
       "notes": ""
+    },
+    {
+      "id": "conv_1765734900457_3aa0939ee884",
+      "channel": "webchat",
+      "visitorId": "vis_1765731170884_4c61042f937f6301",
+      "title": "Visitante do site",
+      "status": "closed",
+      "assignedGroupId": null,
+      "assignedUserId": null,
+      "notes": "",
+      "createdAt": "2025-12-14T17:55:00.462Z",
+      "updatedAt": "2025-12-14T17:56:45.243Z"
+    },
+    {
+      "id": "conv_1765735023076_57ecb2a8a05a",
+      "channel": "webchat",
+      "visitorId": "vis_1765735021057_fc649f7824f43d66",
+      "title": "Visitante do site",
+      "status": "open",
+      "assignedGroupId": null,
+      "assignedUserId": null,
+      "notes": "",
+      "createdAt": "2025-12-14T17:57:03.077Z",
+      "updatedAt": "2025-12-14T17:57:03.077Z"
     }
   ],
   "messagesByConversation": {
@@ -2972,7 +2996,28 @@
         "timestamp": "2025-12-13T23:13:38.334Z",
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMzAwMDcwREQ1RDIxMEY3MzQwAA=="
       }
-    ]
+    ],
+    "conv_1765734900457_3aa0939ee884": [
+      {
+        "id": "msg_1765734924346_002f78362f6c",
+        "conversationId": "conv_1765734900457_3aa0939ee884",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Oi",
+        "createdAt": "2025-12-14T17:55:24.346Z"
+      },
+      {
+        "id": "msg_1765734951493_e139b4499646",
+        "conversationId": "conv_1765734900457_3aa0939ee884",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "tudo bem?",
+        "createdAt": "2025-12-14T17:55:51.493Z"
+      }
+    ],
+    "conv_1765735023076_57ecb2a8a05a": []
   },
   "settings": {
     "tags": [
@@ -2980,7 +3025,8 @@
       "Suporte",
       "Reclamação",
       "Financeiro"
-    ]
+    ],
+    "channels": {}
   },
   "contacts": [
     {
