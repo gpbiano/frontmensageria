@@ -456,6 +456,20 @@
   margin-top: 10px;
   font-size: 12px;
 }
+  // no container do input (footer / composer)
+composer.style.padding = "10px";
+composer.style.paddingBottom = "calc(12px + env(safe-area-inset-bottom))";
+composer.style.boxSizing = "border-box";
+
+// garante altura mínima decente pro campo
+input.style.height = "40px";
+input.style.lineHeight = "40px";
+input.style.padding = "0 12px";
+input.style.boxSizing = "border-box";
+
+// evita ficar escondido por overflow
+panel.style.overflow = "hidden";
+
     `
   ]);
 
