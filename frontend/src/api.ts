@@ -58,12 +58,7 @@ async function safeReadJson<T = any>(res: Response): Promise<T | null> {
   }
 }
 
-function buildApiError(
-  status: number,
-  path: string,
-  payload: any,
-  text: string
-) {
+function buildApiError(status: number, path: string, payload: any, text: string) {
   const msg =
     payload?.error ||
     payload?.message ||
@@ -75,18 +70,27 @@ function buildApiError(
   return new Error(`Erro na API (${status}) ${path}: ${msg}`);
 }
 
+function isPlainObject(v: any) {
+  return v && typeof v === "object" && !(v instanceof FormData);
+}
+
 // ======================================================
 // HELPER FETCH JSON
 // ======================================================
 
-async function request<T = any>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
+async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+  const hasBody = typeof options.body !== "undefined" && options.body !== null;
+
+  const body =
+    hasBody && isPlainObject(options.body)
+      ? JSON.stringify(options.body)
+      : options.body;
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
+    body,
     headers: buildHeaders({
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {})
     })
   });
@@ -167,13 +171,10 @@ async function downloadBlob(path: string, filename: string) {
 // AUTH
 // ======================================================
 
-export async function login(
-  email: string,
-  password: string
-): Promise<LoginResponse> {
+export async function login(email: string, password: string): Promise<LoginResponse> {
   const data = await request<LoginResponse>("/login", {
     method: "POST",
-    body: JSON.stringify({ email, password })
+    body: { email, password }
   });
 
   if (data?.token && typeof window !== "undefined") {
@@ -196,7 +197,7 @@ export async function verifyPasswordToken(token: string) {
 export async function setPasswordWithToken(token: string, password: string) {
   return request(`/auth/password/set`, {
     method: "POST",
-    body: JSON.stringify({ token, password })
+    body: { token, password }
   });
 }
 
@@ -204,10 +205,12 @@ export async function setPasswordWithToken(token: string, password: string) {
 // SETTINGS — CHANNELS (Configurações → Canais)
 // ======================================================
 
-export type ChannelStatus = "connected" | "disconnected" | "soon";
+// ✅ alinhado com o backend (você usa not_connected)
+export type ChannelStatus = "connected" | "not_connected" | "soon";
 
 export interface WebchatChannelConfig {
-  primaryColor?: string;
+  primaryColor?: string; // compat front
+  color?: string; // compat backend
   position?: "left" | "right";
   buttonText?: string;
   title?: string;
@@ -246,21 +249,19 @@ export async function updateWebchatChannel(payload: {
     "/settings/channels/webchat",
     {
       method: "PATCH",
-      body: JSON.stringify(payload)
+      body: payload
     }
   );
 }
 
-export async function rotateWebchatKey(): Promise<{
-  ok: boolean;
-  widgetKey: string;
-}> {
+export async function rotateWebchatKey(): Promise<{ ok: boolean; widgetKey: string }> {
   return request<{ ok: boolean; widgetKey: string }>(
     "/settings/channels/webchat/rotate-key",
     { method: "POST" }
   );
 }
 
+// ✅ seu backend parece retornar scriptTag (além de snippet em alguns lugares)
 export async function fetchWebchatSnippet(): Promise<{
   ok: boolean;
   enabled: boolean;
@@ -268,7 +269,9 @@ export async function fetchWebchatSnippet(): Promise<{
   widgetKey: string;
   allowedOrigins: string[];
   sessionTtlSeconds: number;
-  snippet: string;
+  snippet?: string;
+  scriptTag?: string;
+  widgetJsUrl?: string;
 }> {
   return request("/settings/channels/webchat/snippet");
 }
@@ -289,15 +292,11 @@ export interface UserRecord {
   updatedAt?: string;
 }
 
-// compat: alguns backends retornam { data }, outros { items }
 type UsersListResponse =
   | { data: UserRecord[]; total: number }
   | { items: UserRecord[]; total: number };
 
-export async function fetchUsers(): Promise<{
-  data: UserRecord[];
-  total: number;
-}> {
+export async function fetchUsers(): Promise<{ data: UserRecord[]; total: number }> {
   const res = await request<UsersListResponse>("/settings/users");
   const data = "data" in res ? res.data : res.items;
   return {
@@ -317,7 +316,7 @@ export async function createUser(payload: {
 }> {
   return request("/settings/users", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
@@ -327,7 +326,7 @@ export async function updateUser(
 ): Promise<{ success: boolean; user: UserRecord }> {
   return request(`/settings/users/${encodeURIComponent(String(id))}`, {
     method: "PATCH",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
@@ -341,16 +340,10 @@ export async function deactivateUser(
 
 export async function resetUserPassword(
   id: number
-): Promise<{
-  success: boolean;
-  token?: { id: string; type: string; expiresAt: string };
-}> {
-  return request(
-    `/settings/users/${encodeURIComponent(String(id))}/reset-password`,
-    {
-      method: "POST"
-    }
-  );
+): Promise<{ success: boolean; token?: { id: string; type: string; expiresAt: string } }> {
+  return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, {
+    method: "POST"
+  });
 }
 
 // ======================================================
@@ -374,9 +367,7 @@ export async function fetchGroups(params?: {
   if (params?.includeInactive) qs.set("includeInactive", "true");
 
   const suffix = qs.toString();
-  return request<{ items: GroupRecord[]; total: number }>(
-    `/settings/groups${suffix ? `?${suffix}` : ""}`
-  );
+  return request(`/settings/groups${suffix ? `?${suffix}` : ""}`);
 }
 
 export async function createGroup(payload: {
@@ -384,9 +375,9 @@ export async function createGroup(payload: {
   color?: string;
   slaMinutes?: number;
 }): Promise<GroupRecord> {
-  return request<GroupRecord>("/settings/groups", {
+  return request("/settings/groups", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
@@ -394,33 +385,30 @@ export async function updateGroup(
   id: string,
   payload: Partial<Pick<GroupRecord, "name" | "color" | "slaMinutes">>
 ): Promise<GroupRecord> {
-  return request<GroupRecord>(`/settings/groups/${encodeURIComponent(id)}`, {
+  return request(`/settings/groups/${encodeURIComponent(id)}`, {
     method: "PATCH",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
 export async function deactivateGroup(
   id: string
 ): Promise<{ ok: boolean; group: GroupRecord }> {
-  return request<{ ok: boolean; group: GroupRecord }>(
-    `/settings/groups/${encodeURIComponent(id)}/deactivate`,
-    { method: "PATCH" }
-  );
+  return request(`/settings/groups/${encodeURIComponent(id)}/deactivate`, {
+    method: "PATCH"
+  });
 }
 
-// ⚠️ Só use se você tiver criado a rota /activate no backend
 export async function activateGroup(
   id: string
 ): Promise<{ ok: boolean; group: GroupRecord }> {
-  return request<{ ok: boolean; group: GroupRecord }>(
-    `/settings/groups/${encodeURIComponent(id)}/activate`,
-    { method: "PATCH" }
-  );
+  return request(`/settings/groups/${encodeURIComponent(id)}/activate`, {
+    method: "PATCH"
+  });
 }
 
 // ======================================================
-// SETTINGS — GROUP MEMBERS (membros do grupo)
+// SETTINGS — GROUP MEMBERS
 // ======================================================
 
 export type GroupMemberRole = "agent" | "manager";
@@ -433,7 +421,6 @@ export interface GroupMemberItem {
   createdAt?: string;
   updatedAt?: string;
 
-  // dados do usuário (join do backend)
   name?: string;
   email?: string;
   userRole?: UserRole;
@@ -448,10 +435,8 @@ export async function fetchGroupMembers(
   if (params?.includeInactive) qs.set("includeInactive", "true");
   const suffix = qs.toString();
 
-  return request<{ items: GroupMemberItem[]; total: number; group?: GroupRecord }>(
-    `/settings/groups/${encodeURIComponent(groupId)}/members${
-      suffix ? `?${suffix}` : ""
-    }`
+  return request(
+    `/settings/groups/${encodeURIComponent(groupId)}/members${suffix ? `?${suffix}` : ""}`
   );
 }
 
@@ -461,7 +446,7 @@ export async function addGroupMember(
 ): Promise<{ success: boolean; member: any; user?: any }> {
   return request(`/settings/groups/${encodeURIComponent(groupId)}/members`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
@@ -471,12 +456,10 @@ export async function updateGroupMember(
   payload: { role?: GroupMemberRole; isActive?: boolean }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
-      String(userId)
-    )}`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}`,
     {
       method: "PATCH",
-      body: JSON.stringify(payload)
+      body: payload
     }
   );
 }
@@ -486,9 +469,7 @@ export async function deactivateGroupMember(
   userId: number
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
-      String(userId)
-    )}/deactivate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/deactivate`,
     { method: "PATCH" }
   );
 }
@@ -499,12 +480,10 @@ export async function activateGroupMember(
   payload?: { role?: GroupMemberRole }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
-      String(userId)
-    )}/activate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/activate`,
     {
       method: "PATCH",
-      body: JSON.stringify(payload || {})
+      body: payload || {}
     }
   );
 }
@@ -516,11 +495,7 @@ export async function activateGroupMember(
 export async function fetchConversations(
   status: ConversationStatus | "all" = "open"
 ): Promise<Conversation[]> {
-  const qs =
-    status && status !== "all"
-      ? `?status=${encodeURIComponent(status)}`
-      : "";
-
+  const qs = status && status !== "all" ? `?status=${encodeURIComponent(status)}` : "";
   const data = await request<any>(`/conversations${qs}`);
   return Array.isArray(data) ? (data as Conversation[]) : [];
 }
@@ -530,27 +505,20 @@ export async function fetchMessages(conversationId: number): Promise<Message[]> 
   return Array.isArray(data) ? (data as Message[]) : [];
 }
 
-export async function sendTextMessage(
-  conversationId: number,
-  text: string
-): Promise<Message> {
-  return request<Message>(`/conversations/${conversationId}/messages`, {
+export async function sendTextMessage(conversationId: number, text: string): Promise<Message> {
+  return request(`/conversations/${conversationId}/messages`, {
     method: "POST",
-    body: JSON.stringify({ text })
+    body: { text }
   });
 }
 
 export async function sendMediaMessage(
   conversationId: number,
-  payload: {
-    type: string;
-    mediaUrl: string;
-    caption?: string;
-  }
+  payload: { type: string; mediaUrl: string; caption?: string }
 ): Promise<Message> {
-  return request<Message>(`/conversations/${conversationId}/media`, {
+  return request(`/conversations/${conversationId}/media`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
@@ -559,19 +527,16 @@ export async function updateConversationStatus(
   status: ConversationStatus,
   extra?: { tags?: string[] }
 ): Promise<Conversation> {
-  return request<Conversation>(`/conversations/${conversationId}/status`, {
+  return request(`/conversations/${conversationId}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status, ...(extra || {}) })
+    body: { status, ...(extra || {}) }
   });
 }
 
-export async function updateConversationNotes(
-  conversationId: number,
-  notes: string
-): Promise<Conversation> {
-  return request<Conversation>(`/conversations/${conversationId}/notes`, {
+export async function updateConversationNotes(conversationId: number, notes: string): Promise<Conversation> {
+  return request(`/conversations/${conversationId}/notes`, {
     method: "PATCH",
-    body: JSON.stringify({ notes })
+    body: { notes }
   });
 }
 
@@ -585,9 +550,7 @@ export async function fetchNumbers(): Promise<PhoneNumberRecord[]> {
 }
 
 export async function syncNumbers(): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>("/outbound/numbers/sync", {
-    method: "POST"
-  });
+  return request("/outbound/numbers/sync", { method: "POST" });
 }
 
 // ======================================================
@@ -600,9 +563,7 @@ export async function fetchTemplates(): Promise<Template[]> {
 }
 
 export async function syncTemplates(): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>("/outbound/templates/sync", {
-    method: "POST"
-  });
+  return request("/outbound/templates/sync", { method: "POST" });
 }
 
 export async function createTemplate(payload: {
@@ -613,16 +574,16 @@ export async function createTemplate(payload: {
 }): Promise<Template> {
   const res = await request<any>("/outbound/templates", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: payload
   });
 
   if (res?.template) return res.template as Template;
   return res as Template;
 }
 
-// ===============================
-// OUTBOUND – ASSETS (ARQUIVOS)
-// ===============================
+// ======================================================
+// OUTBOUND — ASSETS (ARQUIVOS)
+// ======================================================
 
 export async function fetchAssets(): Promise<MediaItem[]> {
   const data = await request<any>("/outbound/assets");
@@ -632,16 +593,13 @@ export async function fetchAssets(): Promise<MediaItem[]> {
 export async function uploadAsset(file: File): Promise<MediaItem> {
   const form = new FormData();
   form.append("file", file);
-  return requestForm<MediaItem>("/outbound/assets/upload", form);
+  return requestForm("/outbound/assets/upload", form);
 }
 
-export async function deleteAsset(
-  id: string | number
-): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/outbound/assets/${encodeURIComponent(String(id))}`,
-    { method: "DELETE" }
-  );
+export async function deleteAsset(id: string | number): Promise<{ success: boolean }> {
+  return request(`/outbound/assets/${encodeURIComponent(String(id))}`, {
+    method: "DELETE"
+  });
 }
 
 // ======================================================
@@ -694,23 +652,13 @@ export async function createCampaign(payload: {
   templateName: string;
   excludeOptOut?: boolean;
 }): Promise<CampaignRecord> {
-  return request<CampaignRecord>("/outbound/campaigns", {
+  return request("/outbound/campaigns", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
-export async function uploadCampaignAudience(
-  campaignId: string,
-  file: File
-): Promise<{
-  success: boolean;
-  campaignId: string;
-  fileName: string;
-  totalRows: number;
-  validRows: number;
-  invalidRows: number;
-}> {
+export async function uploadCampaignAudience(campaignId: string, file: File) {
   const fd = new FormData();
   fd.append("file", file);
 
@@ -720,43 +668,30 @@ export async function uploadCampaignAudience(
   );
 }
 
-export async function startCampaign(
-  campaignId: string
-): Promise<{ success: boolean; sent?: number; failed?: number }> {
-  return request<{ success: boolean; sent?: number; failed?: number }>(
-    `/outbound/campaigns/${encodeURIComponent(campaignId)}/start`,
-    { method: "POST" }
-  );
+export async function startCampaign(campaignId: string): Promise<{ success: boolean; sent?: number; failed?: number }> {
+  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/start`, {
+    method: "POST"
+  });
 }
 
-export async function pauseCampaign(
-  campaignId: string
-): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/outbound/campaigns/${encodeURIComponent(campaignId)}/pause`,
-    { method: "PATCH" }
-  );
+export async function pauseCampaign(campaignId: string): Promise<{ success: boolean }> {
+  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/pause`, {
+    method: "PATCH"
+  });
 }
 
-export async function resumeCampaign(
-  campaignId: string
-): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(
-    `/outbound/campaigns/${encodeURIComponent(campaignId)}/resume`,
-    { method: "PATCH" }
-  );
+export async function resumeCampaign(campaignId: string): Promise<{ success: boolean }> {
+  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/resume`, {
+    method: "PATCH"
+  });
 }
 
-export async function fetchCampaignById(
-  campaignId: string
-): Promise<CampaignRecord> {
-  return request<CampaignRecord>(
-    `/outbound/campaigns/${encodeURIComponent(campaignId)}`
-  );
+export async function fetchCampaignById(campaignId: string): Promise<CampaignRecord> {
+  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}`);
 }
 
 // ======================================================
-// CAMPAIGNS — REPORT / EXPORTS (Report 2.0)
+// CAMPAIGNS — REPORT / EXPORTS
 // ======================================================
 
 export function metaErrorShortLink(code: string | number) {
@@ -808,12 +743,7 @@ export async function fetchOptOut(params?: {
   if (params?.to) qs.set("to", params.to);
 
   const suffix = qs.toString();
-  return request<{
-    data: OptOutItem[];
-    total: number;
-    page: number;
-    limit: number;
-  }>(`/outbound/optout${suffix ? `?${suffix}` : ""}`);
+  return request(`/outbound/optout${suffix ? `?${suffix}` : ""}`);
 }
 
 export async function createOptOut(payload: {
@@ -822,35 +752,27 @@ export async function createOptOut(payload: {
   reason?: string;
   source?: "manual";
 }) {
-  return request<{ success: boolean; duplicate?: boolean }>("/outbound/optout", {
+  return request("/outbound/optout", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
 export async function deleteOptOut(id: string) {
-  return request<{ success: boolean }>(
-    `/outbound/optout/${encodeURIComponent(id)}`,
-    { method: "DELETE" }
-  );
+  return request(`/outbound/optout/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
 }
 
 export async function importOptOutCSV(file: File) {
   const fd = new FormData();
   fd.append("file", file);
 
-  return requestForm<{
-    total: number;
-    imported: number;
-    skipped: number;
-  }>("/outbound/optout/import/csv", fd);
+  return requestForm("/outbound/optout/import/csv", fd);
 }
 
 export async function fetchOptOutWhatsAppContacts() {
-  return request<{
-    data: { phone: string; name?: string }[];
-    total: number;
-  }>("/outbound/optout/whatsapp-contacts");
+  return request("/outbound/optout/whatsapp-contacts");
 }
 
 export async function downloadOptOutExport(params?: {
