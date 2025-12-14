@@ -14,6 +14,21 @@ import { fetchConversations, fetchMessages } from "../../api.js";
  *    - "mixed": demais casos
  */
 
+function normalizeChannel(conv) {
+  const raw = String(conv?.source || conv?.channel || "").toLowerCase();
+  if (raw.includes("webchat")) return "webchat";
+  if (raw.includes("whatsapp")) return "whatsapp";
+  if (raw.includes("wa")) return "whatsapp";
+  if (raw.includes("wc")) return "webchat";
+  return raw || "whatsapp";
+}
+
+function channelLabel(ch) {
+  if (ch === "webchat") return "Webchat";
+  if (ch === "whatsapp") return "WhatsApp";
+  return ch ? ch : "Canal";
+}
+
 function classifyOutcome(conv) {
   const botAttempts = Number(conv?.botAttempts || 0);
   if (botAttempts <= 0) return null;
@@ -58,6 +73,7 @@ export default function ChatbotHistoryPage() {
   const [conversations, setConversations] = useState([]);
   const [statusFilter, setStatusFilter] = useState("all"); // all | open | closed
   const [outcomeFilter, setOutcomeFilter] = useState("all"); // all | bot_resolved | transferred | in_bot | mixed
+  const [channelFilter, setChannelFilter] = useState("all"); // ✅ all | whatsapp | webchat
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -106,18 +122,23 @@ export default function ChatbotHistoryPage() {
       if (!outcome) return false;
 
       const status = String(c?.status || "").toLowerCase();
+      const ch = normalizeChannel(c);
 
       if (statusFilter !== "all" && status !== statusFilter) return false;
       if (outcomeFilter !== "all" && outcome !== outcomeFilter) return false;
 
+      // ✅ filtro por canal
+      if (channelFilter !== "all" && ch !== channelFilter) return false;
+
       const name = String(c?.contactName || "").toLowerCase();
       const phone = String(c?.phone || "").toLowerCase();
-      const last = String(c?.lastMessage || "").toLowerCase();
+      const last =
+        String(c?.lastMessage || c?.lastMessagePreview || "").toLowerCase();
 
       if (!term) return true;
       return name.includes(term) || phone.includes(term) || last.includes(term);
     });
-  }, [conversations, statusFilter, outcomeFilter, searchTerm]);
+  }, [conversations, statusFilter, outcomeFilter, channelFilter, searchTerm]);
 
   const stats = useMemo(() => {
     let total = conversations.length;
@@ -147,7 +168,11 @@ export default function ChatbotHistoryPage() {
     try {
       setMsgLoading(true);
       const res = await fetchMessages(id);
-      const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      const list = Array.isArray(res?.data)
+        ? res.data
+        : Array.isArray(res)
+        ? res
+        : [];
       setMessages(list);
     } catch (err) {
       console.error("Erro ao carregar mensagens:", err);
@@ -257,6 +282,34 @@ export default function ChatbotHistoryPage() {
             </div>
           </div>
 
+          {/* ✅ CANAL */}
+          <div className="cbh-filter-block">
+            <div className="cbh-filter-label">Canal</div>
+            <div className="cbh-pills">
+              <button
+                type="button"
+                className={`cbh-pill ${channelFilter === "all" ? "is-active" : ""}`}
+                onClick={() => setChannelFilter("all")}
+              >
+                Todos
+              </button>
+              <button
+                type="button"
+                className={`cbh-pill ${channelFilter === "whatsapp" ? "is-active" : ""}`}
+                onClick={() => setChannelFilter("whatsapp")}
+              >
+                WhatsApp
+              </button>
+              <button
+                type="button"
+                className={`cbh-pill ${channelFilter === "webchat" ? "is-active" : ""}`}
+                onClick={() => setChannelFilter("webchat")}
+              >
+                Webchat
+              </button>
+            </div>
+          </div>
+
           <div className="cbh-filter-block">
             <div className="cbh-filter-label">Resultado</div>
             <div className="cbh-pills">
@@ -294,10 +347,14 @@ export default function ChatbotHistoryPage() {
 
         {error && <div className="cbh-alert">{error}</div>}
 
-        {loading && <div className="cbh-loading">Carregando histórico do bot...</div>}
+        {loading && (
+          <div className="cbh-loading">Carregando histórico do bot...</div>
+        )}
 
         {!loading && !error && filteredConversations.length === 0 && (
-          <div className="cbh-empty">Nenhuma conversa encontrada com os filtros atuais.</div>
+          <div className="cbh-empty">
+            Nenhuma conversa encontrada com os filtros atuais.
+          </div>
         )}
 
         {!loading && !error && filteredConversations.length > 0 && (
@@ -307,6 +364,7 @@ export default function ChatbotHistoryPage() {
               const status = String(c?.status || "").toLowerCase();
               const phone = c?.phone || "—";
               const displayName = c?.contactName || phone;
+              const ch = normalizeChannel(c);
 
               let outcomeClass = "res-running";
               if (outcome === "bot_resolved") outcomeClass = "res-bot";
@@ -329,22 +387,40 @@ export default function ChatbotHistoryPage() {
                       <span className="cbh-phone">{phone}</span>
                     </div>
 
-                    <div className="cbh-last">{c?.lastMessage || "Sem mensagem registrada."}</div>
+                    <div className="cbh-last">
+                      {c?.lastMessage ||
+                        c?.lastMessagePreview ||
+                        "Sem mensagem registrada."}
+                    </div>
 
                     <div className="cbh-meta">
                       <span className={`cbh-badge ${status}`}>
                         {status === "open" ? "Aberta" : "Encerrada"}
                       </span>
 
-                      <span className={`cbh-badge ${outcomeClass}`}>{outcomeLabel(outcome)}</span>
+                      {/* ✅ badge do canal */}
+                      <span className="cbh-badge" title={`Canal: ${channelLabel(ch)}`}>
+                        {channelLabel(ch)}
+                      </span>
 
-                      <span className="cbh-badge">Bot x{Number(c?.botAttempts || 0)}</span>
+                      <span className={`cbh-badge ${outcomeClass}`}>
+                        {outcomeLabel(outcome)}
+                      </span>
 
-                      <span className="cbh-time">Última atualização: {safeLocale(c?.updatedAt)}</span>
+                      <span className="cbh-badge">
+                        Bot x{Number(c?.botAttempts || 0)}
+                      </span>
+
+                      <span className="cbh-time">
+                        Última atualização: {safeLocale(c?.updatedAt)}
+                      </span>
                     </div>
                   </div>
 
-                  <div className="cbh-item-actions" style={{ alignSelf: "center" }}>
+                  <div
+                    className="cbh-item-actions"
+                    style={{ alignSelf: "center" }}
+                  >
                     <span className="cbh-chevron" aria-hidden="true">
                       ›
                     </span>
@@ -358,7 +434,11 @@ export default function ChatbotHistoryPage() {
 
       {/* Drawer */}
       {openId && (
-        <div className="cbh-drawer-overlay" onClick={closeDrawer} role="presentation">
+        <div
+          className="cbh-drawer-overlay"
+          onClick={closeDrawer}
+          role="presentation"
+        >
           <aside
             className="cbh-drawer"
             onClick={(e) => e.stopPropagation()}
@@ -370,19 +450,31 @@ export default function ChatbotHistoryPage() {
                 <div className="cbh-drawer-title">
                   {openConv?.contactName || openConv?.phone || "Conversa"}
                 </div>
+
                 <div className="cbh-drawer-sub">
-                  {openConv?.phone ? `Telefone: ${openConv.phone}` : ""}{" "}
-                  {openConv?.updatedAt ? `• Atualizado: ${safeLocale(openConv.updatedAt)}` : ""}
+                  {openConv?.phone ? `Telefone: ${openConv.phone}` : ""}
+                  {openConv?.updatedAt
+                    ? ` • Atualizado: ${safeLocale(openConv.updatedAt)}`
+                    : ""}
+
+                  {/* ✅ canal no drawer */}
+                  {openConv ? ` • Canal: ${channelLabel(normalizeChannel(openConv))}` : ""}
                 </div>
               </div>
 
-              <button type="button" className="cbh-btn cbh-btn-ghost" onClick={closeDrawer}>
+              <button
+                type="button"
+                className="cbh-btn cbh-btn-ghost"
+                onClick={closeDrawer}
+              >
                 Fechar
               </button>
             </div>
 
             <div className="cbh-drawer-body">
-              {msgLoading && <div className="cbh-loading">Carregando mensagens…</div>}
+              {msgLoading && (
+                <div className="cbh-loading">Carregando mensagens…</div>
+              )}
               {msgError && <div className="cbh-alert">{msgError}</div>}
 
               {!msgLoading && !msgError && messages.length === 0 && (
@@ -392,14 +484,24 @@ export default function ChatbotHistoryPage() {
               {!msgLoading && !msgError && messages.length > 0 && (
                 <div className="cbh-msg-list">
                   {messages.map((m, idx) => {
-                    const from = String(m?.from || m?.direction || m?.sender || "").toLowerCase();
-                    const mine = from.includes("out") || from.includes("agent") || from.includes("human");
+                    const from = String(
+                      m?.from || m?.direction || m?.sender || ""
+                    ).toLowerCase();
+
+                    // heurística de "minha" = saída/atendente/humano
+                    const mine =
+                      from.includes("out") ||
+                      from.includes("agent") ||
+                      from.includes("human");
+
                     const ts = m?.timestamp || m?.createdAt || m?.sentAt;
 
                     return (
                       <div
                         key={m?.id || `${openId}-${idx}`}
-                        className={`cbh-msg ${mine ? "is-mine" : "is-theirs"}`}
+                        className={`cbh-msg ${
+                          mine ? "is-mine" : "is-theirs"
+                        }`}
                       >
                         <div className="cbh-msg-bubble">
                           <div className="cbh-msg-text">{msgText(m)}</div>

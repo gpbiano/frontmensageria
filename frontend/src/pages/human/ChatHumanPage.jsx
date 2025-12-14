@@ -1,4 +1,4 @@
-// frontend/src/pages/ChatHumanPage.jsx
+// frontend/src/pages/ChatHumanHistoryPage.jsx
 import "../../styles/chat-human.css";
 
 import {
@@ -15,26 +15,40 @@ import {
   sendMediaMessage,
   updateConversationStatus
 } from "../../api.js";
-
 import ChatPanel from "../../components/ChatPanel.jsx";
 
 const NOTIF_KEY = "gpLabsNotificationSettings";
 const QUIET_START_HOUR = 22; // 22h
 const QUIET_END_HOUR = 7; // 07h
 
-// Tela de ATENDIMENTO AO VIVO (conversas abertas)
-export default function ChatHumanPage() {
+function normalizeChannel(conv) {
+  const raw = String(conv?.source || conv?.channel || "").toLowerCase();
+  if (raw.includes("webchat")) return "webchat";
+  if (raw.includes("whatsapp")) return "whatsapp";
+  if (raw.includes("wa")) return "whatsapp";
+  if (raw.includes("wc")) return "webchat";
+  return raw || "whatsapp";
+}
+
+function channelLabel(ch) {
+  if (ch === "webchat") return "Webchat";
+  if (ch === "whatsapp") return "WhatsApp";
+  return ch ? ch : "Canal";
+}
+
+export default function ChatHumanHistoryPage() {
   const [conversations, setConversations] = useState([]);
   const [selectedConversationId, setSelectedConversationId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
 
-  // sempre "open" aqui
-  const statusFilter = "open";
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all"); // Histórico → todas por padrão
+  const [channelFilter, setChannelFilter] = useState("all"); // ✅ Todos | whatsapp | webchat
 
   const [unreadCounts, setUnreadCounts] = useState({});
+
   const prevOpenConversationsCount = useRef(0);
   const prevConversationsMapRef = useRef(new Map());
 
@@ -143,34 +157,32 @@ export default function ChatHumanPage() {
       );
       window.removeEventListener("mousemove", markActivity);
       window.removeEventListener("keydown", markActivity);
+      window.removeEventListener("click", markActivity);
       window.removeEventListener("scroll", markActivity);
     };
   }, []);
 
   // ---------------------------------------------
-  // LOAD CONVERSAS (apenas ABERTAS)
+  // LOAD CONVERSAS (HISTÓRICO HUMANO)
   // ---------------------------------------------
   const loadConversations = useCallback(
     async (options = { playSoundOnNew: false }) => {
       try {
         setLoadingConversations((prev) => prev && !options.playSoundOnNew);
 
-        const data = await fetchConversations(statusFilter);
+        const data = await fetchConversations("all");
         const list = Array.isArray(data) ? data : [];
 
         const prevMap = prevConversationsMapRef.current;
         const newMap = new Map();
 
-        let newChatDetected = false;
         let otherConversationUpdated = false;
 
         for (const conv of list) {
           const prevUpdatedAt = prevMap.get(conv.id);
           const currentUpdatedAt = conv.updatedAt || null;
 
-          if (prevUpdatedAt == null && prevMap.size > 0) {
-            newChatDetected = true;
-          } else if (
+          if (
             prevUpdatedAt &&
             currentUpdatedAt &&
             new Date(currentUpdatedAt) > new Date(prevUpdatedAt) &&
@@ -186,11 +198,11 @@ export default function ChatHumanPage() {
 
         setUnreadCounts((prev) => {
           const next = { ...prev };
-          const idsSet = new Set(list.map((c) => c.id));
+          const idsSet = new Set(list.map((c) => String(c.id)));
 
+          // ✅ correção: ids no state são strings
           Object.keys(next).forEach((idStr) => {
-            const idNum = Number(idStr);
-            if (!idsSet.has(idNum)) {
+            if (!idsSet.has(String(idStr))) {
               delete next[idStr];
             }
           });
@@ -199,47 +211,27 @@ export default function ChatHumanPage() {
             const prevUpdatedAt = prevMap.get(conv.id);
             const currentUpdatedAt = conv.updatedAt || null;
 
-            const isNewConv = prevUpdatedAt == null && prevMap.size > 0;
             const isUpdatedOtherConv =
               prevUpdatedAt &&
               currentUpdatedAt &&
               new Date(currentUpdatedAt) > new Date(prevUpdatedAt) &&
               conv.id !== selectedConversationId;
 
-            if (isNewConv || isUpdatedOtherConv) {
-              next[conv.id] = (next[conv.id] || 0) + 1;
+            if (isUpdatedOtherConv) {
+              next[String(conv.id)] = (next[String(conv.id)] || 0) + 1;
             }
 
             if (conv.id === selectedConversationId) {
-              next[conv.id] = 0;
+              next[String(conv.id)] = 0;
             }
           }
 
           return next;
         });
 
-        if (options.playSoundOnNew) {
-          const openNow = list.length;
-          const prevOpen = prevOpenConversationsCount.current;
-
-          if (prevOpen && openNow > prevOpen) {
-            newChatDetected = true;
-          }
-          prevOpenConversationsCount.current = openNow;
-        } else {
-          prevOpenConversationsCount.current = list.length;
-        }
-
-        if (newChatDetected) {
-          const { isIdle } = getIdleInfo();
-          const intensity = !isTabActive || isIdle ? "strong" : "soft";
-          playNotification("new-chat", { intensity });
-        }
-
         if (otherConversationUpdated) {
           const { isIdle } = getIdleInfo();
-          const intensity =
-            !isTabActive || isIdle ? "strong" : "soft";
+          const intensity = !isTabActive || isIdle ? "strong" : "soft";
           playNotification("received", { intensity });
         }
 
@@ -250,9 +242,7 @@ export default function ChatHumanPage() {
         }
 
         if (selectedConversationId) {
-          const stillExists = list.some(
-            (c) => c.id === selectedConversationId
-          );
+          const stillExists = list.some((c) => c.id === selectedConversationId);
           if (!stillExists) {
             setSelectedConversationId(list[0]?.id || null);
             setMessages([]);
@@ -264,7 +254,7 @@ export default function ChatHumanPage() {
         setLoadingConversations(false);
       }
     },
-    [selectedConversationId, isTabActive, statusFilter]
+    [selectedConversationId, isTabActive]
   );
 
   useEffect(() => {
@@ -273,8 +263,8 @@ export default function ChatHumanPage() {
 
   useEffect(() => {
     const interval = setInterval(
-      () => loadConversations({ playSoundOnNew: true }),
-      5000
+      () => loadConversations({ playSoundOnNew: false }),
+      8000
     );
     return () => clearInterval(interval);
   }, [loadConversations]);
@@ -301,19 +291,17 @@ export default function ChatHumanPage() {
 
   useEffect(() => {
     if (!selectedConversationId) return;
-    const interval = setInterval(loadMessages, 3000);
+    const interval = setInterval(loadMessages, 4000);
     return () => clearInterval(interval);
   }, [selectedConversationId, loadMessages]);
 
   // ---------------------------------------------
-  // ALERTA VISUAL BOT (banner no topo)
+  // ALERTA VISUAL BOT + SOM MENSAGEM ATUAL
   // ---------------------------------------------
   useEffect(() => {
     if (!messages || messages.length === 0) return;
 
-    const botMessages = messages.filter(
-      (m) => m.isBot || m.fromBot
-    );
+    const botMessages = messages.filter((m) => m.isBot || m.fromBot);
     if (botMessages.length === 0) return;
 
     const lastBotMsg = botMessages[botMessages.length - 1];
@@ -326,9 +314,6 @@ export default function ChatHumanPage() {
     return () => clearTimeout(timeout);
   }, [messages]);
 
-  // ---------------------------------------------
-  // SOM – MENSAGEM INBOUND NA CONVERSA ATUAL
-  // ---------------------------------------------
   useEffect(() => {
     if (!messages || messages.length === 0) return;
 
@@ -342,9 +327,7 @@ export default function ChatHumanPage() {
         return;
       }
 
-      const intensity =
-        !isTabActive && isIdle ? "strong" : "soft";
-
+      const intensity = !isTabActive && isIdle ? "strong" : "soft";
       playNotification("received", { intensity });
     }
   }, [messages, isTabActive]);
@@ -357,7 +340,7 @@ export default function ChatHumanPage() {
     setMessages([]);
     setUnreadCounts((prev) => ({
       ...prev,
-      [id]: 0
+      [String(id)]: 0
     }));
   };
 
@@ -391,19 +374,14 @@ export default function ChatHumanPage() {
 
   const handleChangeStatus = async (conversationId, newStatus) => {
     try {
-      const updated = await updateConversationStatus(
-        conversationId,
-        newStatus
-      );
+      const updated = await updateConversationStatus(conversationId, newStatus);
 
       setConversations((prev) =>
         prev.map((c) => (c.id === updated.id ? updated : c))
       );
 
-      if (newStatus === "closed") {
-        setConversations((prev) =>
-          prev.filter((c) => c.id !== conversationId)
-        );
+      if (statusFilter === "open" && newStatus === "closed") {
+        setConversations((prev) => prev.filter((c) => c.id !== conversationId));
         if (selectedConversationId === conversationId) {
           setSelectedConversationId(null);
           setMessages([]);
@@ -415,27 +393,41 @@ export default function ChatHumanPage() {
   };
 
   // ---------------------------------------------
-  // LISTAS DERIVADAS
+  // LISTAS DERIVADAS – regra HUMANO + filtro de CANAL
   // ---------------------------------------------
   const filteredConversations = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
 
     return conversations.filter((c) => {
+      // Apenas histórico humano:
+      const isHumanConversation =
+        c.currentMode === "human" || c.status === "closed";
+      if (!isHumanConversation) return false;
+
+      if (statusFilter !== "all" && c.status !== statusFilter) {
+        return false;
+      }
+
+      // ✅ filtro por canal (Modelo A)
+      const ch = normalizeChannel(c);
+      if (channelFilter !== "all" && ch !== channelFilter) {
+        return false;
+      }
+
       const matchesTerm =
         !term ||
-        (c.contactName &&
-          c.contactName.toLowerCase().includes(term)) ||
-        (c.phone && c.phone.toLowerCase().includes(term)) ||
-        (c.lastMessage &&
-          c.lastMessage.toLowerCase().includes(term));
+        (c.contactName && c.contactName.toLowerCase().includes(term)) ||
+        (c.phone && String(c.phone).toLowerCase().includes(term)) ||
+        (c.lastMessage && String(c.lastMessage).toLowerCase().includes(term)) ||
+        (c.lastMessagePreview &&
+          String(c.lastMessagePreview).toLowerCase().includes(term));
 
       return matchesTerm;
     });
-  }, [conversations, searchTerm]);
+  }, [conversations, searchTerm, statusFilter, channelFilter]);
 
   const selectedConversation = useMemo(
-    () =>
-      conversations.find((c) => c.id === selectedConversationId) || null,
+    () => conversations.find((c) => c.id === selectedConversationId) || null,
     [conversations, selectedConversationId]
   );
 
@@ -443,46 +435,67 @@ export default function ChatHumanPage() {
   // RENDER
   // ---------------------------------------------
   return (
-    <div
-      className={
-        "chat-history-layout" + (botAlert ? " bot-alert" : "")
-      }
-    >
-      {/* COLUNA ESQUERDA – CONVERSAS ABERTAS */}
+    <div className={"chat-history-layout" + (botAlert ? " bot-alert" : "")}>
+      {/* COLUNA ESQUERDA – LISTA DE ATENDIMENTOS HUMANOS */}
       <aside className="chat-history-sidebar">
         <div className="chat-history-header">
           <div>
-            <h1>Conversas</h1>
-            <p>Atendimentos em tempo real</p>
+            <h1>Histórico de Atendimentos Humanos</h1>
+            <p>Conversas atendidas por operadores, abertas ou encerradas.</p>
           </div>
+        </div>
 
-          <div className="chat-history-notification-controls">
-            <label className="notif-toggle">
-              <input
-                type="checkbox"
-                checked={notificationsEnabled}
-                onChange={(e) =>
-                  setNotificationsEnabled(e.target.checked)
-                }
-              />
-              <span>🔊 Som</span>
-            </label>
-            <label className="notif-toggle">
-              <input
-                type="checkbox"
-                checked={quietHoursEnabled}
-                onChange={(e) =>
-                  setQuietHoursEnabled(e.target.checked)
-                }
-              />
-              <span>🔕 Silêncio</span>
-            </label>
-          </div>
+        {/* Filtros de status */}
+        <div className="chat-history-filters">
+          <button
+            className={statusFilter === "all" ? "active" : ""}
+            onClick={() => setStatusFilter("all")}
+          >
+            Todas
+          </button>
+          <button
+            className={statusFilter === "open" ? "active" : ""}
+            onClick={() => setStatusFilter("open")}
+          >
+            Abertas
+          </button>
+          <button
+            className={statusFilter === "closed" ? "active" : ""}
+            onClick={() => setStatusFilter("closed")}
+          >
+            Encerradas
+          </button>
+        </div>
+
+        {/* ✅ Filtros de canal */}
+        <div className="chat-history-filters" style={{ marginTop: 10 }}>
+          <button
+            className={channelFilter === "all" ? "active" : ""}
+            onClick={() => setChannelFilter("all")}
+            title="Mostrar todos os canais"
+          >
+            Todos
+          </button>
+          <button
+            className={channelFilter === "whatsapp" ? "active" : ""}
+            onClick={() => setChannelFilter("whatsapp")}
+            title="Mostrar apenas WhatsApp"
+          >
+            WhatsApp
+          </button>
+          <button
+            className={channelFilter === "webchat" ? "active" : ""}
+            onClick={() => setChannelFilter("webchat")}
+            title="Mostrar apenas Webchat"
+          >
+            Webchat
+          </button>
         </div>
 
         <div className="chat-history-search">
           <input
-            placeholder="Buscar por nome, telefone ou mensagem..."
+            type="text"
+            placeholder="Buscar por nome, telefone ou última mensagem..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -490,29 +503,25 @@ export default function ChatHumanPage() {
 
         <div className="chat-history-list">
           {loadingConversations && (
+            <div className="chat-history-empty">Carregando histórico...</div>
+          )}
+
+          {!loadingConversations && filteredConversations.length === 0 && (
             <div className="chat-history-empty">
-              Carregando conversas...
+              Nenhum atendimento humano encontrado com os filtros atuais.
             </div>
           )}
 
-          {!loadingConversations &&
-            filteredConversations.length === 0 && (
-              <div className="chat-history-empty">
-                Nenhuma conversa aberta no momento.
-              </div>
-            )}
-
           {filteredConversations.map((conv) => {
-            const unread = unreadCounts[conv.id] || 0;
+            const unread = unreadCounts[String(conv.id)] || 0;
+            const ch = normalizeChannel(conv);
 
             return (
               <button
                 key={conv.id}
                 className={
                   "chat-history-item" +
-                  (conv.id === selectedConversationId
-                    ? " selected"
-                    : "")
+                  (conv.id === selectedConversationId ? " selected" : "")
                 }
                 onClick={() => handleSelectConversation(conv.id)}
               >
@@ -520,21 +529,37 @@ export default function ChatHumanPage() {
                   <span className="chat-history-contact-name">
                     {conv.contactName || conv.phone}
                   </span>
-                  <span className="chat-history-status">
-                    Aberta
+
+                  {/* ✅ badge do canal */}
+                  <span
+                    className="chat-history-status"
+                    style={{
+                      marginLeft: 10,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: "rgba(255,255,255,.06)",
+                      border: "1px solid rgba(255,255,255,.08)"
+                    }}
+                    title={`Canal: ${channelLabel(ch)}`}
+                  >
+                    {channelLabel(ch)}
+                  </span>
+
+                  <span className="chat-history-status" style={{ marginLeft: 10 }}>
+                    {conv.status === "open" ? "Aberta" : "Encerrada"}
                   </span>
 
                   {unread > 0 && (
-                    <span className="chat-history-unread-badge">
-                      {unread}
-                    </span>
+                    <span className="chat-history-unread-badge">{unread}</span>
                   )}
                 </div>
-                <div className="chat-history-phone">
-                  {conv.phone}
-                </div>
+
+                <div className="chat-history-phone">{conv.phone}</div>
+
                 <div className="chat-history-last-message">
-                  {conv.lastMessage || "Sem mensagens ainda"}
+                  {conv.lastMessage ||
+                    conv.lastMessagePreview ||
+                    "Sem mensagens ainda"}
                 </div>
               </button>
             );
@@ -542,23 +567,11 @@ export default function ChatHumanPage() {
         </div>
       </aside>
 
-      {/* COLUNA CENTRAL + DIREITA */}
+      {/* COLUNA CENTRAL + DIREITA – CHAT + PAINEL CONTATO */}
       <section className="chat-history-main">
         {selectedConversation ? (
-          <div
-            style={{
-              display: "flex",
-              flex: 1,
-              minHeight: 0
-            }}
-          >
-            <div
-              style={{
-                flex: 1,
-                minWidth: 0,
-                height: "100%"
-              }}
-            >
+          <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+            <div style={{ flex: 1, minWidth: 0, height: "100%" }}>
               <ChatPanel
                 conversation={selectedConversation}
                 messages={messages}
@@ -571,47 +584,45 @@ export default function ChatHumanPage() {
 
             <aside className="chat-contact-panel">
               <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Informações do contato
-                </div>
+                <div className="chat-contact-label">Informações do contato</div>
                 <div className="chat-contact-name">
                   {selectedConversation.contactName || "Sem nome"}
                 </div>
                 <div className="chat-contact-phone">
                   {selectedConversation.phone}
                 </div>
+
+                {/* ✅ canal no painel */}
+                <div style={{ marginTop: 10 }}>
+                  <div className="chat-contact-label">Canal</div>
+                  <div className="chat-contact-value">
+                    {channelLabel(normalizeChannel(selectedConversation))}
+                  </div>
+                </div>
               </div>
 
               <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Última atualização
-                </div>
+                <div className="chat-contact-label">Última atualização</div>
                 <div className="chat-contact-value">
                   {selectedConversation.updatedAt
-                    ? new Date(
-                        selectedConversation.updatedAt
-                      ).toLocaleString()
+                    ? new Date(selectedConversation.updatedAt).toLocaleString()
                     : "—"}
                 </div>
               </div>
 
               <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Tags / Observações
-                </div>
-                <div className="chat-contact-value">
-                  Nenhuma tag cadastrada.
-                </div>
+                <div className="chat-contact-label">Tags / Observações</div>
+                <div className="chat-contact-value">Nenhuma tag cadastrada.</div>
               </div>
             </aside>
           </div>
         ) : (
           <div className="chat-history-placeholder">
-            <h2>Sem conversa selecionada</h2>
+            <h2>Nenhum atendimento selecionado</h2>
             <p>
-              Escolha uma conversa na coluna à esquerda para iniciar
-              o atendimento. Novos chats aparecerão automaticamente
-              quando chegarem.
+              Escolha um atendimento na coluna à esquerda para visualizar o
+              histórico. Você pode aplicar filtros por status, canal e buscar
+              por nome ou telefone.
             </p>
           </div>
         )}

@@ -13,10 +13,16 @@ function newId(prefix = "msg") {
   return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
 }
 
-function ensureMessagesByConversation(db) {
+function ensureDbShape(db) {
+  if (!db.conversations) db.conversations = [];
   if (!db.messagesByConversation || typeof db.messagesByConversation !== "object") {
     db.messagesByConversation = {};
   }
+  return db;
+}
+
+function ensureMessagesByConversation(db) {
+  ensureDbShape(db);
   return db.messagesByConversation;
 }
 
@@ -25,6 +31,43 @@ function ensureConversationMessages(db, conversationId) {
   const key = String(conversationId);
   if (!Array.isArray(map[key])) map[key] = [];
   return map[key];
+}
+
+function normalizeSourceFromChannel(ch) {
+  if (!ch) return "";
+  const v = String(ch).toLowerCase();
+  if (v.includes("webchat")) return "webchat";
+  if (v.includes("whatsapp")) return "whatsapp";
+  if (v.includes("bot")) return "bot";
+  if (v.includes("human")) return "human";
+  return v;
+}
+
+/**
+ * MODELO A: multi-canal paralelo
+ * ✅ Nunca “mata” conversa de outro canal.
+ * ✅ Toda conversa deve ter: source + peerId (ou pelo menos source)
+ */
+function normalizeConversation(conv) {
+  if (!conv) return conv;
+  if (!conv.source) conv.source = normalizeSourceFromChannel(conv.channel) || conv.source || "whatsapp";
+  if (!conv.channel) conv.channel = conv.source;
+
+  // peerId é opcional aqui (porque seu DB pode ter legado),
+  // mas se faltar, tentamos derivar sem quebrar:
+  if (!conv.peerId) {
+    if (conv.source === "webchat" && conv.visitorId) conv.peerId = `wc:${conv.visitorId}`;
+    if (conv.source === "whatsapp" && (conv.waId || conv.phone || conv.contactPhone)) {
+      conv.peerId = `wa:${conv.waId || conv.phone || conv.contactPhone}`;
+    }
+  }
+  return conv;
+}
+
+function getConversation(db, id) {
+  const convs = ensureArray(db.conversations);
+  const conv = convs.find((c) => String(c.id) === String(id));
+  return conv ? normalizeConversation(conv) : null;
 }
 
 function normalizeMsg(conv, raw) {
@@ -46,24 +89,20 @@ function normalizeMsg(conv, raw) {
   let from = raw.from || raw.sender || raw.author || null;
   let direction = raw.direction || null;
 
-  // Alguns provedores usam "user"/"contact" etc.
   if (from === "user" || from === "contact" || from === "visitor") from = "client";
   if (from === "attendant" || from === "human") from = "agent";
 
   const isBot = !!(raw.isBot || raw.fromBot || raw.bot === true || from === "bot");
 
-  // Se vier direction ausente, inferimos:
   if (!direction) {
     if (from === "client") direction = "in";
     else direction = "out";
   }
 
-  // Se vier from ausente, inferimos pelo direction:
   if (!from) {
     from = direction === "in" ? "client" : "agent";
   }
 
-  // Se marcou bot, forçamos
   if (isBot) {
     from = "bot";
     direction = "out";
@@ -72,14 +111,14 @@ function normalizeMsg(conv, raw) {
   return {
     id: raw.id || raw._id || newId("msg"),
     conversationId: String(raw.conversationId || conv?.id || ""),
-    channel: raw.channel || conv?.channel || "whatsapp",
+    // ✅ channel do conv prevalece, mas aceita override
+    channel: raw.channel || conv?.channel || conv?.source || "whatsapp",
     type: raw.type || "text",
-    from,          // client | agent | bot | system
-    direction,     // in | out
+    from,
+    direction,
     isBot,
     text,
     createdAt: typeof createdAt === "number" ? new Date(createdAt).toISOString() : createdAt,
-    // extras opcionais
     senderName: raw.senderName || raw.byName || raw.agentName || undefined,
     waMessageId: raw.waMessageId || raw.messageId || undefined
   };
@@ -92,16 +131,13 @@ function touchConversation(conv, msg) {
   conv.lastMessagePreview = preview ? preview.slice(0, 120) : conv.lastMessagePreview || "";
 }
 
-function getConversation(db, id) {
-  const convs = ensureArray(db.conversations);
-  return convs.find((c) => String(c.id) === String(id));
-}
-
 /**
  * ✅ Função ÚNICA para anexar mensagem em qualquer canal (WhatsApp/WebChat/Bot/Humano)
- * Use essa mesma lógica também no webhook do WhatsApp.
+ * MODELO A: não fecha conversa, não “migra” canal.
  */
 export function appendMessage(db, conversationId, rawMsg) {
+  db = ensureDbShape(db);
+
   const conv = getConversation(db, conversationId);
   if (!conv) return { ok: false, error: "Conversa não encontrada" };
 
@@ -120,17 +156,103 @@ export function appendMessage(db, conversationId, rawMsg) {
   return { ok: true, msg };
 }
 
+/**
+ * ✅ UTILIDADE (MODELO A):
+ * Cria (ou reabre) conversa SOMENTE do canal informado.
+ * Isso impede “matar” webchat quando chega WhatsApp.
+ *
+ * payload:
+ * { source:"whatsapp"|"webchat", peerId:string, title?:string, accountId?:string, channelId?:string, phone?:string, waId?:string, visitorId?:string }
+ */
+export function getOrCreateChannelConversation(db, payload) {
+  db = ensureDbShape(db);
+
+  const source = String(payload?.source || "").toLowerCase();
+  if (!source) return { ok: false, error: "source obrigatório" };
+
+  const peerId = String(payload?.peerId || "").trim();
+  if (!peerId) return { ok: false, error: "peerId obrigatório" };
+
+  const accountId = payload?.accountId ? String(payload.accountId) : null;
+
+  // acha conversa aberta DO MESMO CANAL
+  let conv = db.conversations.find((c) => {
+    normalizeConversation(c);
+    return (
+      c.status === "open" &&
+      c.source === source &&
+      c.peerId === peerId &&
+      (accountId ? c.accountId === accountId : true)
+    );
+  });
+
+  // se não achar, procura uma fechada do mesmo canal pra reabrir (opcional)
+  if (!conv) {
+    conv = db.conversations.find((c) => {
+      normalizeConversation(c);
+      return (
+        c.status === "closed" &&
+        c.source === source &&
+        c.peerId === peerId &&
+        (accountId ? c.accountId === accountId : true)
+      );
+    });
+
+    if (conv) {
+      conv.status = "open";
+      conv.updatedAt = nowIso();
+    }
+  }
+
+  if (!conv) {
+    const idPrefix = source === "webchat" ? "wc" : source === "whatsapp" ? "wa" : "conv";
+    conv = {
+      id: newId(idPrefix),
+      source,
+      channel: source,
+      peerId,
+      title: payload?.title || "Contato",
+      status: "open",
+      assignedGroupId: null,
+      assignedUserId: null,
+      notes: "",
+      tags: [],
+      accountId: accountId || null,
+      channelId: payload?.channelId ? String(payload.channelId) : null,
+      phone: payload?.phone || null,
+      waId: payload?.waId || null,
+      visitorId: payload?.visitorId || null,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+
+    db.conversations.push(conv);
+    ensureConversationMessages(db, conv.id);
+    saveDB(db);
+  } else {
+    saveDB(db);
+  }
+
+  return { ok: true, conversation: conv };
+}
+
 // ======================================================
-// GET /conversations?status=open|closed|all
+// GET /conversations?status=open|closed|all&source=whatsapp|webchat|all
 // ======================================================
 router.get("/", (req, res) => {
-  const db = loadDB();
+  const db = ensureDbShape(loadDB());
   const status = String(req.query.status || "open");
+  const source = String(req.query.source || "all").toLowerCase();
 
-  let items = ensureArray(db.conversations);
+  let items = ensureArray(db.conversations).map(normalizeConversation);
 
   if (status !== "all") {
     items = items.filter((c) => String(c.status || "open") === status);
+  }
+
+  // ✅ filtro por canal (modelo A)
+  if (source !== "all") {
+    items = items.filter((c) => String(c.source || "") === source);
   }
 
   items.sort((a, b) => {
@@ -146,7 +268,7 @@ router.get("/", (req, res) => {
 // GET /conversations/:id/messages
 // ======================================================
 router.get("/:id/messages", (req, res) => {
-  const db = loadDB();
+  const db = ensureDbShape(loadDB());
   const id = String(req.params.id);
 
   const conv = getConversation(db, id);
@@ -154,7 +276,6 @@ router.get("/:id/messages", (req, res) => {
 
   const list = ensureConversationMessages(db, conv.id);
 
-  // ordena por createdAt asc (cronológica)
   list.sort((a, b) => {
     const ta = new Date(a.createdAt || 0).getTime();
     const tb = new Date(b.createdAt || 0).getTime();
@@ -169,7 +290,7 @@ router.get("/:id/messages", (req, res) => {
 // body: { text: string, senderName?: string }
 // ======================================================
 router.post("/:id/messages", (req, res) => {
-  const db = loadDB();
+  const db = ensureDbShape(loadDB());
   const id = String(req.params.id);
 
   const conv = getConversation(db, id);
@@ -187,7 +308,7 @@ router.post("/:id/messages", (req, res) => {
     type: "text",
     text,
     senderName: req.body?.senderName || undefined,
-    channel: conv.channel || "whatsapp"
+    channel: conv.channel || conv.source || "whatsapp"
   });
 
   if (!result.ok) return res.status(400).json({ error: result.error });
@@ -199,7 +320,7 @@ router.post("/:id/messages", (req, res) => {
 // body: { status: "open" | "closed", tags?: string[] }
 // ======================================================
 router.patch("/:id/status", (req, res) => {
-  const db = loadDB();
+  const db = ensureDbShape(loadDB());
   const id = String(req.params.id);
 
   const conv = getConversation(db, id);
@@ -213,20 +334,18 @@ router.patch("/:id/status", (req, res) => {
   conv.status = status;
   conv.updatedAt = nowIso();
 
-  // opcional
   if (Array.isArray(req.body?.tags)) conv.tags = req.body.tags;
 
-  // mensagem de sistema
+  // mensagem de sistema (mesma conversa, mesmo canal)
   appendMessage(db, conv.id, {
     type: "system",
     from: "system",
     direction: "out",
-    text: status === "closed" ? "Atendimento encerrado." : "Atendimento reaberto."
+    text: status === "closed" ? "Atendimento encerrado." : "Atendimento reaberto.",
+    channel: conv.channel || conv.source || "whatsapp"
   });
 
-  // appendMessage já salvou, mas aqui garantimos caso falhe acima
   saveDB(db);
-
   return res.json(conv);
 });
 
@@ -235,7 +354,7 @@ router.patch("/:id/status", (req, res) => {
 // body: { notes: string }
 // ======================================================
 router.patch("/:id/notes", (req, res) => {
-  const db = loadDB();
+  const db = ensureDbShape(loadDB());
   const id = String(req.params.id);
 
   const conv = getConversation(db, id);

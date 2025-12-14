@@ -1,16 +1,15 @@
-/* GP Labs Web Chat Widget — v1
+/* GP Labs Web Chat Widget — v1 (fix anti-conflito + auto-recover)
  * Embed via:
- * <script src="https://widget.gplabs.com.br/widget.js" data-widget-key="wkey_xxx" async></script>
+ * <script src="https://widget.gplabs.com.br/widget.js"
+ *   data-widget-key="wkey_xxx"
+ *   data-api-base="https://api.gplabs.com.br"   <-- IMPORTANTE (não deixar cair em localhost)
+ *   async></script>
  *
  * Requisitos (backend):
  * - POST   /webchat/session
  * - POST   /webchat/messages
  * - GET    /webchat/conversations/:id/messages?after=<cursor>&limit=50
  * - POST   /webchat/conversations/:id/close
- *
- * Segurança (esperada no backend):
- * - valida widgetKey + Origin allowlist
- * - retorna webchatToken assinado (expira)
  */
 
 (function () {
@@ -27,9 +26,9 @@
   }
 
   function el(tag, attrs, children) {
-    const n = document.createElement(tag);
+    var n = document.createElement(tag);
     if (attrs) {
-      Object.keys(attrs).forEach((k) => {
+      Object.keys(attrs).forEach(function (k) {
         if (k === "style" && typeof attrs[k] === "object") {
           Object.assign(n.style, attrs[k]);
         } else if (k === "className") {
@@ -41,7 +40,7 @@
         }
       });
     }
-    (children || []).forEach((c) => {
+    (children || []).forEach(function (c) {
       if (c == null) return;
       if (typeof c === "string") n.appendChild(document.createTextNode(c));
       else n.appendChild(c);
@@ -50,7 +49,7 @@
   }
 
   function safeText(str) {
-    return String(str ?? "");
+    return String(str == null ? "" : str);
   }
 
   function nowIso() {
@@ -58,80 +57,90 @@
   }
 
   function randHex(len) {
-    const a = new Uint8Array(len);
+    var a = new Uint8Array(len);
     (window.crypto || window.msCrypto).getRandomValues(a);
-    return Array.from(a).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return Array.from(a)
+      .map(function (b) {
+        return b.toString(16).padStart(2, "0");
+      })
+      .join("");
   }
 
   function getOrCreateVisitorId(storageKey) {
     try {
-      const existing = localStorage.getItem(storageKey);
+      var existing = localStorage.getItem(storageKey);
       if (existing) return existing;
-      const id = `vis_${Date.now()}_${randHex(8)}`;
+      var id = "vis_" + Date.now() + "_" + randHex(8);
       localStorage.setItem(storageKey, id);
       return id;
-    } catch {
-      return `vis_${Date.now()}_${randHex(8)}`;
+    } catch (e) {
+      return "vis_" + Date.now() + "_" + randHex(8);
     }
   }
 
   function debounce(fn, ms) {
-    let t = null;
-    return function (...args) {
+    var t = null;
+    return function () {
+      var args = arguments;
       clearTimeout(t);
-      t = setTimeout(() => fn.apply(this, args), ms);
+      t = setTimeout(function () {
+        fn.apply(this, args);
+      }, ms);
     };
+  }
+
+  function isValidWebchatConversationId(id) {
+    return !!id && String(id).startsWith("wc_");
   }
 
   // =============================
   // Config (via data-attributes)
   // =============================
-  const script =
+  var script =
     document.currentScript ||
     (function findScript() {
-      const scripts = document.getElementsByTagName("script");
-      for (let i = scripts.length - 1; i >= 0; i--) {
-        const s = scripts[i];
-        const src = (s.getAttribute("src") || "").toLowerCase();
-        if (src.includes("widget.v1.js")) return s;
+      var scripts = document.getElementsByTagName("script");
+      for (var i = scripts.length - 1; i >= 0; i--) {
+        var s = scripts[i];
+        var src = (s.getAttribute("src") || "").toLowerCase();
+        if (src.includes("widget.v1.js") || src.includes("widget.js")) return s;
       }
       return scripts[scripts.length - 1];
     })();
 
-  const WIDGET_KEY = script?.dataset?.widgetKey || "";
+  var WIDGET_KEY = (script && script.dataset && script.dataset.widgetKey) || "";
   if (!WIDGET_KEY) return;
 
-  const API_BASE =
-    script?.dataset?.apiBase ||
-    (function guessBase() {
-      try {
-        const u = new URL(script.src);
-        return `${u.protocol}//${u.host}`;
-      } catch {
-        return "";
-      }
-    })();
+  // ✅ NÃO confiar em "guessBase" (isso te joga pra widget.gplabs.com.br ou pior)
+  // ✅ Se não vier data-api-base, cai em localhost apenas para DEV.
+  var API_BASE =
+    (script && script.dataset && (script.dataset.apiBase || script.dataset.apiBaseUrl)) ||
+    window.GP_WEBCHAT_API_BASE ||
+    "http://localhost:3010";
 
-  const DEFAULTS = {
-    primaryColor: script?.dataset?.color || "#34d399",
-    position: script?.dataset?.position || "right", // right | left
-    buttonText: script?.dataset?.buttonText || "Ajuda",
-    headerTitle: script?.dataset?.title || "Atendimento",
-    greeting: script?.dataset?.greeting || "Olá! Como posso ajudar?",
-    pollingOpenMs: Number(script?.dataset?.pollingOpenMs || 2500),
-    pollingMinimizedMs: Number(script?.dataset?.pollingMinimizedMs || 12000),
+  var DEFAULTS = {
+    primaryColor: (script && script.dataset && script.dataset.color) || "#34d399",
+    position: (script && script.dataset && script.dataset.position) || "right", // right | left
+    buttonText: (script && script.dataset && script.dataset.buttonText) || "Ajuda",
+    headerTitle: (script && script.dataset && script.dataset.title) || "Atendimento",
+    greeting:
+      (script && script.dataset && script.dataset.greeting) || "Olá! Como posso ajudar?",
+    pollingOpenMs: Number((script && script.dataset && script.dataset.pollingOpenMs) || 2500),
+    pollingMinimizedMs: Number(
+      (script && script.dataset && script.dataset.pollingMinimizedMs) || 12000
+    ),
     maxMessageLen: 2000
   };
 
-  const STORAGE = {
-    visitorId: `gpl_webchat_visitor_${WIDGET_KEY}`,
-    session: `gpl_webchat_session_${WIDGET_KEY}`
+  var STORAGE = {
+    visitorId: "gpl_webchat_visitor_" + WIDGET_KEY,
+    session: "gpl_webchat_session_" + WIDGET_KEY
   };
 
   // =============================
   // State
   // =============================
-  const state = {
+  var state = {
     visitorId: getOrCreateVisitorId(STORAGE.visitorId),
     conversationId: null,
     sessionId: null,
@@ -148,71 +157,108 @@
     pollInterval: DEFAULTS.pollingMinimizedMs
   };
 
+  function clearSessionCache() {
+    try {
+      localStorage.removeItem(STORAGE.session);
+    } catch (e) {}
+    state.conversationId = null;
+    state.sessionId = null;
+    state.webchatToken = null;
+    state.lastCursor = null;
+  }
+
   // =============================
   // Network
   // =============================
   async function api(path, opts) {
-    const url = `${API_BASE}${path}`;
-    const headers = Object.assign(
+    var url = "" + API_BASE + path;
+    var headers = Object.assign(
       { "Content-Type": "application/json" },
-      opts?.headers || {}
+      (opts && opts.headers) || {}
     );
 
     if (state.webchatToken) {
-      headers["Authorization"] = `Webchat ${state.webchatToken}`;
+      headers["Authorization"] = "Webchat " + state.webchatToken;
     }
     headers["X-Widget-Key"] = WIDGET_KEY;
 
-    const res = await fetch(url, {
-      method: opts?.method || "GET",
-      headers,
-      body: opts?.body ? JSON.stringify(opts.body) : undefined,
+    var res = await fetch(url, {
+      method: (opts && opts.method) || "GET",
+      headers: headers,
+      body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
       credentials: "omit"
     });
 
-    const text = await res.text();
-    let data = null;
+    var text = await res.text();
+    var data = null;
     try {
       data = text ? JSON.parse(text) : null;
-    } catch {
+    } catch (e) {
       data = { raw: text };
     }
 
     if (!res.ok) {
-      const msg = data?.error || data?.message || `HTTP ${res.status}`;
-      throw new Error(msg);
+      var msg = (data && (data.error || data.message)) || "HTTP " + res.status;
+      var err = new Error(msg);
+      err.status = res.status;
+      err.data = data;
+      throw err;
     }
+
     return data;
   }
 
-  async function createOrResumeSession() {
+  // ✅ tenta de novo automaticamente em casos típicos de sessão velha/conflito
+  async function apiWithRecover(path, opts) {
     try {
-      const cached = JSON.parse(localStorage.getItem(STORAGE.session) || "null");
-      if (
-        cached &&
-        cached.conversationId &&
-        cached.webchatToken &&
-        cached.expiresAt &&
-        Date.now() < new Date(cached.expiresAt).getTime()
-      ) {
-        state.conversationId = cached.conversationId;
-        state.sessionId = cached.sessionId || null;
-        state.webchatToken = cached.webchatToken;
-        state.lastCursor = cached.lastCursor || null;
-        return;
+      return await api(path, opts);
+    } catch (e) {
+      var st = e && e.status;
+      // 401 token inválido / 404 conversa não existe / 409 conversa não é webchat
+      if (st === 401 || st === 404 || st === 409) {
+        clearSessionCache();
+        await createOrResumeSession(true);
+        return await api(path, opts);
       }
-    } catch {}
+      throw e;
+    }
+  }
 
-    const payload = {
+  async function createOrResumeSession(force) {
+    if (!force) {
+      try {
+        var cached = JSON.parse(localStorage.getItem(STORAGE.session) || "null");
+        if (
+          cached &&
+          cached.conversationId &&
+          cached.webchatToken &&
+          cached.expiresAt &&
+          Date.now() < new Date(cached.expiresAt).getTime()
+        ) {
+          // ✅ rejeita qualquer conversationId antigo (conv_...) aqui
+          if (!isValidWebchatConversationId(cached.conversationId)) {
+            clearSessionCache();
+          } else {
+            state.conversationId = cached.conversationId;
+            state.sessionId = cached.sessionId || null;
+            state.webchatToken = cached.webchatToken;
+            state.lastCursor = cached.lastCursor || null;
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+
+    var payload = {
       visitorId: state.visitorId,
       pageUrl: location.href,
       referrer: document.referrer || "",
       utm: (function () {
-        const p = new URLSearchParams(location.search);
-        const utm = {};
+        var p = new URLSearchParams(location.search);
+        var utm = {};
         ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"].forEach(
-          (k) => {
-            const v = p.get(k);
+          function (k) {
+            var v = p.get(k);
             if (v) utm[k] = v;
           }
         );
@@ -220,7 +266,13 @@
       })()
     };
 
-    const res = await api("/webchat/session", { method: "POST", body: payload });
+    var res = await api("/webchat/session", { method: "POST", body: payload });
+
+    // ✅ se backend devolver formato antigo, força reset e falha (pra não poluir)
+    if (!isValidWebchatConversationId(res.conversationId) || !res.webchatToken) {
+      clearSessionCache();
+      throw new Error("Sessão inválida (conversationId/token).");
+    }
 
     state.conversationId = res.conversationId;
     state.sessionId = res.sessionId || null;
@@ -229,41 +281,44 @@
     state.lastCursor = res.lastCursor || null;
 
     try {
-      const ttlSec = Number(res.expiresInSeconds || 1800);
-      const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
+      var ttlSec = Number(res.expiresInSeconds || 1800);
+      var expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
       localStorage.setItem(
         STORAGE.session,
         JSON.stringify({
           conversationId: state.conversationId,
           sessionId: state.sessionId,
           webchatToken: state.webchatToken,
-          expiresAt,
+          expiresAt: expiresAt,
           lastCursor: state.lastCursor
         })
       );
-    } catch {}
+    } catch (e) {}
   }
 
   async function fetchNewMessages() {
     if (!state.conversationId) return;
 
-    const q = new URLSearchParams();
+    var q = new URLSearchParams();
     if (state.lastCursor) q.set("after", state.lastCursor);
     q.set("limit", "50");
 
-    const res = await api(
-      `/webchat/conversations/${encodeURIComponent(
-        state.conversationId
-      )}/messages?${q.toString()}`
+    var res = await apiWithRecover(
+      "/webchat/conversations/" +
+        encodeURIComponent(state.conversationId) +
+        "/messages?" +
+        q.toString()
     );
 
-    const items = Array.isArray(res.items) ? res.items : [];
+    var items = Array.isArray(res && res.items) ? res.items : [];
     if (items.length) {
-      items.forEach((m) => addMessageToUI(m));
+      items.forEach(function (m) {
+        addMessageToUI(m);
+      });
       state.lastCursor = res.nextCursor || state.lastCursor;
       persistCursor();
       scrollToBottom(true);
-    } else if (res.nextCursor) {
+    } else if (res && res.nextCursor) {
       state.lastCursor = res.nextCursor;
       persistCursor();
     }
@@ -271,26 +326,24 @@
 
   function persistCursor() {
     try {
-      const cached = JSON.parse(localStorage.getItem(STORAGE.session) || "null");
+      var cached = JSON.parse(localStorage.getItem(STORAGE.session) || "null");
       if (cached && cached.conversationId === state.conversationId) {
         cached.lastCursor = state.lastCursor;
         localStorage.setItem(STORAGE.session, JSON.stringify(cached));
       }
-    } catch {}
+    } catch (e) {}
   }
 
   async function sendVisitorMessage(text) {
-    const msg = safeText(text).trim();
+    var msg = safeText(text).trim();
     if (!msg) return;
     if (msg.length > DEFAULTS.maxMessageLen) {
-      throw new Error(
-        `Mensagem muito longa (máx ${DEFAULTS.maxMessageLen} caracteres).`
-      );
+      throw new Error("Mensagem muito longa (máx " + DEFAULTS.maxMessageLen + " caracteres).");
     }
     if (state.isClosed) throw new Error("Atendimento encerrado.");
 
     addMessageToUI({
-      id: `local_${Date.now()}`,
+      id: "local_" + Date.now(),
       from: "visitor",
       type: "text",
       text: msg,
@@ -298,12 +351,13 @@
     });
     scrollToBottom(true);
 
-    const res = await api("/webchat/messages", {
+    // ✅ NÃO enviar conversationId no body (token já define isso)
+    var res = await apiWithRecover("/webchat/messages", {
       method: "POST",
-      body: { conversationId: state.conversationId, text: msg }
+      body: { text: msg }
     });
 
-    if (res?.nextCursor) {
+    if (res && res.nextCursor) {
       state.lastCursor = res.nextCursor;
       persistCursor();
     }
@@ -313,195 +367,68 @@
     if (!state.conversationId) return;
 
     try {
-      await api(
-        `/webchat/conversations/${encodeURIComponent(state.conversationId)}/close`,
+      await apiWithRecover(
+        "/webchat/conversations/" + encodeURIComponent(state.conversationId) + "/close",
         { method: "POST", body: { reason: "user_closed" } }
       );
-    } catch {}
+    } catch (e) {}
 
     state.isClosed = true;
     setClosedUI(true);
     stopPolling();
 
-    // ✅ recomendação: se fechou pelo X, limpa cache pra reabrir virar sessão nova
-    try {
-      localStorage.removeItem(STORAGE.session);
-    } catch {}
+    // ✅ ao fechar pelo X, limpa cache pra reabrir virar sessão nova
+    clearSessionCache();
   }
 
   // =============================
   // UI
   // =============================
-  const root = el("div", { id: "gpl-webchat-root" });
+  var root = el("div", { id: "gpl-webchat-root" });
 
-  const styles = el("style", null, [
-    `
-#gpl-webchat-root { all: initial; }
-
-#gpl-webchat-btn {
-  all: unset;
-  position: fixed;
-  bottom: 18px;
-  ${DEFAULTS.position === "left" ? "left: 18px;" : "right: 18px;"}
-  z-index: 2147483647;
-  cursor: pointer;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-}
-#gpl-webchat-btn .bubble {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 999px;
-  background: ${DEFAULTS.primaryColor};
-  color: #0b1220;
-  box-shadow: 0 10px 30px rgba(0,0,0,.35);
-  user-select: none;
-}
-
-#gpl-webchat-panel {
-  position: fixed;
-  bottom: 78px;
-  ${DEFAULTS.position === "left" ? "left: 18px;" : "right: 18px;"}
-  width: 340px;
-  max-width: calc(100vw - 36px);
-  height: 440px;
-  max-height: calc(100vh - 120px);
-
-  border-radius: 18px;
-  overflow: hidden;
-  background: #0a0f1c;
-  color: #e5e7eb;
-  box-shadow: 0 20px 60px rgba(0,0,0,.45);
-  z-index: 2147483647;
-
-  display: none;            /* ao abrir -> flex */
-  flex-direction: column;
-
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-}
-
-#gpl-webchat-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 12px;
-  background: rgba(255,255,255,.04);
-  border-bottom: 1px solid rgba(255,255,255,.06);
-  flex: 0 0 auto;
-}
-#gpl-webchat-title { font-size: 14px; font-weight: 600; }
-#gpl-webchat-actions { display: flex; gap: 6px; }
-
-.gpl-icon-btn {
-  all: unset;
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  cursor: pointer;
-  color: #e5e7eb;
-}
-.gpl-icon-btn:hover { background: rgba(255,255,255,.06); }
-
-#gpl-webchat-body {
-  padding: 12px;
-  overflow: auto;
-  flex: 1 1 auto;
-}
-
-.gpl-msg { display: flex; margin: 10px 0; }
-.gpl-msg .b {
-  max-width: 85%;
-  padding: 10px 12px;
-  border-radius: 14px;
-  font-size: 13px;
-  line-height: 1.35;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.gpl-msg.visitor { justify-content: flex-end; }
-.gpl-msg.visitor .b {
-  background: ${DEFAULTS.primaryColor};
-  color: #0b1220;
-  border-bottom-right-radius: 6px;
-}
-.gpl-msg.agent .b, .gpl-msg.bot .b {
-  background: rgba(255,255,255,.06);
-  color: #e5e7eb;
-  border-bottom-left-radius: 6px;
-}
-
-#gpl-webchat-footer {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-
-  padding: 10px 10px;
-  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-
-  border-top: 1px solid rgba(255,255,255,.06);
-  background: rgba(0,0,0,.12);
-  box-sizing: border-box;
-}
-
-#gpl-webchat-input {
-  all: unset;
-  flex: 1;
-  height: 40px;
-  line-height: 40px;
-  padding: 0 12px;
-  border-radius: 12px;
-  background: rgba(255,255,255,.06);
-  color: #e5e7eb;
-  font-size: 13px;
-  box-sizing: border-box;
-}
-
-#gpl-webchat-send {
-  all: unset;
-  cursor: pointer;
-  height: 40px;
-  line-height: 40px;
-  padding: 0 12px;
-  border-radius: 12px;
-  background: rgba(255,255,255,.10);
-  box-sizing: border-box;
-}
-#gpl-webchat-send:hover { background: rgba(255,255,255,.14); }
-
-#gpl-webchat-closed {
-  display: none;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255,255,255,.06);
-  margin-top: 10px;
-  font-size: 12px;
-}
-`
+  var styles = el("style", null, [
+    "\n#gpl-webchat-root { all: initial; }\n\n#gpl-webchat-btn {\n  all: unset;\n  position: fixed;\n  bottom: 18px;\n  " +
+      (DEFAULTS.position === "left" ? "left: 18px;" : "right: 18px;") +
+      "\n  z-index: 2147483647;\n  cursor: pointer;\n  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;\n}\n#gpl-webchat-btn .bubble {\n  display: inline-flex;\n  align-items: center;\n  gap: 10px;\n  padding: 12px 14px;\n  border-radius: 999px;\n  background: " +
+      DEFAULTS.primaryColor +
+      ";\n  color: #0b1220;\n  box-shadow: 0 10px 30px rgba(0,0,0,.35);\n  user-select: none;\n}\n\n#gpl-webchat-panel {\n  position: fixed;\n  bottom: 78px;\n  " +
+      (DEFAULTS.position === "left" ? "left: 18px;" : "right: 18px;") +
+      "\n  width: 340px;\n  max-width: calc(100vw - 36px);\n  height: 440px;\n  max-height: calc(100vh - 120px);\n\n  border-radius: 18px;\n  overflow: hidden;\n  background: #0a0f1c;\n  color: #e5e7eb;\n  box-shadow: 0 20px 60px rgba(0,0,0,.45);\n  z-index: 2147483647;\n\n  display: none;\n  flex-direction: column;\n\n  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;\n}\n\n#gpl-webchat-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 12px 12px;\n  background: rgba(255,255,255,.04);\n  border-bottom: 1px solid rgba(255,255,255,.06);\n  flex: 0 0 auto;\n}\n#gpl-webchat-title { font-size: 14px; font-weight: 600; }\n#gpl-webchat-actions { display: flex; gap: 6px; }\n\n.gpl-icon-btn {\n  all: unset;\n  width: 34px;\n  height: 34px;\n  display: grid;\n  place-items: center;\n  border-radius: 10px;\n  cursor: pointer;\n  color: #e5e7eb;\n}\n.gpl-icon-btn:hover { background: rgba(255,255,255,.06); }\n\n#gpl-webchat-body {\n  padding: 12px;\n  overflow: auto;\n  flex: 1 1 auto;\n}\n\n.gpl-msg { display: flex; margin: 10px 0; }\n.gpl-msg .b {\n  max-width: 85%;\n  padding: 10px 12px;\n  border-radius: 14px;\n  font-size: 13px;\n  line-height: 1.35;\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n.gpl-msg.visitor { justify-content: flex-end; }\n.gpl-msg.visitor .b {\n  background: " +
+      DEFAULTS.primaryColor +
+      ";\n  color: #0b1220;\n  border-bottom-right-radius: 6px;\n}\n.gpl-msg.agent .b, .gpl-msg.bot .b {\n  background: rgba(255,255,255,.06);\n  color: #e5e7eb;\n  border-bottom-left-radius: 6px;\n}\n\n#gpl-webchat-footer {\n  flex: 0 0 auto;\n  display: flex;\n  gap: 8px;\n  align-items: center;\n\n  padding: 10px 10px;\n  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));\n\n  border-top: 1px solid rgba(255,255,255,.06);\n  background: rgba(0,0,0,.12);\n  box-sizing: border-box;\n}\n\n#gpl-webchat-input {\n  all: unset;\n  flex: 1;\n  height: 40px;\n  line-height: 40px;\n  padding: 0 12px;\n  border-radius: 12px;\n  background: rgba(255,255,255,.06);\n  color: #e5e7eb;\n  font-size: 13px;\n  box-sizing: border-box;\n}\n\n#gpl-webchat-send {\n  all: unset;\n  cursor: pointer;\n  height: 40px;\n  line-height: 40px;\n  padding: 0 12px;\n  border-radius: 12px;\n  background: rgba(255,255,255,.10);\n  box-sizing: border-box;\n}\n#gpl-webchat-send:hover { background: rgba(255,255,255,.14); }\n\n#gpl-webchat-closed {\n  display: none;\n  padding: 10px 12px;\n  border-radius: 12px;\n  background: rgba(255,255,255,.06);\n  margin-top: 10px;\n  font-size: 12px;\n}\n"
   ]);
 
-  const btn = el("button", { id: "gpl-webchat-btn", type: "button" }, [
+  var btn = el("button", { id: "gpl-webchat-btn", type: "button" }, [
     el("span", { className: "bubble" }, [
       el("span", null, ["💬"]),
       el("span", null, [DEFAULTS.buttonText])
     ])
   ]);
 
-  const panel = el("div", { id: "gpl-webchat-panel" }, [
+  var panel = el("div", { id: "gpl-webchat-panel" }, [
     el("div", { id: "gpl-webchat-header" }, [
       el("div", { id: "gpl-webchat-title" }, [DEFAULTS.headerTitle]),
       el("div", { id: "gpl-webchat-actions" }, [
         el(
           "button",
-          { className: "gpl-icon-btn", title: "Minimizar", onClick: () => toggleMinimize() },
+          {
+            className: "gpl-icon-btn",
+            title: "Minimizar",
+            onClick: function () {
+              toggleMinimize();
+            }
+          },
           ["—"]
         ),
         el(
           "button",
-          { className: "gpl-icon-btn", title: "Encerrar atendimento", onClick: () => closeByUser() },
+          {
+            className: "gpl-icon-btn",
+            title: "Encerrar atendimento",
+            onClick: function () {
+              closeByUser();
+            }
+          },
           ["✕"]
         )
       ])
@@ -522,7 +449,7 @@
       }),
       el(
         "button",
-        { id: "gpl-webchat-send", type: "button", onClick: () => handleSend() },
+        { id: "gpl-webchat-send", type: "button", onClick: function () { handleSend(); } },
         ["Enviar"]
       )
     ])
@@ -533,10 +460,10 @@
   root.appendChild(panel);
   document.documentElement.appendChild(root);
 
-  const bodyEl = $("#gpl-webchat-body", panel);
-  const inputEl = $("#gpl-webchat-input", panel);
-  const closedEl = $("#gpl-webchat-closed", panel);
-  const sendBtnEl = $("#gpl-webchat-send", panel);
+  var bodyEl = $("#gpl-webchat-body", panel);
+  var inputEl = $("#gpl-webchat-input", panel);
+  var closedEl = $("#gpl-webchat-closed", panel);
+  var sendBtnEl = $("#gpl-webchat-send", panel);
 
   function setOpenUI(open) {
     panel.style.display = open ? "flex" : "none";
@@ -550,49 +477,48 @@
   }
 
   function addMessageToUI(m) {
-    const from = m.from || m.sender || "bot";
-    const type = m.type || "text";
+    var from = m.from || m.sender || "bot";
+    var type = m.type || "text";
     if (type !== "text") return;
 
-    if (m.id && state.messages.some((x) => x.id === m.id)) return;
+    if (m.id && state.messages.some(function (x) { return x.id === m.id; })) return;
     state.messages.push({
       id: m.id,
-      from,
+      from: from,
       text: m.text,
       createdAt: m.createdAt
     });
 
-    const row = el("div", { className: `gpl-msg ${from}` }, [
+    var row = el("div", { className: "gpl-msg " + from }, [
       el("div", { className: "b" }, [safeText(m.text)])
     ]);
     bodyEl.appendChild(row);
   }
 
   function scrollToBottom(force) {
-    const nearBottom =
-      bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 120;
+    var nearBottom = bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 120;
     if (force || nearBottom) bodyEl.scrollTop = bodyEl.scrollHeight;
   }
 
   async function handleSend() {
-    const text = inputEl.value;
+    var text = inputEl.value;
     inputEl.value = "";
     try {
       await sendVisitorMessage(text);
       schedulePoll(300);
     } catch (e) {
       addMessageToUI({
-        id: `err_${Date.now()}`,
+        id: "err_" + Date.now(),
         from: "bot",
         type: "text",
-        text: `Não consegui enviar: ${safeText(e.message || e)}`,
+        text: "Não consegui enviar: " + safeText((e && e.message) || e),
         createdAt: nowIso()
       });
       scrollToBottom(true);
     }
   }
 
-  inputEl.addEventListener("keydown", (ev) => {
+  inputEl.addEventListener("keydown", function (ev) {
     if (ev.key === "Enter" && !ev.shiftKey) {
       ev.preventDefault();
       handleSend();
@@ -601,7 +527,7 @@
 
   btn.addEventListener(
     "click",
-    debounce(async () => {
+    debounce(async function () {
       state.isOpen = !state.isOpen;
       setOpenUI(state.isOpen);
 
@@ -643,27 +569,25 @@
 
   function schedulePoll(ms) {
     stopPolling();
-    state.pollTimer = setTimeout(async () => {
+    state.pollTimer = setTimeout(async function () {
       try {
         if (!state.isOpen && !state.isMinimized) return;
         await fetchNewMessages();
-      } catch {
+      } catch (e) {
         // silêncio
       } finally {
-        const hidden = document.hidden;
-        const next = hidden ? Math.max(state.pollInterval, 15000) : state.pollInterval;
+        var hidden = document.hidden;
+        var next = hidden ? Math.max(state.pollInterval, 15000) : state.pollInterval;
         schedulePoll(next);
       }
     }, ms);
   }
 
-  document.addEventListener("visibilitychange", () => {
+  document.addEventListener("visibilitychange", function () {
     if (document.hidden) {
       state.pollInterval = Math.max(state.pollInterval, 15000);
     } else {
-      state.pollInterval = state.isMinimized
-        ? DEFAULTS.pollingMinimizedMs
-        : DEFAULTS.pollingOpenMs;
+      state.pollInterval = state.isMinimized ? DEFAULTS.pollingMinimizedMs : DEFAULTS.pollingOpenMs;
       if (state.isOpen || state.isMinimized) schedulePoll(100);
     }
   });
@@ -673,15 +597,16 @@
   // =============================
   async function ensureReady() {
     if (state.conversationId && state.webchatToken) return;
+
     try {
-      await createOrResumeSession();
+      await createOrResumeSession(false);
       setClosedUI(state.isClosed);
       await fetchNewMessages();
       scrollToBottom(true);
-    } catch {
+    } catch (e) {
       setClosedUI(false);
       addMessageToUI({
-        id: `boot_err_${Date.now()}`,
+        id: "boot_err_" + Date.now(),
         from: "bot",
         type: "text",
         text: "Não consegui iniciar o chat agora. Tente novamente em instantes.",
@@ -690,4 +615,14 @@
       scrollToBottom(true);
     }
   }
+
+  // ✅ já deixa pronto caso venha cache antigo (conv_) e o painel seja aberto
+  (function sanitizeCachedSessionOnLoad() {
+    try {
+      var cached = JSON.parse(localStorage.getItem(STORAGE.session) || "null");
+      if (cached && cached.conversationId && !isValidWebchatConversationId(cached.conversationId)) {
+        localStorage.removeItem(STORAGE.session);
+      }
+    } catch (e) {}
+  })();
 })();
