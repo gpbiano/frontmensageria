@@ -1,0 +1,60 @@
+/* frontend/src/styles/chat-composer.css */
+
+.chat-panel .chat-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+
+  padding: 12px;
+  margin-top: 12px;
+
+  background: rgba(2, 6, 23, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 14px;
+}
+
+.chat-panel .chat-composer textarea {
+  flex: 1;
+  min-width: 0;
+
+  height: 44px;
+  max-height: 140px;
+  resize: none;
+
+  padding: 10px 12px;
+
+  background: rgba(15, 23, 42, 0.65);
+  color: rgba(226, 232, 240, 0.95);
+
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+
+  outline: none;
+}
+
+.chat-panel .chat-composer textarea:focus {
+  border-color: rgba(52, 211, 153, 0.55);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+
+.chat-panel .chat-composer button {
+  height: 44px;
+  padding: 0 14px;
+
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+
+  background: rgba(16, 185, 129, 0.12);
+  color: rgba(226, 232, 240, 0.95);
+
+  cursor: pointer;
+}
+
+.chat-panel .chat-composer button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

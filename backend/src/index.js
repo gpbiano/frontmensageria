@@ -87,7 +87,9 @@ logger.info(
 // ===============================
 // HANDLERS NODE
 // ===============================
-process.on("unhandledRejection", (r) => logger.error({ r }, "UnhandledRejection"));
+process.on("unhandledRejection", (r) =>
+  logger.error({ r }, "UnhandledRejection")
+);
 process.on("uncaughtException", (e) => {
   logger.fatal({ e }, "UncaughtException");
   process.exit(1);
@@ -97,7 +99,9 @@ process.on("uncaughtException", (e) => {
 // UPLOADS
 // ===============================
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 
 // ===============================
 // APP
@@ -105,6 +109,9 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const app = express();
 app.set("etag", false);
 
+// ===============================
+// LOGGER HTTP
+// ===============================
 app.use(
   pinoHttp({
     logger,
@@ -118,7 +125,41 @@ app.use(
   })
 );
 
-app.use(cors());
+// ===============================
+// CORS (CRÍTICO – CORREÇÃO DO PROBLEMA)
+// ===============================
+const ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://app.gplabs.com.br",
+  "https://cliente.gplabs.com.br"
+];
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Permite chamadas server-to-server, webhooks, curl, postman
+      if (!origin) return callback(null, true);
+
+      if (ALLOWED_ORIGINS.includes(origin)) {
+        return callback(null, true);
+      }
+
+      logger.warn({ origin }, "❌ CORS bloqueado");
+      return callback(new Error(`CORS não permitido para: ${origin}`));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true
+  })
+);
+
+// Preflight
+app.options("*", cors());
+
+// ===============================
+// PARSERS
+// ===============================
 app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(UPLOADS_DIR));
 
@@ -175,7 +216,6 @@ app.use("/conversations", conversationsRouter);
 
 // WhatsApp Webhook (FONTE ÚNICA)
 app.use("/webhook/whatsapp", whatsappRouter);
-app.use("/conversations", conversationsRouter);
 
 // ===============================
 // OUTBOUND
@@ -215,22 +255,26 @@ app.get("/health", (req, res) => {
 // ===============================
 app.post("/login", (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password)
+  if (!email || !password) {
     return res.status(400).json({ error: "Informe e-mail e senha." });
+  }
 
   const db = loadDB();
   const users = ensureArray(db.users);
 
   const user = users.find((u) => u.email === email);
-  if (!user || user.isActive === false)
+  if (!user || user.isActive === false) {
     return res.status(401).json({ error: "Usuário inválido." });
+  }
 
   const ok =
     (user.passwordHash &&
       verifyPassword(password, user.passwordHash)) ||
     (!user.passwordHash && password === user.password);
 
-  if (!ok) return res.status(401).json({ error: "Senha incorreta." });
+  if (!ok) {
+    return res.status(401).json({ error: "Senha incorreta." });
+  }
 
   const token = jwt.sign(
     { id: user.id, role: user.role, name: user.name },

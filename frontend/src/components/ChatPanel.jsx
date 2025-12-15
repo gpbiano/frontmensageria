@@ -1,4 +1,7 @@
 // frontend/src/components/ChatPanel.jsx
+// frontend/src/components/ChatPanel.jsx
+import "../styles/chat-composer.css";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const EMOJI_PALETTE = [

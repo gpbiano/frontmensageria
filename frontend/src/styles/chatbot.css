@@ -228,3 +228,37 @@
     grid-template-columns: 1fr;
   }
 }
+/* ==============================
+   BOTÃO ENCERRAR ATENDIMENTO
+============================== */
+
+.chat-panel-header button,
+.chat-panel-header .btn-close,
+.chat-panel-header .close-conversation {
+  height: 34px;
+  padding: 0 14px;
+
+  font-size: 13px;
+  font-weight: 500;
+
+  border-radius: 10px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+
+  background: rgba(239, 68, 68, 0.12);
+  color: rgba(254, 226, 226, 0.95);
+
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.chat-panel-header button:hover,
+.chat-panel-header .btn-close:hover,
+.chat-panel-header .close-conversation:hover {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.chat-panel-header button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
