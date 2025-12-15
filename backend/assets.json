@@ -1,1 +1,38 @@
-[]
+[
+  {
+    "id": "asset_1765833198748_ad43534c7cbda",
+    "name": "2C93C687-461E-4CF2-84F7-847AF73903D9.jpeg",
+    "label": "2C93C687-461E-4CF2-84F7-847AF73903D9.jpeg",
+    "type": "image/jpeg",
+    "size": 1304222,
+    "url": "https://api.gplabs.com.br/uploads/assets/1765833198088-2C93C687-461E-4CF2-84F7-847AF73903D9.jpeg",
+    "createdAt": "2025-12-15T21:13:18.748Z"
+  },
+  {
+    "id": "asset_1765830941376_e4b0b5bbc73558",
+    "name": "audio_1765830941045.webm",
+    "label": "audio_1765830941045.webm",
+    "type": "audio/webm",
+    "size": 110637,
+    "url": "https://api.gplabs.com.br/uploads/assets/1765830941223-audio_1765830941045.webm",
+    "createdAt": "2025-12-15T20:35:41.377Z"
+  },
+  {
+    "id": "asset_1765830921925_da8783a2d3acd",
+    "name": "audio_1765830921731.webm",
+    "label": "audio_1765830921731.webm",
+    "type": "audio/webm",
+    "size": 56365,
+    "url": "https://api.gplabs.com.br/uploads/assets/1765830921918-audio_1765830921731.webm",
+    "createdAt": "2025-12-15T20:35:21.925Z"
+  },
+  {
+    "id": "asset_1765830711680_e3d4b02ad172f8",
+    "name": "Captura de Tela 2025-12-15 aÌs 14.56.57.png",
+    "label": "Captura de Tela 2025-12-15 aÌs 14.56.57.png",
+    "type": "image/png",
+    "size": 2312633,
+    "url": "https://api.gplabs.com.br/uploads/assets/1765830710355-Captura_de_Tela_2025-12-15_as_14.56.57.png",
+    "createdAt": "2025-12-15T20:31:51.681Z"
+  }
+]

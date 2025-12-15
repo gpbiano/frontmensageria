@@ -9,6 +9,7 @@ import {
   fetchMessages,
   sendTextMessage,
   sendMediaMessage,
+  sendFileMessage, // ✅ ADD: enviar File (upload + disparo)
   updateConversationStatus
 } from "../../api"; // ✅ use o api.ts (sem .js)
 
@@ -414,6 +415,14 @@ export default function ChatHumanPage() {
     setUnreadCounts((prev) => ({ ...prev, [convId]: 0 }));
   };
 
+  const playSendSound = () => {
+    try {
+      const audio = new Audio("/send.mp3");
+      audio.volume = 0.5;
+      audio.play().catch(() => {});
+    } catch {}
+  };
+
   const handleSendText = async (text) => {
     if (!selectedConversationId || !text.trim()) return;
 
@@ -425,34 +434,41 @@ export default function ChatHumanPage() {
       );
       if (created) setMessages((prev) => [...prev, created]);
       loadMessages();
-
-      try {
-        const audio = new Audio("/send.mp3");
-        audio.volume = 0.5;
-        audio.play().catch(() => {});
-      } catch {}
+      playSendSound();
     } catch (e) {
       console.error("Erro ao enviar mensagem:", e);
     }
   };
 
-  const handleSendMedia = async ({ type, mediaUrl, caption }) => {
-    if (!selectedConversationId || !mediaUrl) return;
+  // ✅ Agora suporta tanto URL (mediaUrl) quanto File (arquivo real)
+  const handleSendMedia = async ({ type, mediaUrl, caption, file }) => {
+    if (!selectedConversationId) return;
 
     try {
-      const created = await sendMediaMessage(String(selectedConversationId), {
-        type,
-        mediaUrl,
-        caption
-      });
+      let created = null;
+
+      // 1) Se veio File -> faz upload (assets) e dispara via /messages
+      if (file instanceof File) {
+        created = await sendFileMessage(String(selectedConversationId), {
+          file,
+          type,
+          caption,
+          senderName: "Atendente"
+        });
+      } else {
+        // 2) Compat antigo: se veio mediaUrl (URL pública) -> dispara direto
+        if (!mediaUrl) return;
+        created = await sendMediaMessage(String(selectedConversationId), {
+          type,
+          mediaUrl,
+          caption,
+          senderName: "Atendente"
+        });
+      }
+
       if (created) setMessages((prev) => [...prev, created]);
       loadMessages();
-
-      try {
-        const audio = new Audio("/send.mp3");
-        audio.volume = 0.5;
-        audio.play().catch(() => {});
-      } catch {}
+      playSendSound();
     } catch (e) {
       console.error("Erro ao enviar mídia:", e);
     }
@@ -676,7 +692,7 @@ export default function ChatHumanPage() {
                 messages={messages}
                 loadingMessages={loadingMessages}
                 onSendText={handleSendText}
-                onSendMedia={handleSendMedia}
+                onSendMedia={handleSendMedia} // ✅ agora aceita {file} também
                 onChangeStatus={handleChangeStatus}
               />
             </div>

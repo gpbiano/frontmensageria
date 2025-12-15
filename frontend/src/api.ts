@@ -512,6 +512,7 @@ export async function sendTextMessage(
   text: string,
   senderName?: string
 ): Promise<Message> {
+  // ✅ mantém exatamente como já estava (envia texto via /messages)
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     body: { text, ...(senderName ? { senderName } : {}) }
@@ -519,18 +520,79 @@ export async function sendTextMessage(
 }
 
 /**
- * ⚠️ Atenção:
- * Seu backend precisa ter /conversations/:id/media para isso funcionar.
- * Se ainda não implementou, deixe o botão de anexo desativado no ChatPanel
- * OU implemente essa rota no backend.
+ * ✅ NOVO (sem quebrar compat):
+ * Reaproveita o export existente "sendMediaMessage" MAS agora envia via:
+ *   POST /conversations/:id/messages
+ * que é a rota que você já ajustou no backend.
+ *
+ * Observação:
+ * - "caption" vira "text" (o backend usa text para legenda/preview)
+ * - "mediaUrl" vai como mediaUrl (backend já aceita mediaUrl/link/etc)
  */
 export async function sendMediaMessage(
   conversationId: string,
-  payload: { type: string; mediaUrl: string; caption?: string }
+  payload: { type: string; mediaUrl: string; caption?: string; senderName?: string }
 ): Promise<Message> {
-  return request(`/conversations/${encodeURIComponent(conversationId)}/media`, {
+  const type = String(payload?.type || "text").toLowerCase();
+  const mediaUrl = String(payload?.mediaUrl || "").trim();
+  const text = String(payload?.caption || "").trim();
+
+  return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
-    body: payload
+    body: {
+      type,
+      // backend espera "text" para caption/preview
+      ...(text ? { text } : {}),
+      // backend valida mediaUrl para audio/image/document/video/sticker
+      ...(mediaUrl ? { mediaUrl } : {}),
+      ...(payload?.senderName ? { senderName: payload.senderName } : {})
+    }
+  });
+}
+
+/**
+ * ✅ NOVO: Enviar arquivo direto do front (File) para o usuário.
+ * Estratégia (preservando o que já existe no seu projeto):
+ * 1) faz upload do arquivo como "asset" (rota já existente: /outbound/assets/upload)
+ * 2) pega uma URL pública do retorno
+ * 3) chama sendMediaMessage() para disparar no canal (WhatsApp)
+ *
+ * Se futuramente você criar um endpoint dedicado tipo /conversations/:id/upload,
+ * é só trocar o "uploadAsset(file)" aqui dentro.
+ */
+export async function sendFileMessage(
+  conversationId: string,
+  opts: {
+    file: File;
+    type: "audio" | "image" | "video" | "document" | "sticker" | string;
+    caption?: string;
+    senderName?: string;
+  }
+): Promise<Message> {
+  const file = opts.file;
+  const type = String(opts.type || "").toLowerCase();
+
+  // upload usa o que você já tem no projeto (assets)
+  const asset = await uploadAsset(file);
+
+  // tenta achar uma URL pública em diferentes formatos
+  const mediaUrl =
+    (asset as any)?.url ||
+    (asset as any)?.publicUrl ||
+    (asset as any)?.link ||
+    (asset as any)?.mediaUrl ||
+    (asset as any)?.downloadUrl ||
+    "";
+
+  if (!String(mediaUrl).trim()) {
+    throw new Error("Upload do arquivo não retornou uma URL pública (url/publicUrl/link).");
+  }
+
+  return sendMediaMessage(conversationId, {
+    type,
+    mediaUrl: String(mediaUrl).trim(),
+    caption: opts.caption,
+    senderName: opts.senderName
   });
 }
 
@@ -708,7 +770,9 @@ export async function uploadCampaignAudience(campaignId: string, file: File) {
   );
 }
 
-export async function startCampaign(campaignId: string): Promise<{ success: boolean; sent?: number; failed?: number }> {
+export async function startCampaign(
+  campaignId: string
+): Promise<{ success: boolean; sent?: number; failed?: number }> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/start`, {
     method: "POST"
   });
@@ -862,6 +926,7 @@ export async function fetchSmsCampaignReport(id: string) {
     method: "GET"
   });
 }
+
 // ======================================================
 // ALIASES (compat com imports antigos do front)
 // ======================================================
