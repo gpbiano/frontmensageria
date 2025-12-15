@@ -18,7 +18,9 @@ export default function SmsCampaignCreateWizard({ onExit }) {
 
   const [campaign, setCampaign] = useState(null);
   const [name, setName] = useState("Campanha SMS");
-  const [message, setMessage] = useState("Olá! Aqui é a GP Labs 🙂");
+  const [message, setMessage] = useState(
+    "Olá! Aqui é a GP Labs 🙂\nQuer conhecer nossos serviços?"
+  );
   const [file, setFile] = useState(null);
 
   const [busy, setBusy] = useState(false);
@@ -29,6 +31,10 @@ export default function SmsCampaignCreateWizard({ onExit }) {
 
   const EXAMPLE_TEXT = "{{1}}";
   const EXAMPLE_VAR = "{{var_1}}";
+
+  const charCount = message?.length || 0;
+  const smsParts = charCount <= 160 ? 1 : Math.ceil(charCount / 153); // regra comum (concatenado)
+  const charsLimit = smsParts === 1 ? 160 : smsParts * 153;
 
   function next() {
     setStepIndex((s) => Math.min(s + 1, STEPS.length - 1));
@@ -46,7 +52,7 @@ export default function SmsCampaignCreateWizard({ onExit }) {
     try {
       const r = await createSmsCampaign({ name, message });
       setCampaign(r.item);
-      setInfo("Campanha criada com sucesso.");
+      setInfo("✅ Campanha criada com sucesso.");
       next();
     } catch (e) {
       setError(e?.message || "Erro ao criar campanha.");
@@ -69,7 +75,7 @@ export default function SmsCampaignCreateWizard({ onExit }) {
 
     try {
       const r = await uploadSmsCampaignAudience(campaign.id, file);
-      setInfo(`Audiência importada: ${r.audienceCount} números.`);
+      setInfo(`✅ Audiência importada: ${r.audienceCount} números.`);
       next();
     } catch (e) {
       setError(e?.message || "Erro ao importar audiência.");
@@ -88,7 +94,7 @@ export default function SmsCampaignCreateWizard({ onExit }) {
     try {
       const r = await startSmsCampaign(campaign.id);
       setInfo(
-        `Disparo finalizado. Enviados: ${r.sent} | Falhas: ${r.failed} | Status: ${r.status}`
+        `🚀 Disparo iniciado. Enviados: ${r.sent} | Falhas: ${r.failed} | Status: ${r.status}`
       );
     } catch (e) {
       setError(e?.message || "Erro ao iniciar disparo.");
@@ -116,47 +122,132 @@ export default function SmsCampaignCreateWizard({ onExit }) {
       {info && <div className="alert ok">{info}</div>}
 
       {step.key === "create" && (
-        <div className="wizard-card">
-          <h3>Criar campanha</h3>
+        <div className="wizard-card" style={{ maxWidth: 820 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 12
+            }}
+          >
+            <div>
+              <h3 style={{ marginBottom: 6 }}>Criar campanha</h3>
+              <p className="muted" style={{ marginTop: 0 }}>
+                Defina o nome e a mensagem do SMS. Você pode personalizar com
+                variáveis do CSV.
+              </p>
+            </div>
 
-          <label className="field">
-            <span>Nome</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-
-          <label className="field">
-            <span>Mensagem</span>
-            <textarea
-              rows={5}
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-
-          <div className="wizard-actions">
-            <button className="btn secondary" onClick={onExit} disabled={busy}>
-              Cancelar
-            </button>
-            <button className="btn primary" onClick={handleCreate} disabled={busy}>
-              {busy ? "Criando..." : "Criar"}
-            </button>
+            <div className="wizard-actions" style={{ marginTop: 0 }}>
+              <button className="btn secondary" type="button" onClick={onExit} disabled={busy}>
+                Cancelar
+              </button>
+              <button className="btn primary" type="button" onClick={handleCreate} disabled={busy}>
+                {busy ? "Criando..." : "Criar"}
+              </button>
+            </div>
           </div>
 
-          <p className="muted" style={{ marginTop: 10 }}>
-            Dica: se quiser personalizar, use no texto{" "}
-            <b>{EXAMPLE_TEXT}</b> ou <b>{EXAMPLE_VAR}</b> e no CSV crie a coluna{" "}
-            <b>var_1</b>.
-          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 14 }}>
+            {/* FORM */}
+            <div>
+              <label className="field">
+                <span>Nome</span>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={busy}
+                  placeholder="Ex: Black Friday • SMS"
+                />
+              </label>
+
+              <label className="field">
+                <span>Mensagem</span>
+                <textarea
+                  rows={6}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  disabled={busy}
+                  placeholder="Digite a mensagem do SMS..."
+                  style={{ resize: "vertical" }}
+                />
+                <div
+                  className="muted"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    marginTop: 6
+                  }}
+                >
+                  <span>
+                    {charCount} caracteres • {smsParts} SMS
+                  </span>
+                  <span>Limite estimado: {charsLimit}</span>
+                </div>
+              </label>
+
+              <div
+                className="muted"
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  border: "1px solid rgba(255,255,255,.08)",
+                  borderRadius: 10,
+                  background: "rgba(255,255,255,.03)"
+                }}
+              >
+                Dica: personalize usando <b>{EXAMPLE_TEXT}</b> ou{" "}
+                <b>{EXAMPLE_VAR}</b> e no CSV crie a coluna <b>var_1</b>.
+              </div>
+            </div>
+
+            {/* PREVIEW “PHONE” */}
+            <div
+              style={{
+                border: "1px solid rgba(255,255,255,.10)",
+                borderRadius: 14,
+                padding: 12,
+                background: "rgba(0,0,0,.25)"
+              }}
+            >
+              <div
+                className="muted"
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 10
+                }}
+              >
+                <span>Prévia (SMS)</span>
+                <span>{smsParts} parte(s)</span>
+              </div>
+
+              <div
+                style={{
+                  borderRadius: 14,
+                  padding: 12,
+                  background: "rgba(255,255,255,.04)",
+                  border: "1px solid rgba(255,255,255,.06)",
+                  minHeight: 160,
+                  whiteSpace: "pre-wrap",
+                  lineHeight: 1.35
+                }}
+              >
+                {message || "Sua mensagem aparecerá aqui..."}
+              </div>
+
+              <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+                * Contagem é estimativa. Pode variar conforme acentos/Unicode.
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
       {step.key === "audience" && (
-        <div className="wizard-card">
+        <div className="wizard-card" style={{ maxWidth: 820 }}>
           <h3>Carregar audiência (CSV)</h3>
 
           <p className="muted">
@@ -164,18 +255,36 @@ export default function SmsCampaignCreateWizard({ onExit }) {
             <b>var_1</b>, <b>var_2</b>...
           </p>
 
-          <input
-            type="file"
-            accept=".csv,text/csv"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-            disabled={busy}
-          />
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,.10)",
+              background: "rgba(255,255,255,.03)"
+            }}
+          >
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              disabled={busy}
+            />
 
-          <div className="wizard-actions">
-            <button className="btn secondary" onClick={back} disabled={busy}>
+            <div style={{ marginTop: 10 }}>
+              <p className="muted" style={{ marginBottom: 6 }}>
+                Exemplo CSV (com ; ou ,):
+              </p>
+              <pre className="code">{`numero;var_1
+5511999999999;João
+5511988887777;Maria`}</pre>
+            </div>
+          </div>
+
+          <div className="wizard-actions" style={{ marginTop: 12 }}>
+            <button className="btn secondary" type="button" onClick={back} disabled={busy}>
               Voltar
             </button>
-            <button className="btn primary" onClick={handleUpload} disabled={busy}>
+            <button className="btn primary" type="button" onClick={handleUpload} disabled={busy}>
               {busy ? "Importando..." : "Importar"}
             </button>
           </div>
@@ -183,20 +292,42 @@ export default function SmsCampaignCreateWizard({ onExit }) {
       )}
 
       {step.key === "start" && (
-        <div className="wizard-card">
+        <div className="wizard-card" style={{ maxWidth: 820 }}>
           <h3>Iniciar disparo</h3>
+
           <p className="muted">
-            O envio será sequencial para manter rastreio por destinatário.
+            O envio roda em fila com throttle e retry automático. Você pode
+            acompanhar o progresso no Relatório.
           </p>
 
-          <div className="wizard-actions">
-            <button className="btn secondary" onClick={back} disabled={busy}>
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,.10)",
+              background: "rgba(255,255,255,.03)"
+            }}
+          >
+            <div className="muted" style={{ marginBottom: 8 }}>
+              Campanha: <b>{campaign?.name || "-"}</b>
+            </div>
+            <div className="muted">
+              Mensagem:{" "}
+              <span style={{ opacity: 0.9 }}>
+                {(campaign?.message || message || "").slice(0, 120)}
+                {(campaign?.message || message || "").length > 120 ? "..." : ""}
+              </span>
+            </div>
+          </div>
+
+          <div className="wizard-actions" style={{ marginTop: 12 }}>
+            <button className="btn secondary" type="button" onClick={back} disabled={busy}>
               Voltar
             </button>
-            <button className="btn primary" onClick={handleStart} disabled={busy}>
+            <button className="btn primary" type="button" onClick={handleStart} disabled={busy}>
               {busy ? "Enviando..." : "Iniciar"}
             </button>
-            <button className="btn ghost" onClick={onExit} disabled={busy}>
+            <button className="btn ghost" type="button" onClick={onExit} disabled={busy}>
               Finalizar
             </button>
           </div>
@@ -205,3 +336,4 @@ export default function SmsCampaignCreateWizard({ onExit }) {
     </div>
   );
 }
+

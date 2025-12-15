@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-14T22:41:37.963Z"
+      "updatedAt": "2025-12-14T23:55:48.677Z"
     },
     {
       "id": 3,
@@ -581,12 +581,12 @@
       "channel": "whatsapp",
       "lastMessage": "",
       "status": "closed",
-      "updatedAt": "2025-12-14T22:16:16.032Z",
+      "updatedAt": "2025-12-15T00:14:37.449Z",
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
       "notes": "",
-      "lastMessageAt": "2025-12-14T22:16:16.032Z",
+      "lastMessageAt": "2025-12-15T00:14:37.449Z",
       "lastMessagePreview": "Atendimento encerrado.",
       "source": "whatsapp",
       "peerId": "wa:556499989978"
@@ -3458,6 +3458,17 @@
         "isBot": false,
         "text": "Atendimento encerrado.",
         "createdAt": "2025-12-14T22:16:16.029Z"
+      },
+      {
+        "id": "msg_1765757677447_1185f70060a0",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T00:14:37.447Z"
       }
     ]
   },
@@ -3919,6 +3930,214 @@
       "isActive": true,
       "createdAt": "2025-12-14T17:42:48.426Z",
       "updatedAt": "2025-12-14T17:42:48.426Z"
+    }
+  ],
+  "outboundSmsCampaigns": [
+    {
+      "id": "smscamp_1765753674938_96c0930a70e71",
+      "name": "Campanha SMS",
+      "message": "Olá! Aqui é a GP Labs 🙂\nQuer conhecer nossos serviços?",
+      "status": "ready",
+      "createdAt": "2025-12-14T23:07:54.938Z",
+      "updatedAt": "2025-12-14T23:09:48.401Z",
+      "audienceCount": 2,
+      "audienceRows": [
+        {
+          "phone": "5564999989978",
+          "vars": {
+            "var_1": "Genivaldo"
+          },
+          "codeSms": "sms_smscamp_1765753674938_96c0930a70e71_0_1765753788401"
+        },
+        {
+          "phone": "5564999477939",
+          "vars": {
+            "var_1": "Adriano"
+          },
+          "codeSms": "sms_smscamp_1765753674938_96c0930a70e71_1_1765753788401"
+        }
+      ],
+      "results": []
+    },
+    {
+      "id": "smscamp_1765754581266_42a4b15c0c51c",
+      "name": "Campanha_tes",
+      "message": "Olá! Aqui é a GP Labs 🙂\nQuer conhecer nossos serviços?",
+      "status": "failed",
+      "createdAt": "2025-12-14T23:23:01.266Z",
+      "updatedAt": "2025-12-14T23:23:22.277Z",
+      "audienceCount": 2,
+      "audienceRows": [
+        {
+          "phone": "5564999989978",
+          "vars": {
+            "var_1": "Genivaldo"
+          },
+          "codeSms": "sms_smscamp_1765754581266_42a4b15c0c51c_0_1765754587539"
+        },
+        {
+          "phone": "5564999477939",
+          "vars": {
+            "var_1": "Adriano"
+          },
+          "codeSms": "sms_smscamp_1765754581266_42a4b15c0c51c_1_1765754587539"
+        }
+      ],
+      "results": [
+        {
+          "phone": "5564999989978",
+          "codeSms": "sms_smscamp_1765754581266_42a4b15c0c51c_0_1765754587539",
+          "status": "failed",
+          "providerRaw": "",
+          "error": "IAGENTE_SMS_USER/IAGENTE_SMS_PASS não configurados.",
+          "attempts": 4,
+          "updatedAt": "2025-12-14T23:23:16.093Z"
+        },
+        {
+          "phone": "5564999477939",
+          "codeSms": "sms_smscamp_1765754581266_42a4b15c0c51c_1_1765754587539",
+          "status": "failed",
+          "providerRaw": "",
+          "error": "IAGENTE_SMS_USER/IAGENTE_SMS_PASS não configurados.",
+          "attempts": 4,
+          "updatedAt": "2025-12-14T23:23:22.276Z"
+        }
+      ]
+    },
+    {
+      "id": "smscamp_1765754955011_77224abe361d",
+      "name": "teste2",
+      "message": "Olá! Aqui é a GP Labs 🙂\nQuer conhecer nossos serviços?",
+      "status": "failed",
+      "createdAt": "2025-12-14T23:29:15.011Z",
+      "updatedAt": "2025-12-14T23:29:36.493Z",
+      "audienceCount": 2,
+      "audienceRows": [
+        {
+          "phone": "5564999989978",
+          "vars": {
+            "var_1": "Genivaldo"
+          },
+          "codeSms": "sms_smscamp_1765754955011_77224abe361d_0_1765754960513"
+        },
+        {
+          "phone": "5564999477939",
+          "vars": {
+            "var_1": "Adriano"
+          },
+          "codeSms": "sms_smscamp_1765754955011_77224abe361d_1_1765754960513"
+        }
+      ],
+      "results": [
+        {
+          "phone": "5564999989978",
+          "codeSms": "sms_smscamp_1765754955011_77224abe361d_0_1765754960513",
+          "status": "failed",
+          "providerRaw": "",
+          "error": "IAGENTE_SMS_USER/IAGENTE_SMS_PASS não configurados.",
+          "attempts": 4,
+          "updatedAt": "2025-12-14T23:29:30.338Z"
+        },
+        {
+          "phone": "5564999477939",
+          "codeSms": "sms_smscamp_1765754955011_77224abe361d_1_1765754960513",
+          "status": "failed",
+          "providerRaw": "",
+          "error": "IAGENTE_SMS_USER/IAGENTE_SMS_PASS não configurados.",
+          "attempts": 4,
+          "updatedAt": "2025-12-14T23:29:36.493Z"
+        }
+      ]
+    },
+    {
+      "id": "smscamp_1765755679312_dfcb74e91ea19",
+      "name": "Campanha SMS",
+      "message": "Ola aqui e da GP Labs.",
+      "status": "failed",
+      "createdAt": "2025-12-14T23:41:19.312Z",
+      "updatedAt": "2025-12-14T23:41:39.280Z",
+      "audienceCount": 2,
+      "audienceRows": [
+        {
+          "phone": "5564999989978",
+          "vars": {
+            "var_1": "Genivaldo"
+          },
+          "codeSms": "sms_smscamp_1765755679312_dfcb74e91ea19_1765755684208_0"
+        },
+        {
+          "phone": "5564999477939",
+          "vars": {
+            "var_1": "Adriano"
+          },
+          "codeSms": "sms_smscamp_1765755679312_dfcb74e91ea19_1765755684208_1"
+        }
+      ],
+      "results": [
+        {
+          "phone": "5564999989978",
+          "codeSms": "sms_smscamp_1765755679312_dfcb74e91ea19_1765755684208_0",
+          "status": "failed",
+          "providerRaw": "",
+          "error": "IAGENTE_SMS_USER/IAGENTE_SMS_PASS não configurados.",
+          "attempts": 4,
+          "updatedAt": "2025-12-14T23:41:32.961Z"
+        },
+        {
+          "phone": "5564999477939",
+          "codeSms": "sms_smscamp_1765755679312_dfcb74e91ea19_1765755684208_1",
+          "status": "failed",
+          "providerRaw": "",
+          "error": "IAGENTE_SMS_USER/IAGENTE_SMS_PASS não configurados.",
+          "attempts": 4,
+          "updatedAt": "2025-12-14T23:41:39.280Z"
+        }
+      ]
+    },
+    {
+      "id": "smscamp_1765756635051_444f98067cfcc8",
+      "name": "Campanha SMS",
+      "message": "Olá, {{1}} Aqui é a GP Labs 🙂\nQuer conhecer nossos serviços?",
+      "status": "finished",
+      "createdAt": "2025-12-14T23:57:15.051Z",
+      "updatedAt": "2025-12-14T23:57:33.253Z",
+      "audienceCount": 2,
+      "audienceRows": [
+        {
+          "phone": "5564999989978",
+          "vars": {
+            "var_1": "Genivaldo"
+          },
+          "codeSms": "sms_smscamp_1765756635051_444f98067cfcc8_1765756645281_0"
+        },
+        {
+          "phone": "5564999477939",
+          "vars": {
+            "var_1": "Adriano"
+          },
+          "codeSms": "sms_smscamp_1765756635051_444f98067cfcc8_1765756645281_1"
+        }
+      ],
+      "results": [
+        {
+          "phone": "5564999989978",
+          "codeSms": "sms_smscamp_1765756635051_444f98067cfcc8_1765756645281_0",
+          "status": "sent",
+          "providerRaw": "OK",
+          "error": "",
+          "attempts": 1,
+          "updatedAt": "2025-12-14T23:57:32.666Z"
+        },
+        {
+          "phone": "5564999477939",
+          "codeSms": "sms_smscamp_1765756635051_444f98067cfcc8_1765756645281_1",
+          "status": "sent",
+          "providerRaw": "OK",
+          "error": "",
+          "attempts": 1,
+          "updatedAt": "2025-12-14T23:57:33.253Z"
+        }
+      ]
     }
   ]
 }

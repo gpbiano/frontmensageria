@@ -21,6 +21,21 @@ const NOTIF_KEY = "gpLabsNotificationSettings";
 const QUIET_START_HOUR = 22; // 22h
 const QUIET_END_HOUR = 7; // 07h
 
+function normalizeChannel(conv) {
+  const raw = String(conv?.source || conv?.channel || "").toLowerCase();
+  if (raw.includes("webchat")) return "webchat";
+  if (raw.includes("whatsapp")) return "whatsapp";
+  if (raw.includes("wa")) return "whatsapp";
+  if (raw.includes("wc")) return "webchat";
+  return raw || "whatsapp";
+}
+
+function channelLabel(ch) {
+  if (ch === "webchat") return "Webchat";
+  if (ch === "whatsapp") return "WhatsApp";
+  return ch ? ch : "Canal";
+}
+
 export default function ChatHumanHistoryPage() {
   const [conversations, setConversations] = useState([]);
   const [selectedConversationId, setSelectedConversationId] = useState(null);
@@ -30,6 +45,7 @@ export default function ChatHumanHistoryPage() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all"); // Histórico → todas por padrão
+  const [channelFilter, setChannelFilter] = useState("all"); // ✅ Todos | whatsapp | webchat
 
   const [unreadCounts, setUnreadCounts] = useState({});
 
@@ -148,9 +164,6 @@ export default function ChatHumanHistoryPage() {
 
   // ---------------------------------------------
   // LOAD CONVERSAS (HISTÓRICO HUMANO)
-  // Regra:
-  // - carrega TODAS as conversas (status=all)
-  // - filtro humano é aplicado no front (currentMode === "human" ou status === "closed")
   // ---------------------------------------------
   const loadConversations = useCallback(
     async (options = { playSoundOnNew: false }) => {
@@ -185,11 +198,11 @@ export default function ChatHumanHistoryPage() {
 
         setUnreadCounts((prev) => {
           const next = { ...prev };
-          const idsSet = new Set(list.map((c) => c.id));
+          const idsSet = new Set(list.map((c) => String(c.id)));
 
+          // ✅ correção: ids no state são strings
           Object.keys(next).forEach((idStr) => {
-            const idNum = Number(idStr);
-            if (!idsSet.has(idNum)) {
+            if (!idsSet.has(String(idStr))) {
               delete next[idStr];
             }
           });
@@ -205,11 +218,11 @@ export default function ChatHumanHistoryPage() {
               conv.id !== selectedConversationId;
 
             if (isUpdatedOtherConv) {
-              next[conv.id] = (next[conv.id] || 0) + 1;
+              next[String(conv.id)] = (next[String(conv.id)] || 0) + 1;
             }
 
             if (conv.id === selectedConversationId) {
-              next[conv.id] = 0;
+              next[String(conv.id)] = 0;
             }
           }
 
@@ -218,8 +231,7 @@ export default function ChatHumanHistoryPage() {
 
         if (otherConversationUpdated) {
           const { isIdle } = getIdleInfo();
-          const intensity =
-            !isTabActive || isIdle ? "strong" : "soft";
+          const intensity = !isTabActive || isIdle ? "strong" : "soft";
           playNotification("received", { intensity });
         }
 
@@ -230,9 +242,7 @@ export default function ChatHumanHistoryPage() {
         }
 
         if (selectedConversationId) {
-          const stillExists = list.some(
-            (c) => c.id === selectedConversationId
-          );
+          const stillExists = list.some((c) => c.id === selectedConversationId);
           if (!stillExists) {
             setSelectedConversationId(list[0]?.id || null);
             setMessages([]);
@@ -287,14 +297,11 @@ export default function ChatHumanHistoryPage() {
 
   // ---------------------------------------------
   // ALERTA VISUAL BOT + SOM MENSAGEM ATUAL
-  // (mantido caso o bot tenha participado antes)
   // ---------------------------------------------
   useEffect(() => {
     if (!messages || messages.length === 0) return;
 
-    const botMessages = messages.filter(
-      (m) => m.isBot || m.fromBot
-    );
+    const botMessages = messages.filter((m) => m.isBot || m.fromBot);
     if (botMessages.length === 0) return;
 
     const lastBotMsg = botMessages[botMessages.length - 1];
@@ -320,9 +327,7 @@ export default function ChatHumanHistoryPage() {
         return;
       }
 
-      const intensity =
-        !isTabActive && isIdle ? "strong" : "soft";
-
+      const intensity = !isTabActive && isIdle ? "strong" : "soft";
       playNotification("received", { intensity });
     }
   }, [messages, isTabActive]);
@@ -335,16 +340,13 @@ export default function ChatHumanHistoryPage() {
     setMessages([]);
     setUnreadCounts((prev) => ({
       ...prev,
-      [id]: 0
+      [String(id)]: 0
     }));
   };
 
   const handleSendText = async (text) => {
     if (!selectedConversationId || !text.trim()) return;
-    const created = await sendTextMessage(
-      selectedConversationId,
-      text.trim()
-    );
+    const created = await sendTextMessage(selectedConversationId, text.trim());
     setMessages((prev) => [...prev, created]);
 
     try {
@@ -372,19 +374,14 @@ export default function ChatHumanHistoryPage() {
 
   const handleChangeStatus = async (conversationId, newStatus) => {
     try {
-      const updated = await updateConversationStatus(
-        conversationId,
-        newStatus
-      );
+      const updated = await updateConversationStatus(conversationId, newStatus);
 
       setConversations((prev) =>
         prev.map((c) => (c.id === updated.id ? updated : c))
       );
 
       if (statusFilter === "open" && newStatus === "closed") {
-        setConversations((prev) =>
-          prev.filter((c) => c.id !== conversationId)
-        );
+        setConversations((prev) => prev.filter((c) => c.id !== conversationId));
         if (selectedConversationId === conversationId) {
           setSelectedConversationId(null);
           setMessages([]);
@@ -396,40 +393,41 @@ export default function ChatHumanHistoryPage() {
   };
 
   // ---------------------------------------------
-  // LISTAS DERIVADAS – regra HUMANO
+  // LISTAS DERIVADAS – regra HUMANO + filtro de CANAL
   // ---------------------------------------------
   const filteredConversations = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
 
     return conversations.filter((c) => {
       // Apenas histórico humano:
-      // - conversas que já estão em modo human
-      // - ou que já foram encerradas
       const isHumanConversation =
         c.currentMode === "human" || c.status === "closed";
-
       if (!isHumanConversation) return false;
 
       if (statusFilter !== "all" && c.status !== statusFilter) {
         return false;
       }
 
+      // ✅ filtro por canal (Modelo A)
+      const ch = normalizeChannel(c);
+      if (channelFilter !== "all" && ch !== channelFilter) {
+        return false;
+      }
+
       const matchesTerm =
         !term ||
-        (c.contactName &&
-          c.contactName.toLowerCase().includes(term)) ||
-        (c.phone && c.phone.toLowerCase().includes(term)) ||
-        (c.lastMessage &&
-          c.lastMessage.toLowerCase().includes(term));
+        (c.contactName && c.contactName.toLowerCase().includes(term)) ||
+        (c.phone && String(c.phone).toLowerCase().includes(term)) ||
+        (c.lastMessage && String(c.lastMessage).toLowerCase().includes(term)) ||
+        (c.lastMessagePreview &&
+          String(c.lastMessagePreview).toLowerCase().includes(term));
 
       return matchesTerm;
     });
-  }, [conversations, searchTerm, statusFilter]);
+  }, [conversations, searchTerm, statusFilter, channelFilter]);
 
   const selectedConversation = useMemo(
-    () =>
-      conversations.find((c) => c.id === selectedConversationId) ||
-      null,
+    () => conversations.find((c) => c.id === selectedConversationId) || null,
     [conversations, selectedConversationId]
   );
 
@@ -437,11 +435,7 @@ export default function ChatHumanHistoryPage() {
   // RENDER
   // ---------------------------------------------
   return (
-    <div
-      className={
-        "chat-history-layout" + (botAlert ? " bot-alert" : "")
-      }
-    >
+    <div className={"chat-history-layout" + (botAlert ? " bot-alert" : "")}>
       {/* COLUNA ESQUERDA – LISTA DE ATENDIMENTOS HUMANOS */}
       <aside className="chat-history-sidebar">
         <div className="chat-history-header">
@@ -473,6 +467,31 @@ export default function ChatHumanHistoryPage() {
           </button>
         </div>
 
+        {/* ✅ Filtros de canal */}
+        <div className="chat-history-filters" style={{ marginTop: 10 }}>
+          <button
+            className={channelFilter === "all" ? "active" : ""}
+            onClick={() => setChannelFilter("all")}
+            title="Mostrar todos os canais"
+          >
+            Todos
+          </button>
+          <button
+            className={channelFilter === "whatsapp" ? "active" : ""}
+            onClick={() => setChannelFilter("whatsapp")}
+            title="Mostrar apenas WhatsApp"
+          >
+            WhatsApp
+          </button>
+          <button
+            className={channelFilter === "webchat" ? "active" : ""}
+            onClick={() => setChannelFilter("webchat")}
+            title="Mostrar apenas Webchat"
+          >
+            Webchat
+          </button>
+        </div>
+
         <div className="chat-history-search">
           <input
             type="text"
@@ -484,29 +503,25 @@ export default function ChatHumanHistoryPage() {
 
         <div className="chat-history-list">
           {loadingConversations && (
+            <div className="chat-history-empty">Carregando histórico...</div>
+          )}
+
+          {!loadingConversations && filteredConversations.length === 0 && (
             <div className="chat-history-empty">
-              Carregando histórico...
+              Nenhum atendimento humano encontrado com os filtros atuais.
             </div>
           )}
 
-          {!loadingConversations &&
-            filteredConversations.length === 0 && (
-              <div className="chat-history-empty">
-                Nenhum atendimento humano encontrado com os filtros atuais.
-              </div>
-            )}
-
           {filteredConversations.map((conv) => {
-            const unread = unreadCounts[conv.id] || 0;
+            const unread = unreadCounts[String(conv.id)] || 0;
+            const ch = normalizeChannel(conv);
 
             return (
               <button
                 key={conv.id}
                 className={
                   "chat-history-item" +
-                  (conv.id === selectedConversationId
-                    ? " selected"
-                    : "")
+                  (conv.id === selectedConversationId ? " selected" : "")
                 }
                 onClick={() => handleSelectConversation(conv.id)}
               >
@@ -514,21 +529,37 @@ export default function ChatHumanHistoryPage() {
                   <span className="chat-history-contact-name">
                     {conv.contactName || conv.phone}
                   </span>
-                  <span className="chat-history-status">
+
+                  {/* ✅ badge do canal */}
+                  <span
+                    className="chat-history-status"
+                    style={{
+                      marginLeft: 10,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: "rgba(255,255,255,.06)",
+                      border: "1px solid rgba(255,255,255,.08)"
+                    }}
+                    title={`Canal: ${channelLabel(ch)}`}
+                  >
+                    {channelLabel(ch)}
+                  </span>
+
+                  <span className="chat-history-status" style={{ marginLeft: 10 }}>
                     {conv.status === "open" ? "Aberta" : "Encerrada"}
                   </span>
 
                   {unread > 0 && (
-                    <span className="chat-history-unread-badge">
-                      {unread}
-                    </span>
+                    <span className="chat-history-unread-badge">{unread}</span>
                   )}
                 </div>
-                <div className="chat-history-phone">
-                  {conv.phone}
-                </div>
+
+                <div className="chat-history-phone">{conv.phone}</div>
+
                 <div className="chat-history-last-message">
-                  {conv.lastMessage || "Sem mensagens ainda"}
+                  {conv.lastMessage ||
+                    conv.lastMessagePreview ||
+                    "Sem mensagens ainda"}
                 </div>
               </button>
             );
@@ -539,20 +570,8 @@ export default function ChatHumanHistoryPage() {
       {/* COLUNA CENTRAL + DIREITA – CHAT + PAINEL CONTATO */}
       <section className="chat-history-main">
         {selectedConversation ? (
-          <div
-            style={{
-              display: "flex",
-              flex: 1,
-              minHeight: 0
-            }}
-          >
-            <div
-              style={{
-                flex: 1,
-                minWidth: 0,
-                height: "100%"
-              }}
-            >
+          <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+            <div style={{ flex: 1, minWidth: 0, height: "100%" }}>
               <ChatPanel
                 conversation={selectedConversation}
                 messages={messages}
@@ -565,37 +584,35 @@ export default function ChatHumanHistoryPage() {
 
             <aside className="chat-contact-panel">
               <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Informações do contato
-                </div>
+                <div className="chat-contact-label">Informações do contato</div>
                 <div className="chat-contact-name">
                   {selectedConversation.contactName || "Sem nome"}
                 </div>
                 <div className="chat-contact-phone">
                   {selectedConversation.phone}
                 </div>
+
+                {/* ✅ canal no painel */}
+                <div style={{ marginTop: 10 }}>
+                  <div className="chat-contact-label">Canal</div>
+                  <div className="chat-contact-value">
+                    {channelLabel(normalizeChannel(selectedConversation))}
+                  </div>
+                </div>
               </div>
 
               <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Última atualização
-                </div>
+                <div className="chat-contact-label">Última atualização</div>
                 <div className="chat-contact-value">
                   {selectedConversation.updatedAt
-                    ? new Date(
-                        selectedConversation.updatedAt
-                      ).toLocaleString()
+                    ? new Date(selectedConversation.updatedAt).toLocaleString()
                     : "—"}
                 </div>
               </div>
 
               <div className="chat-contact-section">
-                <div className="chat-contact-label">
-                  Tags / Observações
-                </div>
-                <div className="chat-contact-value">
-                  Nenhuma tag cadastrada.
-                </div>
+                <div className="chat-contact-label">Tags / Observações</div>
+                <div className="chat-contact-value">Nenhuma tag cadastrada.</div>
               </div>
             </aside>
           </div>
@@ -604,8 +621,8 @@ export default function ChatHumanHistoryPage() {
             <h2>Nenhum atendimento selecionado</h2>
             <p>
               Escolha um atendimento na coluna à esquerda para visualizar o
-              histórico. Você pode aplicar filtros por status e buscar por nome
-              ou telefone.
+              histórico. Você pode aplicar filtros por status, canal e buscar
+              por nome ou telefone.
             </p>
           </div>
         )}
@@ -613,3 +630,4 @@ export default function ChatHumanHistoryPage() {
     </div>
   );
 }
+
