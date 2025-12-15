@@ -58,7 +58,12 @@ async function safeReadJson<T = any>(res: Response): Promise<T | null> {
   }
 }
 
-function buildApiError(status: number, path: string, payload: any, text: string) {
+function buildApiError(
+  status: number,
+  path: string,
+  payload: any,
+  text: string
+) {
   const msg =
     payload?.error ||
     payload?.message ||
@@ -74,25 +79,44 @@ function isPlainObject(v: any) {
   return v && typeof v === "object" && !(v instanceof FormData);
 }
 
+function buildQuery(params?: Record<string, any>) {
+  if (!params) return "";
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === undefined || v === null || v === "") return;
+    qs.set(k, String(v));
+  });
+  const s = qs.toString();
+  return s ? `?${s}` : "";
+}
+
 // ======================================================
 // HELPER FETCH JSON
 // ======================================================
 
-async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T = any>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
   const hasBody = typeof options.body !== "undefined" && options.body !== null;
 
+  // Se já veio string/FormData/etc, respeita.
   const body =
     hasBody && isPlainObject(options.body)
       ? JSON.stringify(options.body)
       : options.body;
 
+  const headers = buildHeaders({
+    ...(hasBody && isPlainObject(options.body)
+      ? { "Content-Type": "application/json" }
+      : {}),
+    ...(options.headers || {})
+  });
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     body,
-    headers: buildHeaders({
-      ...(hasBody ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {})
-    })
+    headers
   });
 
   if (!res.ok) {
@@ -171,7 +195,10 @@ async function downloadBlob(path: string, filename: string) {
 // AUTH
 // ======================================================
 
-export async function login(email: string, password: string): Promise<LoginResponse> {
+export async function login(
+  email: string,
+  password: string
+): Promise<LoginResponse> {
   const data = await request<LoginResponse>("/login", {
     method: "POST",
     body: { email, password }
@@ -205,7 +232,6 @@ export async function setPasswordWithToken(token: string, password: string) {
 // SETTINGS — CHANNELS (Configurações → Canais)
 // ======================================================
 
-// ✅ alinhado com o backend (você usa not_connected)
 export type ChannelStatus = "connected" | "not_connected" | "soon";
 
 export interface WebchatChannelConfig {
@@ -254,14 +280,16 @@ export async function updateWebchatChannel(payload: {
   );
 }
 
-export async function rotateWebchatKey(): Promise<{ ok: boolean; widgetKey: string }> {
+export async function rotateWebchatKey(): Promise<{
+  ok: boolean;
+  widgetKey: string;
+}> {
   return request<{ ok: boolean; widgetKey: string }>(
     "/settings/channels/webchat/rotate-key",
     { method: "POST" }
   );
 }
 
-// ✅ seu backend parece retornar scriptTag (além de snippet em alguns lugares)
 export async function fetchWebchatSnippet(): Promise<{
   ok: boolean;
   enabled: boolean;
@@ -296,12 +324,15 @@ type UsersListResponse =
   | { data: UserRecord[]; total: number }
   | { items: UserRecord[]; total: number };
 
-export async function fetchUsers(): Promise<{ data: UserRecord[]; total: number }> {
+export async function fetchUsers(): Promise<{
+  data: UserRecord[];
+  total: number;
+}> {
   const res = await request<UsersListResponse>("/settings/users");
   const data = "data" in res ? res.data : res.items;
   return {
     data: Array.isArray(data) ? data : [],
-    total: res.total ?? data?.length ?? 0
+    total: (res as any).total ?? (Array.isArray(data) ? data.length : 0)
   };
 }
 
@@ -340,7 +371,10 @@ export async function deactivateUser(
 
 export async function resetUserPassword(
   id: number
-): Promise<{ success: boolean; token?: { id: string; type: string; expiresAt: string } }> {
+): Promise<{
+  success: boolean;
+  token?: { id: string; type: string; expiresAt: string };
+}> {
   return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, {
     method: "POST"
   });
@@ -363,11 +397,8 @@ export interface GroupRecord {
 export async function fetchGroups(params?: {
   includeInactive?: boolean;
 }): Promise<{ items: GroupRecord[]; total: number }> {
-  const qs = new URLSearchParams();
-  if (params?.includeInactive) qs.set("includeInactive", "true");
-
-  const suffix = qs.toString();
-  return request(`/settings/groups${suffix ? `?${suffix}` : ""}`);
+  const qs = buildQuery(params?.includeInactive ? { includeInactive: "true" } : undefined);
+  return request(`/settings/groups${qs}`);
 }
 
 export async function createGroup(payload: {
@@ -431,12 +462,9 @@ export async function fetchGroupMembers(
   groupId: string,
   params?: { includeInactive?: boolean }
 ): Promise<{ items: GroupMemberItem[]; total: number; group?: GroupRecord }> {
-  const qs = new URLSearchParams();
-  if (params?.includeInactive) qs.set("includeInactive", "true");
-  const suffix = qs.toString();
-
+  const qs = buildQuery(params?.includeInactive ? { includeInactive: "true" } : undefined);
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members${suffix ? `?${suffix}` : ""}`
+    `/settings/groups/${encodeURIComponent(groupId)}/members${qs}`
   );
 }
 
@@ -469,7 +497,9 @@ export async function deactivateGroupMember(
   userId: number
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/deactivate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}/deactivate`,
     { method: "PATCH" }
   );
 }
@@ -480,7 +510,9 @@ export async function activateGroupMember(
   payload?: { role?: GroupMemberRole }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/activate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}/activate`,
     {
       method: "PATCH",
       body: payload || {}
@@ -495,46 +527,57 @@ export async function activateGroupMember(
 export async function fetchConversations(
   status: ConversationStatus | "all" = "open"
 ): Promise<Conversation[]> {
-  const qs = status && status !== "all" ? `?status=${encodeURIComponent(status)}` : "";
+  const qs =
+    status && status !== "all" ? `?status=${encodeURIComponent(status)}` : "";
   const data = await request<any>(`/conversations${qs}`);
   return Array.isArray(data) ? (data as Conversation[]) : [];
 }
 
-export async function fetchMessages(conversationId: number): Promise<Message[]> {
-  const data = await request<any>(`/conversations/${conversationId}/messages`);
+// ✅ IDs no backend são string (ex: "wa_..."), então aqui deve ser string
+export async function fetchMessages(conversationId: string): Promise<Message[]> {
+  const data = await request<any>(`/conversations/${encodeURIComponent(conversationId)}/messages`);
   return Array.isArray(data) ? (data as Message[]) : [];
 }
 
-export async function sendTextMessage(conversationId: number, text: string): Promise<Message> {
-  return request(`/conversations/${conversationId}/messages`, {
+export async function sendTextMessage(
+  conversationId: string,
+  text: string,
+  senderName?: string
+): Promise<Message> {
+  return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
-    body: { text }
+    body: { text, ...(senderName ? { senderName } : {}) }
   });
 }
 
+// ⚠️ Só mantenho se seu backend realmente tem /conversations/:id/media
+// (se não tiver, deixe comentado ou implemente no backend)
 export async function sendMediaMessage(
-  conversationId: number,
+  conversationId: string,
   payload: { type: string; mediaUrl: string; caption?: string }
 ): Promise<Message> {
-  return request(`/conversations/${conversationId}/media`, {
+  return request(`/conversations/${encodeURIComponent(conversationId)}/media`, {
     method: "POST",
     body: payload
   });
 }
 
 export async function updateConversationStatus(
-  conversationId: number,
+  conversationId: string,
   status: ConversationStatus,
   extra?: { tags?: string[] }
 ): Promise<Conversation> {
-  return request(`/conversations/${conversationId}/status`, {
+  return request(`/conversations/${encodeURIComponent(conversationId)}/status`, {
     method: "PATCH",
     body: { status, ...(extra || {}) }
   });
 }
 
-export async function updateConversationNotes(conversationId: number, notes: string): Promise<Conversation> {
-  return request(`/conversations/${conversationId}/notes`, {
+export async function updateConversationNotes(
+  conversationId: string,
+  notes: string
+): Promise<Conversation> {
+  return request(`/conversations/${encodeURIComponent(conversationId)}/notes`, {
     method: "PATCH",
     body: { notes }
   });
@@ -596,7 +639,9 @@ export async function uploadAsset(file: File): Promise<MediaItem> {
   return requestForm("/outbound/assets/upload", form);
 }
 
-export async function deleteAsset(id: string | number): Promise<{ success: boolean }> {
+export async function deleteAsset(
+  id: string | number
+): Promise<{ success: boolean }> {
   return request(`/outbound/assets/${encodeURIComponent(String(id))}`, {
     method: "DELETE"
   });
@@ -668,19 +713,25 @@ export async function uploadCampaignAudience(campaignId: string, file: File) {
   );
 }
 
-export async function startCampaign(campaignId: string): Promise<{ success: boolean; sent?: number; failed?: number }> {
+export async function startCampaign(
+  campaignId: string
+): Promise<{ success: boolean; sent?: number; failed?: number }> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/start`, {
     method: "POST"
   });
 }
 
-export async function pauseCampaign(campaignId: string): Promise<{ success: boolean }> {
+export async function pauseCampaign(
+  campaignId: string
+): Promise<{ success: boolean }> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/pause`, {
     method: "PATCH"
   });
 }
 
-export async function resumeCampaign(campaignId: string): Promise<{ success: boolean }> {
+export async function resumeCampaign(
+  campaignId: string
+): Promise<{ success: boolean }> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/resume`, {
     method: "PATCH"
   });
@@ -795,6 +846,7 @@ export async function downloadOptOutExport(params?: {
 
   return { success: true };
 }
+
 // ============================
 // SMS CAMPAIGNS (IAGENTE)
 // ============================
@@ -803,28 +855,34 @@ export async function fetchSmsCampaigns() {
   return request(`/outbound/sms-campaigns`, { method: "GET" });
 }
 
-export async function createSmsCampaign(payload: { name: string; message: string }) {
+export async function createSmsCampaign(payload: {
+  name: string;
+  message: string;
+}) {
+  // ✅ NÃO faça JSON.stringify aqui. O request já stringifica objetos.
   return request(`/outbound/sms-campaigns`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
 export async function uploadSmsCampaignAudience(id: string, file: File) {
   const csvText = await file.text();
 
-  return request(`/outbound/sms-campaigns/${id}/audience`, {
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/audience`, {
     method: "POST",
-    body: JSON.stringify({ csvText })
+    body: { csvText }
   });
 }
 
 export async function startSmsCampaign(id: string) {
-  return request(`/outbound/sms-campaigns/${id}/start`, {
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start`, {
     method: "POST"
   });
 }
 
 export async function fetchSmsCampaignReport(id: string) {
-  return request(`/outbound/sms-campaigns/${id}/report`, { method: "GET" });
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, {
+    method: "GET"
+  });
 }

@@ -18,7 +18,7 @@
       "role": "admin",
       "isActive": true,
       "createdAt": "2025-12-13T14:02:50.864Z",
-      "updatedAt": "2025-12-14T23:55:48.677Z"
+      "updatedAt": "2025-12-15T02:48:49.920Z"
     },
     {
       "id": 3,
@@ -63,7 +63,7 @@
     {
       "notes": "",
       "tags": [],
-      "id": 1,
+      "id": "1",
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
       "lastMessage": "Oi",
@@ -71,12 +71,18 @@
       "updatedAt": "2025-12-08T15:38:49.491Z",
       "currentMode": "human",
       "botAttempts": 3,
-      "contactId": 1
+      "contactId": 1,
+      "source": "whatsapp",
+      "channel": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T15:38:49.491Z"
     },
     {
       "notes": "",
       "tags": [],
-      "id": 2,
+      "id": "2",
       "contactName": "Adriano Ferreira",
       "phone": "556499477939",
       "lastMessage": "teste",
@@ -84,12 +90,18 @@
       "updatedAt": "2025-12-08T15:38:51.757Z",
       "currentMode": "human",
       "botAttempts": 3,
-      "contactId": 2
+      "contactId": 2,
+      "source": "whatsapp",
+      "channel": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499477939",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T15:38:51.757Z"
     },
     {
       "notes": "",
       "tags": [],
-      "id": 3,
+      "id": "3",
       "contactName": "test user name",
       "phone": "16315551181",
       "lastMessage": "Olá! Como posso ajudar você com sua mensagem de texto?",
@@ -97,12 +109,18 @@
       "updatedAt": "2025-12-08T04:24:50.911Z",
       "currentMode": "bot",
       "botAttempts": 1,
-      "contactId": 3
+      "contactId": 3,
+      "source": "whatsapp",
+      "channel": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:16315551181",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T04:24:50.911Z"
     },
     {
       "notes": "ddd",
       "tags": [],
-      "id": 4,
+      "id": "4",
       "sessionId": "S-556499989978-1765210451025-4",
       "createdAt": "2025-12-08T16:14:11.025Z",
       "updatedAt": "2025-12-08T17:47:04.133Z",
@@ -113,12 +131,16 @@
       "currentMode": "human",
       "botAttempts": 3,
       "channel": "whatsapp",
-      "contactId": 1
+      "contactId": 1,
+      "source": "whatsapp",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T17:47:04.133Z"
     },
     {
       "notes": "",
       "tags": [],
-      "id": 5,
+      "id": "5",
       "sessionId": "S-556499477939-1765210559797-5",
       "createdAt": "2025-12-08T16:15:59.797Z",
       "updatedAt": "2025-12-08T16:25:34.848Z",
@@ -129,12 +151,16 @@
       "currentMode": "human",
       "botAttempts": 3,
       "channel": "whatsapp",
-      "contactId": 2
+      "contactId": 2,
+      "source": "whatsapp",
+      "peerId": "wa:556499477939",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T16:25:34.848Z"
     },
     {
       "notes": "clienreda",
       "tags": [],
-      "id": 6,
+      "id": "6",
       "sessionId": "S-99989978-1765212939923",
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
@@ -144,12 +170,17 @@
       "updatedAt": "2025-12-08T17:13:54.062Z",
       "currentMode": "bot",
       "botAttempts": 1,
-      "contactId": 1
+      "contactId": 1,
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T17:13:54.062Z"
     },
     {
       "notes": "teste",
       "tags": [],
-      "id": 7,
+      "id": "7",
       "sessionId": "S-99989978-1765214283674",
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
@@ -159,10 +190,15 @@
       "updatedAt": "2025-12-08T17:45:24.249Z",
       "currentMode": "bot",
       "botAttempts": 1,
-      "contactId": 1
+      "contactId": 1,
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T17:45:24.249Z"
     },
     {
-      "id": 8,
+      "id": "8",
       "sessionId": "S-99989978-1765216338455",
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
@@ -174,10 +210,15 @@
       "botAttempts": 1,
       "tags": [],
       "notes": "",
-      "contactId": 1
+      "contactId": 1,
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T17:52:42.265Z"
     },
     {
-      "id": 9,
+      "id": "9",
       "sessionId": "S-99989978-1765216741909",
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
@@ -189,10 +230,15 @@
       "botAttempts": 1,
       "tags": [],
       "notes": "",
-      "contactId": 1
+      "contactId": 1,
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T18:00:08.391Z"
     },
     {
-      "id": 10,
+      "id": "10",
       "sessionId": "S-99477939-1765216751717",
       "contactName": "Adriano Ferreira",
       "phone": "556499477939",
@@ -204,10 +250,15 @@
       "botAttempts": 1,
       "tags": [],
       "notes": "",
-      "contactId": 2
+      "contactId": 2,
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499477939",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T18:00:06.152Z"
     },
     {
-      "id": 11,
+      "id": "11",
       "sessionId": "S-99989978-1765216853146",
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
@@ -219,10 +270,15 @@
       "botAttempts": 1,
       "tags": [],
       "notes": "tetse",
-      "contactId": 1
+      "contactId": 1,
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T18:09:16.870Z"
     },
     {
-      "id": 12,
+      "id": "12",
       "sessionId": "S-99989978-1765218523344",
       "contactName": "Genivaldo Peres",
       "phone": "556499989978",
@@ -234,10 +290,15 @@
       "botAttempts": 0,
       "tags": [],
       "notes": "",
-      "contactId": 1
+      "contactId": 1,
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T18:29:20.542Z"
     },
     {
-      "id": 13,
+      "id": "13",
       "sessionId": "S-99989978-1765219310572",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -249,10 +310,15 @@
       "currentMode": "human",
       "botAttempts": 1,
       "tags": [],
-      "notes": "de"
+      "notes": "de",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T18:43:20.796Z"
     },
     {
-      "id": 14,
+      "id": "14",
       "sessionId": "S-99989978-1765219506430",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -264,10 +330,15 @@
       "currentMode": "human",
       "botAttempts": 1,
       "tags": [],
-      "notes": "eee"
+      "notes": "eee",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T22:18:39.415Z"
     },
     {
-      "id": 15,
+      "id": "15",
       "sessionId": "S-99989978-1765232360602",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -279,10 +350,15 @@
       "currentMode": "human",
       "botAttempts": 1,
       "tags": [],
-      "notes": "teste"
+      "notes": "teste",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T22:48:20.839Z"
     },
     {
-      "id": 16,
+      "id": "16",
       "sessionId": "S-99989978-1765236435875",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -294,10 +370,15 @@
       "currentMode": "bot",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-08T23:54:17.160Z"
     },
     {
-      "id": 17,
+      "id": "17",
       "sessionId": "S-99989978-1765240707945",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -309,10 +390,15 @@
       "currentMode": "bot",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-09T01:54:09.674Z"
     },
     {
-      "id": 18,
+      "id": "18",
       "sessionId": "S-99989978-1765251928855",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -324,10 +410,15 @@
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-09T03:48:06.278Z"
     },
     {
-      "id": 19,
+      "id": "19",
       "sessionId": "S-11911160-1765383055401",
       "contactId": 4,
       "contactName": "Genivaldo Peres",
@@ -339,10 +430,15 @@
       "currentMode": "bot",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:5511911911160",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-10T16:45:41.525Z"
     },
     {
-      "id": 20,
+      "id": "20",
       "sessionId": "S-99989978-1765393844135",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -354,10 +450,15 @@
       "currentMode": "human",
       "botAttempts": 2,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-10T19:27:05.194Z"
     },
     {
-      "id": 21,
+      "id": "21",
       "sessionId": "S-99989978-1765396427975",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -369,10 +470,15 @@
       "currentMode": "human",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-10T19:54:53.439Z"
     },
     {
-      "id": 22,
+      "id": "22",
       "sessionId": "S-99989978-1765396929427",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -384,10 +490,15 @@
       "currentMode": "bot",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-10T20:03:12.175Z"
     },
     {
-      "id": 23,
+      "id": "23",
       "sessionId": "S-99989978-1765456693775",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -399,10 +510,15 @@
       "currentMode": "bot",
       "botAttempts": 2,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-11T18:02:04.617Z"
     },
     {
-      "id": 24,
+      "id": "24",
       "sessionId": "S-99477939-1765493711675",
       "contactId": 2,
       "contactName": "Adriano Ferreira",
@@ -414,10 +530,15 @@
       "currentMode": "human",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499477939",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-11T22:55:54.476Z"
     },
     {
-      "id": 25,
+      "id": "25",
       "sessionId": "S-99989978-1765503275677",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -429,10 +550,15 @@
       "currentMode": "bot",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-12T01:35:19.522Z"
     },
     {
-      "id": 26,
+      "id": "26",
       "sessionId": "S-99989978-1765503708340",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -444,10 +570,15 @@
       "currentMode": "human",
       "botAttempts": 2,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-12T10:19:21.355Z"
     },
     {
-      "id": 27,
+      "id": "27",
       "sessionId": "S-99477939-1765558082578",
       "contactId": 2,
       "contactName": "Adriano Ferreira",
@@ -459,10 +590,15 @@
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499477939",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-12T17:33:10.589Z"
     },
     {
-      "id": 28,
+      "id": "28",
       "sessionId": "S-96086426-1765574952890",
       "contactId": 5,
       "contactName": "Rodrigo",
@@ -474,10 +610,15 @@
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556496086426",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-12T21:37:29.412Z"
     },
     {
-      "id": 29,
+      "id": "29",
       "sessionId": "S-99989978-1765647622104",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -489,10 +630,15 @@
       "currentMode": "human",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-13T17:45:15.770Z"
     },
     {
-      "id": 30,
+      "id": "30",
       "sessionId": "S-99989978-1765648068527",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -504,10 +650,15 @@
       "currentMode": "human",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-13T17:51:52.719Z"
     },
     {
-      "id": 31,
+      "id": "31",
       "sessionId": "S-99989978-1765648547249",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -519,10 +670,15 @@
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-13T18:23:15.855Z"
     },
     {
-      "id": 32,
+      "id": "32",
       "sessionId": "S-99989978-1765667507770",
       "contactId": 1,
       "contactName": "Genivaldo Peres",
@@ -534,7 +690,12 @@
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-13T23:13:47.750Z"
     },
     {
       "id": "conv_1765734900457_3aa0939ee884",
@@ -546,7 +707,13 @@
       "assignedUserId": null,
       "notes": "",
       "createdAt": "2025-12-14T17:55:00.462Z",
-      "updatedAt": "2025-12-14T17:56:45.243Z"
+      "updatedAt": "2025-12-14T17:56:45.243Z",
+      "source": "webchat",
+      "currentMode": "human",
+      "peerId": "wc:vis_1765731170884_4c61042f937f6301",
+      "tags": [],
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-14T17:56:45.243Z"
     },
     {
       "id": "conv_1765735023076_57ecb2a8a05a",
@@ -558,7 +725,13 @@
       "assignedUserId": null,
       "notes": "",
       "createdAt": "2025-12-14T17:57:03.077Z",
-      "updatedAt": "2025-12-14T18:03:34.819Z"
+      "updatedAt": "2025-12-14T18:03:34.819Z",
+      "source": "webchat",
+      "currentMode": "human",
+      "peerId": "wc:vis_1765735021057_fc649f7824f43d66",
+      "tags": [],
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-14T18:03:34.819Z"
     },
     {
       "id": "conv_1765735451191_16fc7ade35cd",
@@ -570,7 +743,13 @@
       "assignedUserId": null,
       "notes": "",
       "createdAt": "2025-12-14T18:04:11.194Z",
-      "updatedAt": "2025-12-14T18:41:44.877Z"
+      "updatedAt": "2025-12-14T18:41:44.877Z",
+      "source": "webchat",
+      "currentMode": "human",
+      "peerId": "wc:vis_1765735449015_c6019a8c0a5586b0",
+      "tags": [],
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-14T18:41:44.877Z"
     },
     {
       "id": null,
@@ -581,15 +760,16 @@
       "channel": "whatsapp",
       "lastMessage": "",
       "status": "closed",
-      "updatedAt": "2025-12-15T00:14:37.449Z",
+      "updatedAt": "2025-12-15T03:25:50.853Z",
       "currentMode": "human",
       "botAttempts": 3,
       "tags": [],
       "notes": "",
-      "lastMessageAt": "2025-12-15T00:14:37.449Z",
-      "lastMessagePreview": "Atendimento encerrado.",
+      "lastMessageAt": "2025-12-15T03:02:09.485Z",
+      "lastMessagePreview": "oi",
       "source": "whatsapp",
-      "peerId": "wa:556499989978"
+      "peerId": "wa:556499989978",
+      "createdAt": "2025-12-15T01:25:10.251Z"
     },
     {
       "id": null,
@@ -600,11 +780,16 @@
       "channel": "whatsapp",
       "lastMessage": "",
       "status": "open",
-      "updatedAt": "2025-12-14T19:48:58.859Z",
-      "currentMode": "bot",
-      "botAttempts": 2,
+      "updatedAt": "2025-12-15T03:02:09.488Z",
+      "currentMode": "human",
+      "botAttempts": 3,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T02:41:33.073Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "oi",
+      "lastMessageAt": "2025-12-15T03:02:09.488Z"
     },
     {
       "id": null,
@@ -619,7 +804,12 @@
       "currentMode": "bot",
       "botAttempts": 2,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T03:25:50.853Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-14T20:08:01.379Z"
     },
     {
       "id": null,
@@ -634,7 +824,163 @@
       "currentMode": "bot",
       "botAttempts": 1,
       "tags": [],
-      "notes": ""
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T03:25:50.853Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-14T21:34:55.209Z"
+    },
+    {
+      "id": null,
+      "sessionId": "S-99989978-1765758981527",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "",
+      "status": "open",
+      "updatedAt": "2025-12-15T00:36:21.527Z",
+      "currentMode": "human",
+      "botAttempts": 3,
+      "tags": [],
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T03:25:50.853Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-15T00:36:21.527Z"
+    },
+    {
+      "id": null,
+      "sessionId": "S-99989978-1765762899229",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "channel": "whatsapp",
+      "lastMessage": "",
+      "status": "open",
+      "updatedAt": "2025-12-15T01:41:39.229Z",
+      "currentMode": "human",
+      "botAttempts": 3,
+      "tags": [],
+      "notes": "",
+      "source": "whatsapp",
+      "createdAt": "2025-12-15T03:25:50.853Z",
+      "peerId": "wa:556499989978",
+      "lastMessagePreview": "",
+      "lastMessageAt": "2025-12-15T01:41:39.229Z"
+    },
+    {
+      "id": "wc_1765763612820_d56b98b05686",
+      "source": "webchat",
+      "channel": "webchat",
+      "visitorId": "vis_1765742383904_861ad944d55e6f8a",
+      "title": "Visitante do site",
+      "status": "closed",
+      "assignedGroupId": null,
+      "assignedUserId": null,
+      "notes": "",
+      "createdAt": "2025-12-15T01:53:32.827Z",
+      "updatedAt": "2025-12-15T01:56:25.961Z",
+      "currentMode": "human",
+      "peerId": "wc:vis_1765742383904_861ad944d55e6f8a",
+      "tags": [],
+      "lastMessageAt": "2025-12-15T01:56:10.697Z",
+      "lastMessagePreview": "Atendimento encerrado.",
+      "closedAt": "2025-12-15T01:56:10.452Z",
+      "closedBy": "agent",
+      "closedReason": "manual_by_agent"
+    },
+    {
+      "id": "wc_1765767634399_5644e03ce3b7",
+      "source": "webchat",
+      "channel": "webchat",
+      "visitorId": "vis_1765742383904_861ad944d55e6f8a",
+      "title": "Visitante do site",
+      "status": "closed",
+      "assignedGroupId": null,
+      "assignedUserId": null,
+      "notes": "",
+      "createdAt": "2025-12-15T03:00:34.407Z",
+      "updatedAt": "2025-12-15T03:01:13.599Z",
+      "currentMode": "human",
+      "peerId": "wc:vis_1765742383904_861ad944d55e6f8a",
+      "tags": [],
+      "lastMessageAt": "2025-12-15T03:01:06.616Z",
+      "lastMessagePreview": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova",
+      "closedAt": "2025-12-15T03:01:06.620Z",
+      "closedBy": "agent",
+      "closedReason": "manual_by_agent"
+    },
+    {
+      "id": "33",
+      "sessionId": "S-99989978-1765768229808",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "source": "whatsapp",
+      "channel": "whatsapp",
+      "peerId": "wa:556499989978",
+      "title": "Genivaldo Peres",
+      "status": "closed",
+      "currentMode": "human",
+      "botAttempts": 2,
+      "tags": [],
+      "notes": "",
+      "lastMessage": "Falar com uma pessoa",
+      "updatedAt": "2025-12-15T03:11:50.364Z",
+      "createdAt": "2025-12-15T03:10:29.808Z",
+      "lastMessageAt": "2025-12-15T03:11:50.360Z",
+      "lastMessagePreview": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova",
+      "closedAt": "2025-12-15T03:11:50.364Z",
+      "closedBy": "agent",
+      "closedReason": "manual_by_agent"
+    },
+    {
+      "id": "wc_1765768875638_4ac67955e212",
+      "source": "webchat",
+      "channel": "webchat",
+      "visitorId": "vis_1765742383904_861ad944d55e6f8a",
+      "title": "Visitante do site",
+      "status": "closed",
+      "assignedGroupId": null,
+      "assignedUserId": null,
+      "notes": "",
+      "createdAt": "2025-12-15T03:21:15.656Z",
+      "updatedAt": "2025-12-15T03:21:54.676Z",
+      "currentMode": "human",
+      "peerId": "wc:vis_1765742383904_861ad944d55e6f8a",
+      "tags": [],
+      "lastMessageAt": "2025-12-15T03:21:54.672Z",
+      "lastMessagePreview": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova",
+      "closedAt": "2025-12-15T03:21:54.676Z",
+      "closedBy": "agent",
+      "closedReason": "manual_by_agent"
+    },
+    {
+      "id": "34",
+      "sessionId": "S-99989978-1765769165131",
+      "contactId": 1,
+      "contactName": "Genivaldo Peres",
+      "phone": "556499989978",
+      "source": "whatsapp",
+      "channel": "whatsapp",
+      "peerId": "wa:556499989978",
+      "title": "Genivaldo Peres",
+      "status": "closed",
+      "currentMode": "bot",
+      "botAttempts": 1,
+      "tags": [],
+      "notes": "",
+      "lastMessage": "Olá! Como posso ajudar você hoje?",
+      "updatedAt": "2025-12-15T03:26:51.070Z",
+      "createdAt": "2025-12-15T03:26:05.131Z",
+      "lastMessagePreview": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova",
+      "lastMessageAt": "2025-12-15T03:26:51.070Z",
+      "closedAt": "2025-12-15T03:26:51.070Z",
+      "closedBy": "agent",
+      "closedReason": "manual_by_agent"
     }
   ],
   "messagesByConversation": {
@@ -3073,6 +3419,134 @@
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMzAwMDcwREQ1RDIxMEY3MzQwAA=="
       }
     ],
+    "33": [
+      {
+        "id": 1,
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "text": "oi",
+        "createdAt": "2025-12-15T03:10:28.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I3OEFBNDNCMzJCMzEyQzYxMTgA",
+        "channel": "whatsapp"
+      },
+      {
+        "id": 2,
+        "type": "text",
+        "from": "bot",
+        "direction": "out",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "createdAt": "2025-12-15T03:10:32.834Z",
+        "fromBot": true,
+        "isBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSOTZGQzI5OTM4M0Q1MDdCRjE4AA==",
+        "channel": "whatsapp"
+      },
+      {
+        "id": 3,
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "text": "preciso falar com um humano",
+        "createdAt": "2025-12-15T03:10:58.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I5Q0MxRTkwQTExMzYyNEVFNEYA",
+        "channel": "whatsapp"
+      },
+      {
+        "id": "msg_1765768276029_89cb1ef738f7",
+        "conversationId": "33",
+        "channel": "whatsapp",
+        "type": "text",
+        "from": "agent",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": false,
+        "text": "Oi",
+        "createdAt": "2025-12-15T03:11:16.028Z",
+        "senderName": "Atendente"
+      },
+      {
+        "id": 4,
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "text": "tudo bem?",
+        "createdAt": "2025-12-15T03:11:21.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I2Q0M5RUI3QkJEQjI0REM5NDQA",
+        "channel": "whatsapp"
+      },
+      {
+        "id": 5,
+        "type": "text",
+        "from": "bot",
+        "direction": "out",
+        "text": "Olá! Tudo bem, e com você? Como posso ajudar hoje?",
+        "createdAt": "2025-12-15T03:11:25.799Z",
+        "fromBot": true,
+        "isBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMUI2RERBREVCRTBENTAwQ0Y4AA==",
+        "channel": "whatsapp"
+      },
+      {
+        "id": 6,
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "text": "Falar com uma pessoa",
+        "createdAt": "2025-12-15T03:11:35.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I3MjBFRkRDNTRFOUZFQUNCQkEA",
+        "channel": "whatsapp"
+      },
+      {
+        "id": "msg_1765768310359_f8c9067825b4",
+        "conversationId": "33",
+        "channel": "whatsapp",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova mensagem 😊",
+        "createdAt": "2025-12-15T03:11:50.359Z"
+      }
+    ],
+    "34": [
+      {
+        "id": 1,
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "text": "Oi",
+        "createdAt": "2025-12-15T03:26:04.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JBRkFEQTE2NjgwNEQ3QUY5NDcA",
+        "channel": "whatsapp"
+      },
+      {
+        "id": 2,
+        "type": "text",
+        "from": "bot",
+        "direction": "out",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "createdAt": "2025-12-15T03:26:08.017Z",
+        "fromBot": true,
+        "isBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSNURCRTA1RkU4NUZFQjU4MzBEAA==",
+        "channel": "whatsapp"
+      },
+      {
+        "id": "msg_1765769211069_2ecbefacbd53",
+        "conversationId": "34",
+        "channel": "whatsapp",
+        "source": "whatsapp",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova mensagem 😊",
+        "createdAt": "2025-12-15T03:26:51.069Z"
+      }
+    ],
     "conv_1765734900457_3aa0939ee884": [
       {
         "id": "msg_1765734924346_002f78362f6c",
@@ -3257,6 +3731,180 @@
         "timestamp": "2025-12-14T21:34:57.537Z",
         "fromBot": true,
         "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMUFGODBCRURFODE4MjQ4NzA3AA=="
+      },
+      {
+        "id": 14,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T00:36:19.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I5MDc4NjJFRDZDMjE0Q0RFMUUA"
+      },
+      {
+        "id": 15,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Se precisar de alguma informação ou ajuda, é só me chamar. Estou à disposição!",
+        "timestamp": "2025-12-15T00:36:25.280Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSNUFEQzQ1MDNCQzhDMjM0MjA0AA=="
+      },
+      {
+        "id": 16,
+        "direction": "in",
+        "type": "text",
+        "text": "Humano",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T00:36:46.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JENzgzNjBGNTgyOEFENzIxMkEA"
+      },
+      {
+        "id": 17,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:24:03.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1NDJBQ0FBRDAzNThGNzBDQUQA"
+      },
+      {
+        "id": 18,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-15T01:24:07.597Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSQzIwQTg3NjBDNkJCMkE3QzFDAA=="
+      },
+      {
+        "id": 19,
+        "direction": "in",
+        "type": "text",
+        "text": "humano",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:24:21.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1MjhDOTBGOTBEN0UyRjFBNkQA"
+      },
+      {
+        "id": 20,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:24:31.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IxMDgyOTQxMTZDNUY0NzNDNkQA"
+      },
+      {
+        "id": 21,
+        "direction": "out",
+        "type": "text",
+        "text": "Oi! Como posso ajudar você hoje?",
+        "timestamp": "2025-12-15T01:24:36.175Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSOEVGRTRENUEwMjAyODM5NkMwAA=="
+      },
+      {
+        "id": 22,
+        "direction": "in",
+        "type": "text",
+        "text": "preciso falar com uma pessoa",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:24:45.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1QURDQTdDNzQxRTNDMjk2RTQA"
+      },
+      {
+        "id": 23,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:41:37.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I0NjM1MEZEMTlGMjkxQTI4MjQA"
+      },
+      {
+        "id": 24,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Estou aqui para ajudar. Se precisar falar com uma pessoa, posso tentar direcionar sua solicitação. Sobre qual assunto você gostaria de conversar?",
+        "timestamp": "2025-12-15T01:41:42.040Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSQjU4QTI1RERDMzBCMjQwMUU4AA=="
+      },
+      {
+        "id": 25,
+        "direction": "in",
+        "type": "text",
+        "text": "Preciso falar com uma pessoa",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:41:54.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IxRTNGMkZCNzI5MDNGRTQ4N0IA"
+      },
+      {
+        "id": 26,
+        "direction": "in",
+        "type": "text",
+        "text": "Oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:50:47.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I4NUM2RjgxREJERTZDRDQ5MjgA"
+      },
+      {
+        "id": 27,
+        "direction": "out",
+        "type": "text",
+        "text": "Olá! Se você precisa falar com uma pessoa, por favor, me informe sobre qual assunto ou setor para que eu possa direcionar seu contato da melhor forma. Estou à disposição para ajudar!",
+        "timestamp": "2025-12-15T01:50:52.101Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSRTY5OTVCRjI0OEMwNTNEQzAyAA=="
+      },
+      {
+        "id": 28,
+        "direction": "in",
+        "type": "text",
+        "text": "quero comprar",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:51:04.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JFN0ExRDQ4MkE2RUIzNTA5MjgA"
+      },
+      {
+        "id": 29,
+        "direction": "out",
+        "type": "text",
+        "text": "Perfeito! Posso ajudar você com a compra. Por favor, me informe qual produto ou serviço você deseja adquirir para que eu possa fornecer as informações necessárias.",
+        "timestamp": "2025-12-15T01:51:07.931Z",
+        "fromBot": true,
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSMkE1QjEyOTlENzZEQTFEMzI0AA=="
+      },
+      {
+        "id": 30,
+        "direction": "in",
+        "type": "text",
+        "text": "prefiro com uma pessoa",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:51:16.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JFNTkwNDU1RDcwNzU5NUU0MzMA"
+      },
+      {
+        "id": 31,
+        "direction": "in",
+        "type": "text",
+        "text": "Boa noite",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T01:52:53.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JDMEE4MTY1QUJDNEIyN0VCRDQA"
       }
     ],
     "null": [
@@ -3469,6 +4117,356 @@
         "isBot": false,
         "text": "Atendimento encerrado.",
         "createdAt": "2025-12-15T00:14:37.447Z"
+      },
+      {
+        "id": "msg_1765761910251_803e119a0e4e",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:25:10.251Z"
+      },
+      {
+        "id": null,
+        "direction": "in",
+        "type": "text",
+        "text": "oi",
+        "mediaUrl": null,
+        "location": null,
+        "timestamp": "2025-12-15T02:04:48.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JCRjdGQjFDNTAwQjVERTYwQUUA"
+      },
+      {
+        "id": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1Qzc1QTlEOENFQUJCRjNBNkYA",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "isBot": false,
+        "isSystem": false,
+        "text": "Oi",
+        "createdAt": "2025-12-15T02:41:33.074Z",
+        "senderName": "Genivaldo Peres",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0I1Qzc1QTlEOENFQUJCRjNBNkYA"
+      },
+      {
+        "id": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JBNDMyMjdBNUJDNjY5MzQ1QUIA",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "isBot": false,
+        "isSystem": false,
+        "text": "Oi",
+        "createdAt": "2025-12-15T02:51:47.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0JBNDMyMjdBNUJDNjY5MzQ1QUIA"
+      },
+      {
+        "id": "msg_1765767111620_8f8e2af916c6",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "text",
+        "from": "bot",
+        "direction": "out",
+        "isBot": true,
+        "isSystem": false,
+        "text": "Olá! Como posso ajudar você hoje?",
+        "createdAt": "2025-12-15T02:51:51.620Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAERgSOUVFMjVCOTIzRkQ4NDJENzQ5AA=="
+      },
+      {
+        "id": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IzODA5MUQ4QzMyQTE5OTQ2ODEA",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "isBot": false,
+        "isSystem": false,
+        "text": "Falar com uma pessoa",
+        "createdAt": "2025-12-15T02:52:04.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IzODA5MUQ4QzMyQTE5OTQ2ODEA"
+      },
+      {
+        "id": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IxQTZDNEY4OEQ3NUEzMzIyNjYA",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "isBot": false,
+        "isSystem": false,
+        "text": "Oi",
+        "createdAt": "2025-12-15T02:54:44.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IxQTZDNEY4OEQ3NUEzMzIyNjYA"
+      },
+      {
+        "id": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IzRjJDRUMyMjFGQzM3OEI5RkEA",
+        "conversationId": "null",
+        "channel": "whatsapp",
+        "type": "text",
+        "from": "client",
+        "direction": "in",
+        "isBot": false,
+        "isSystem": false,
+        "text": "oi",
+        "createdAt": "2025-12-15T03:02:08.000Z",
+        "waMessageId": "wamid.HBgMNTU2NDk5OTg5OTc4FQIAEhgUM0IzRjJDRUMyMjFGQzM3OEI5RkEA"
+      }
+    ],
+    "wc_1765763612820_d56b98b05686": [
+      {
+        "id": "wcm_1765763616132_97e853c9baac",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Oi",
+        "createdAt": "2025-12-15T01:53:36.132Z"
+      },
+      {
+        "id": "msg_1765763629203_722634c1422d",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "text",
+        "from": "agent",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": false,
+        "text": "Como vai?",
+        "createdAt": "2025-12-15T01:53:49.203Z",
+        "senderName": "Atendente"
+      },
+      {
+        "id": "wcm_1765763640112_919692ccd639",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Tudo ótimo e com vc?",
+        "createdAt": "2025-12-15T01:54:00.112Z"
+      },
+      {
+        "id": "msg_1765763717551_23b65742ad23",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "text",
+        "from": "agent",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": false,
+        "text": "tuid bem",
+        "createdAt": "2025-12-15T01:55:17.551Z",
+        "senderName": "Atendente"
+      },
+      {
+        "id": "msg_1765763770445_891006ea6ca5",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "text",
+        "from": "agent",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova mensagem 😊",
+        "createdAt": "2025-12-15T01:56:10.445Z"
+      },
+      {
+        "id": "msg_1765763770601_999cf1205164",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.601Z"
+      },
+      {
+        "id": "msg_1765763770613_ddd872db22fd",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.613Z"
+      },
+      {
+        "id": "msg_1765763770621_c013b3e2f73c",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.621Z"
+      },
+      {
+        "id": "msg_1765763770634_ac53f464b9c2",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.634Z"
+      },
+      {
+        "id": "msg_1765763770644_875304b543f6",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.644Z"
+      },
+      {
+        "id": "msg_1765763770654_b4c72fb40c2b",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.654Z"
+      },
+      {
+        "id": "msg_1765763770662_0037da891fab",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.662Z"
+      },
+      {
+        "id": "msg_1765763770672_5dddd29b8e59",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.672Z"
+      },
+      {
+        "id": "msg_1765763770678_ef3ddb9c556c",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.678Z"
+      },
+      {
+        "id": "msg_1765763770689_7c3268932a7e",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.689Z"
+      },
+      {
+        "id": "msg_1765763770697_deab07c8e213",
+        "conversationId": "wc_1765763612820_d56b98b05686",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado.",
+        "createdAt": "2025-12-15T01:56:10.697Z"
+      }
+    ],
+    "wc_1765767634399_5644e03ce3b7": [
+      {
+        "id": "wcm_1765767637671_b4ea99861035",
+        "conversationId": "wc_1765767634399_5644e03ce3b7",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "Oi",
+        "createdAt": "2025-12-15T03:00:37.671Z"
+      },
+      {
+        "id": "msg_1765767648776_c145ce3e406b",
+        "conversationId": "wc_1765767634399_5644e03ce3b7",
+        "channel": "webchat",
+        "type": "text",
+        "from": "agent",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": false,
+        "text": "✅",
+        "createdAt": "2025-12-15T03:00:48.776Z",
+        "senderName": "Atendente"
+      },
+      {
+        "id": "wcm_1765767658598_6b216ce29a1c",
+        "conversationId": "wc_1765767634399_5644e03ce3b7",
+        "channel": "webchat",
+        "from": "visitor",
+        "type": "text",
+        "text": "tchau",
+        "createdAt": "2025-12-15T03:00:58.598Z"
+      },
+      {
+        "id": "msg_1765767666616_d986e5dd7f4e",
+        "conversationId": "wc_1765767634399_5644e03ce3b7",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova mensagem 😊",
+        "createdAt": "2025-12-15T03:01:06.616Z"
+      }
+    ],
+    "wc_1765768875638_4ac67955e212": [
+      {
+        "id": "msg_1765768914672_f8746979fedf",
+        "conversationId": "wc_1765768875638_4ac67955e212",
+        "channel": "webchat",
+        "type": "system",
+        "from": "system",
+        "direction": "out",
+        "isBot": false,
+        "isSystem": true,
+        "text": "Atendimento encerrado ✅\n\nEste atendimento foi finalizado pelo nosso time.\nSe precisar de algo mais, é só enviar uma nova mensagem 😊",
+        "createdAt": "2025-12-15T03:21:54.672Z"
       }
     ]
   },

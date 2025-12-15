@@ -9,6 +9,21 @@ const API_BASE =
   import.meta.env.VITE_API_BASE_URL ||
   "http://localhost:3010";
 
+const AUTH_KEY = "gpLabsAuthToken";
+
+function getToken() {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(AUTH_KEY);
+}
+
+function filenameSafe(s) {
+  return String(s || "")
+    .trim()
+    .replace(/[\/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 80);
+}
+
 export default function SmsCampaignsPage({ onExit }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,6 +33,9 @@ export default function SmsCampaignsPage({ onExit }) {
   const [report, setReport] = useState(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState("");
+
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
 
   const pollRef = useRef(null);
 
@@ -42,6 +60,7 @@ export default function SmsCampaignsPage({ onExit }) {
     setSelected(camp);
     setReport(null);
     setReportError("");
+    setDownloadError("");
     stopPolling();
 
     async function loadReport() {
@@ -71,10 +90,61 @@ export default function SmsCampaignsPage({ onExit }) {
     return () => stopPolling();
   }, []);
 
-  const csvDownloadUrl = useMemo(() => {
+  const csvUrl = useMemo(() => {
     if (!selected?.id) return null;
     return `${API_BASE}/outbound/sms-campaigns/${selected.id}/report.csv`;
   }, [selected?.id]);
+
+  async function baixarExcel() {
+    if (!csvUrl || !selected?.id) return;
+
+    setDownloading(true);
+    setDownloadError("");
+
+    try {
+      const token = getToken();
+      if (!token) {
+        setDownloadError("Você não está autenticado. Faça login novamente.");
+        return;
+      }
+
+      const res = await fetch(csvUrl, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      if (!res.ok) {
+        // tenta ler retorno (json/text) pra dar erro humano
+        let msg = `Falha ao baixar (HTTP ${res.status}).`;
+        try {
+          const t = await res.text();
+          if (t) msg = t;
+        } catch {}
+        setDownloadError(String(msg));
+        return;
+      }
+
+      const blob = await res.blob();
+
+      const name =
+        `sms-relatorio_${filenameSafe(selected?.name)}_${selected.id}.csv`;
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setDownloadError(e?.message || "Erro ao baixar o arquivo.");
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   if (creating) {
     return (
@@ -190,31 +260,49 @@ export default function SmsCampaignsPage({ onExit }) {
 
         {/* RELATÓRIO */}
         <div className="campaigns-card">
-          <div className="sms-report-header">
-            <h3>Relatório</h3>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12
+            }}
+          >
+            <h3 style={{ margin: 0 }}>Relatório</h3>
 
-            {csvDownloadUrl && (
-              <a
-                href={csvDownloadUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="sms-download-btn"
-              >
-                Baixar Excel
-              </a>
-            )}
+            <button
+              className="btn small"
+              type="button"
+              onClick={baixarExcel}
+              disabled={!selected || downloading}
+              title={!selected ? "Selecione uma campanha para baixar." : ""}
+            >
+              {downloading ? "Baixando..." : "Baixar Excel"}
+            </button>
           </div>
 
+          {downloadError ? (
+            <div className="alert error" style={{ marginTop: 10 }}>
+              {downloadError}
+            </div>
+          ) : null}
+
           {!selected ? (
-            <p className="muted">
+            <p className="muted" style={{ marginTop: 10 }}>
               Selecione uma campanha para ver os resultados.
             </p>
           ) : reportLoading && !report ? (
-            <p className="muted">Carregando relatório...</p>
+            <p className="muted" style={{ marginTop: 10 }}>
+              Carregando relatório...
+            </p>
           ) : reportError ? (
-            <div className="alert error">{reportError}</div>
+            <div className="alert error" style={{ marginTop: 10 }}>
+              {reportError}
+            </div>
           ) : !report ? (
-            <p className="muted">Carregando relatório...</p>
+            <p className="muted" style={{ marginTop: 10 }}>
+              Carregando relatório...
+            </p>
           ) : (
             <>
               <div className="stats">
@@ -253,15 +341,10 @@ export default function SmsCampaignsPage({ onExit }) {
                   const details = r.providerRaw || r.error || "-";
 
                   return (
-                    <div
-                      className="campaigns-row"
-                      key={`${r.codeSms}_${idx}`}
-                    >
+                    <div className="campaigns-row" key={`${r.codeSms}_${idx}`}>
                       <div className="truncate">{r.phone}</div>
                       <div>
-                        <span className={`pill ${r.status}`}>
-                          {r.status}
-                        </span>
+                        <span className={`pill ${r.status}`}>{r.status}</span>
                       </div>
 
                       <div
@@ -281,12 +364,11 @@ export default function SmsCampaignsPage({ onExit }) {
                 })}
               </div>
 
-              {Array.isArray(report.results) &&
-                report.results.length > 200 && (
-                  <p className="muted" style={{ marginTop: 10 }}>
-                    Mostrando os primeiros 200 resultados.
-                  </p>
-                )}
+              {Array.isArray(report.results) && report.results.length > 200 && (
+                <p className="muted" style={{ marginTop: 10 }}>
+                  Mostrando os primeiros 200 resultados.
+                </p>
+              )}
             </>
           )}
         </div>
