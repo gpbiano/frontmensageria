@@ -3,19 +3,48 @@ import { randomUUID } from "crypto";
 import { loadHumanState, updateHumanState } from "./humanStorage.js";
 
 /**
+ * Tipos aceitos para auditoria humana
+ */
+const ACTION_TYPES = new Set([
+  "note",
+  "takeover",
+  "release",
+  "tag_change",
+  "status_change"
+]);
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function safeArray(v) {
+  return Array.isArray(v) ? v : [];
+}
+
+function normalizeConvId(conversationId) {
+  if (conversationId === undefined || conversationId === null) return "";
+  return String(conversationId);
+}
+
+function normalizeType(type) {
+  const t = String(type || "").trim().toLowerCase();
+  return t;
+}
+
+/**
  * Lista todas as sessões humanas registradas.
  */
 export function listHumanSessions() {
-  const state = loadHumanState();
-  return state.sessions || [];
+  const state = loadHumanState() || {};
+  return safeArray(state.sessions);
 }
 
 /**
  * Lista todas as ações humanas registradas.
  */
 export function listHumanActions() {
-  const state = loadHumanState();
-  return state.actions || [];
+  const state = loadHumanState() || {};
+  return safeArray(state.actions);
 }
 
 /**
@@ -43,15 +72,24 @@ export function logHumanAction({
   type,
   note
 }) {
-  const timestamp = new Date().toISOString();
+  const timestamp = nowIso();
 
-  // ✅ conversa pode ser string/number ("conv_123" ou 123)
-  const convId = String(conversationId);
+  const convId = normalizeConvId(conversationId);
+  if (!convId) {
+    throw new Error("conversationId obrigatório");
+  }
 
-  // ✅ compatibilidade com legado
-  const name = agentName || agent || "Atendente";
-  const id = agentId || "unknown";
-  const role = agentRole || "agent";
+  const t = normalizeType(type);
+  if (!t || !ACTION_TYPES.has(t)) {
+    throw new Error(
+      `type inválido. Use: ${Array.from(ACTION_TYPES).join("|")}`
+    );
+  }
+
+  // compatibilidade legado
+  const name = String(agentName || agent || "Atendente").trim() || "Atendente";
+  const id = String(agentId || "unknown");
+  const role = String(agentRole || "agent");
 
   const action = {
     id: randomUUID(),
@@ -59,59 +97,64 @@ export function logHumanAction({
     agentId: id,
     agentName: name,
     agentRole: role,
-    type,
-    note: note || "",
+    type: t,
+    note: typeof note === "string" ? note : String(note || ""),
     createdAt: timestamp
   };
 
-  updateHumanState((state) => {
-    if (!state.actions) state.actions = [];
+  updateHumanState((stateRaw) => {
+    const state = stateRaw || {};
+
+    state.actions = safeArray(state.actions);
+    state.sessions = safeArray(state.sessions);
+
     state.actions.push(action);
 
-    // cria/atualiza sessão vinculada
-    if (!state.sessions) state.sessions = [];
-
-    let session = state.sessions.find((s) => String(s.conversationId) === convId);
+    let session = state.sessions.find((s) => String(s?.conversationId) === convId);
 
     if (!session) {
       session = {
         id: randomUUID(),
         conversationId: convId,
 
-        // ✅ auditoria inicial
+        // auditoria inicial
         firstAgentId: id !== "unknown" ? id : null,
         firstAgentName: name || null,
         firstAgentRole: role || null,
 
         createdAt: timestamp,
+        updatedAt: timestamp,
         lastActionAt: timestamp,
         closedAt: null,
 
-        // ✅ útil pra auditoria
+        // útil pra auditoria
         lastAgentId: id !== "unknown" ? id : null,
         lastAgentName: name || null,
-        lastAgentRole: role || null
+        lastAgentRole: role || null,
+
+        // campos opcionais
+        closedById: null,
+        closedByName: null,
+        closedByRole: null
       };
+
       state.sessions.push(session);
     } else {
       session.lastActionAt = timestamp;
+      session.updatedAt = timestamp;
 
       // mantém o primeiro agente (se não existia)
-      if (!session.firstAgentName && name) {
-        session.firstAgentName = name;
-      }
-      if (!session.firstAgentId && id !== "unknown") {
-        session.firstAgentId = id;
-      }
-      if (!session.firstAgentRole && role) {
-        session.firstAgentRole = role;
-      }
+      if (!session.firstAgentName && name) session.firstAgentName = name;
+      if (!session.firstAgentId && id !== "unknown") session.firstAgentId = id;
+      if (!session.firstAgentRole && role) session.firstAgentRole = role;
 
       // atualiza "último agente" sempre
       if (id !== "unknown") session.lastAgentId = id;
       if (name) session.lastAgentName = name;
       if (role) session.lastAgentRole = role;
     }
+
+    return state;
   });
 
   return action;
@@ -125,16 +168,21 @@ export function logHumanAction({
  */
 export function closeHumanSession(conversationId, closedBy) {
   let updatedSession = null;
-  const convId = String(conversationId);
+  const convId = normalizeConvId(conversationId);
+  if (!convId) throw new Error("conversationId obrigatório");
 
-  updateHumanState((state) => {
-    if (!state.sessions) state.sessions = [];
+  updateHumanState((stateRaw) => {
+    const state = stateRaw || {};
+    state.sessions = safeArray(state.sessions);
 
-    const session = state.sessions.find((s) => String(s.conversationId) === convId);
-    if (!session) return;
+    const session = state.sessions.find((s) => String(s?.conversationId) === convId);
+    if (!session) return state;
 
-    session.closedAt = new Date().toISOString();
-    session.lastActionAt = session.closedAt;
+    // se já estiver fechada, só retorna a sessão sem alterar o closedAt
+    const closedAt = session.closedAt || nowIso();
+    session.closedAt = closedAt;
+    session.lastActionAt = closedAt;
+    session.updatedAt = closedAt;
 
     if (closedBy && typeof closedBy === "object") {
       session.closedById = closedBy.closedById || session.closedById || null;
@@ -143,6 +191,7 @@ export function closeHumanSession(conversationId, closedBy) {
     }
 
     updatedSession = session;
+    return state;
   });
 
   return updatedSession;

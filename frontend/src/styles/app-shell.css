@@ -1,0 +1,228 @@
+:root {
+  --bg: #020617;
+  --panel: rgba(2, 6, 23, 0.45);
+  --panelBorder: rgba(148, 163, 184, 0.12);
+  --text: rgba(226, 232, 240, 0.92);
+  --muted: rgba(148, 163, 184, 0.85);
+
+  --accent: #34d399;
+  --accent2: #10b981;
+
+  --radius: 14px;
+}
+
+.gp-shell {
+  height: 100vh;
+  display: flex;
+  background: radial-gradient(
+      1200px 600px at 20% 0%,
+      rgba(16, 185, 129, 0.18),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 450px at 80% 10%,
+      rgba(52, 211, 153, 0.10),
+      transparent 55%
+    ),
+    var(--bg);
+  color: var(--text);
+}
+
+.gp-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* ---------------- Sidebar ---------------- */
+
+.gp-sidebar {
+  width: 260px;
+  transition: width 0.25s ease;
+  border-right: 1px solid var(--panelBorder);
+  background: linear-gradient(
+      180deg,
+      rgba(2, 6, 23, 0.65),
+      rgba(2, 6, 23, 0.35)
+    );
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gp-sidebar.is-collapsed {
+  width: 74px;
+}
+
+.gp-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--panelBorder);
+  position: relative;
+}
+
+.gp-logo-badge {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.gp-logo-text {
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: rgba(226, 232, 240, 0.95);
+}
+
+.gp-brand-title {
+  line-height: 1.1;
+}
+
+.gp-brand-name {
+  font-weight: 800;
+  font-size: 16px;
+}
+
+.gp-brand-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.gp-collapse-btn {
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.45);
+  color: rgba(226, 232, 240, 0.85);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.gp-collapse-btn:hover {
+  border-color: rgba(52, 211, 153, 0.28);
+  color: rgba(226, 232, 240, 0.95);
+}
+
+.gp-nav {
+  padding: 10px 10px 14px;
+  overflow: auto;
+}
+
+.gp-nav__section {
+  margin-bottom: 8px;
+}
+
+.gp-nav__sectionBtn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.86);
+  cursor: pointer;
+}
+.gp-nav__sectionBtn:hover {
+  background: rgba(15, 23, 42, 0.35);
+  border-color: rgba(148, 163, 184, 0.10);
+}
+.gp-nav__sectionBtn.is-active {
+  background: rgba(52, 211, 153, 0.16);
+  border-color: rgba(52, 211, 153, 0.22);
+  color: rgba(226, 232, 240, 0.95);
+}
+
+.gp-nav__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.gp-nav__label {
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.gp-nav__chev {
+  margin-left: auto;
+  opacity: 0.75;
+  transition: transform 0.18s ease;
+}
+.gp-nav__chev.is-open {
+  transform: rotate(180deg);
+}
+
+.gp-nav__items {
+  padding: 6px 8px 0 42px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gp-nav__item {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.10);
+  background: rgba(2, 6, 23, 0.20);
+  color: rgba(226, 232, 240, 0.80);
+  cursor: pointer;
+}
+.gp-nav__item:hover {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.28);
+}
+.gp-nav__item.is-active {
+  border-color: rgba(52, 211, 153, 0.22);
+  background: rgba(16, 185, 129, 0.16);
+  color: rgba(226, 232, 240, 0.95);
+}
+
+/* ---------------- Page placeholder ---------------- */
+
+.gp-page {
+  min-height: calc(100vh - 32px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.gp-page__card {
+  width: min(900px, 100%);
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--panelBorder);
+  padding: 18px;
+}
+
+.gp-page__h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.gp-page__p {
+  margin: 0 0 6px;
+  color: rgba(226, 232, 240, 0.86);
+}
+
+.gp-page__muted {
+  margin: 0;
+  color: rgba(148, 163, 184, 0.85);
+}

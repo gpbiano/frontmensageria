@@ -1,489 +1,199 @@
-/* =============================================
-   LOGIN – FUNDO FULLSCREEN + REDE NEURAL
-============================================= */
+/* ======================================================
+   LOGIN — Cliente OnLine (estilo SaaS moderno)
+====================================================== */
 
 .login-page {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
   height: 100vh;
+  width: 100vw;
+  overflow: hidden;
 
   display: flex;
   align-items: center;
   justify-content: center;
 
-  padding: 32px;
-  box-sizing: border-box;
-
-  background: radial-gradient(circle at top left, #020617 0, #020617 60%, #000 100%);
-  overflow: hidden;
-  font-family: "Montserrat", system-ui, -apple-system, BlinkMacSystemFont,
-    "SF Pro Text", sans-serif;
+  /* Fundo tecnológico */
+  background:
+    radial-gradient(
+      1200px 600px at 10% 20%,
+      rgba(34, 197, 94, 0.18),
+      transparent 60%
+    ),
+    radial-gradient(
+      800px 500px at 90% 80%,
+      rgba(56, 189, 248, 0.12),
+      transparent 60%
+    ),
+    linear-gradient(135deg, #020617 0%, #020617 40%, #020617 100%);
 }
 
-/* Grid + glow de rede neural (mais visível) */
+/* partículas fake (leve ruído visual) */
 .login-page::before {
   content: "";
   position: absolute;
   inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg width='160' height='160' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Ccircle cx='1' cy='1' r='1'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 160px 160px;
   pointer-events: none;
-  opacity: 0.22;
-
-  background-image:
-      /* grid */
-      linear-gradient(to right, rgba(30, 64, 78, 0.32) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(30, 64, 78, 0.32) 1px, transparent 1px),
-      /* “nuvens” */
-      radial-gradient(circle at 18% 25%, rgba(56, 189, 248, 0.22) 0, transparent 50%),
-      radial-gradient(circle at 82% 80%, rgba(34, 197, 94, 0.20) 0, transparent 55%);
-  background-size:
-      70px 70px,
-      70px 70px,
-      auto,
-      auto;
 }
 
-/* =============================================
-   CARD CENTRAL
-============================================= */
-
+/* Card */
 .login-card {
   position: relative;
-  width: 100%;
-  max-width: 1180px;
-  display: flex;
-
-  border-radius: 32px;
-  overflow: hidden;
-
-  background: radial-gradient(circle at top, #020617 0, #020617 70%, #000 100%);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.8),
-    0 0 0 1px rgba(15, 23, 42, 0.85);
-}
-
-/* =============================================
-   BRANDING – COLUNA ESQUERDA (VERSÃO ESCURA)
-============================================= */
-
-.login-brand {
-  width: 40%;
-  min-width: 330px;
-
-  padding: 40px 36px 30px;
-
-  display: flex;
-  flex-direction: column;
-
-  /* versão escura, puxando para #14532d / #166534 */
-  background:
-    radial-gradient(circle at top left, #16a34a 0, #166534 38%, #14532d 65%, #052e16 100%);
-  color: #e5e7eb;
-}
-
-/* CÍRCULO DO LOGO (glow + gradiente) */
-.login-logo-ring {
-  width: 72px;
-  height: 72px;
-  border-radius: 999px;
-
-  padding: 4px; /* borda interna para o logo respirar */
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background:
-    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.10), rgba(20, 83, 45, 0.98));
-  box-shadow:
-    0 0 0 1px rgba(250, 250, 250, 0.06),
-    0 12px 26px rgba(15, 118, 110, 0.55);
-
-  overflow: visible; /* garante que o glow não seja cortado */
-}
-
-/* IMAGEM DO LOGO DENTRO DO CÍRCULO */
-.login-logo-img {
-  width: 50px;
-  height: 50px;
-
-  border-radius: 999px;
-  object-fit: contain;
-
-  background: transparent;
-  box-shadow: none; /* glow fica só no círculo, não na imagem */
-}
-
-
-
-/* ---------------- TITULOS ---------------- */
-
-.login-brand-title {
-  display: flex;
-  flex-direction: column;
-}
-
-.login-brand-company {
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: #bbf7d0;
-  opacity: 0.95;
-}
-
-.login-brand-product {
-  font-size: 18px;
-  font-weight: 600;
-  margin-top: 2px;
-}
-
-.login-brand-tagline {
-  font-size: 13px;
-  opacity: 0.9;
-  margin-top: 2px;
-}
-
-/* ---------------- CONTEÚDO ---------------- */
-
-.login-brand-main h1 {
-  font-size: 32px;
-  margin-bottom: 18px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.login-brand-main p {
-  font-size: 14px;
-  line-height: 1.5;
-  opacity: 0.94;
-  margin-bottom: 14px;
-}
-
-/* Lista com checks animados */
-.login-brand-highlights {
-  list-style: none;
-  padding: 0;
-  margin: 6px 0 0;
-  font-size: 14px;
-  color: #dcfce7;
-}
-
-.login-brand-highlights li {
-  position: relative;
-  padding-left: 30px;
-  margin-bottom: 10px;
-}
-
-/* esconde o primeiro caractere “✓” do texto */
-.login-brand-highlights li::first-letter {
-  color: transparent;
-}
-
-/* círculo + check custom + animação */
-.login-brand-highlights li::before {
-  content: "✓";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  font-size: 12px;
-  color: #bbf7d0;
-  background: rgba(6, 95, 70, 0.96);
-  box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.6);
-
-  animation: login-check-pulse 2.8s ease-in-out infinite;
-}
-
-/* pequeno stagger nas animações */
-.login-brand-highlights li:nth-child(2)::before {
-  animation-delay: 0.25s;
-}
-.login-brand-highlights li:nth-child(3)::before {
-  animation-delay: 0.5s;
-}
-.login-brand-highlights li:nth-child(4)::before {
-  animation-delay: 0.75s;
-}
-
-/* Rodapé com © 2025 GP Labs fixo no final */
-.login-brand-footer {
-  margin-top: auto;
-  padding-top: 28px;
-
-  font-size: 12px;
-  color: #e5e7eb;
-  opacity: 0.55;
-}
-
-/* =============================================
-   FORMULÁRIO – COLUNA DIREITA
-============================================= */
-
-.login-form-wrapper {
-  flex: 1;
-  padding: 40px 44px 30px;
-
-  position: relative;
-  overflow: hidden;
-
-  color: #e5e7eb;
-
-  /* gradiente base (será animado via ::before) */
-  background: radial-gradient(circle at top right, #020617 0, #020617 65%, #020617 100%);
-}
-
-/* Gradiente animado suave (glow de rede neural) */
-.login-form-wrapper::before {
-  content: "";
-  position: absolute;
-  inset: -40%;
-  pointer-events: none;
-  z-index: 0;
-
-  background: radial-gradient(circle at 0% 0%, rgba(56, 189, 248, 0.09) 0, transparent 55%),
-              radial-gradient(circle at 100% 100%, rgba(34, 197, 94, 0.12) 0, transparent 55%);
-  opacity: 0.9;
-
-  transform: translate3d(0, 0, 0);
-  animation: login-gradient-move 18s ease-in-out infinite alternate;
-}
-
-/* conteúdo acima do glow */
-.login-form-header,
-.login-form,
-.login-meta-info {
-  position: relative;
   z-index: 1;
+
+  width: 100%;
+  max-width: 460px;
+
+  background: rgba(2, 6, 23, 0.75);
+  backdrop-filter: blur(16px);
+
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+
+  padding: 32px 32px 28px;
+  box-shadow:
+    0 40px 80px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-/* ---------------- HEADER ---------------- */
-
-.login-form-header h2 {
-  margin: 0 0 6px;
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.login-env-badge {
-  display: inline-flex;
+/* Header do login */
+.login-header {
+  display: flex;
   align-items: center;
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 12px;
-
-  background: rgba(22, 163, 74, 0.18);
-  border: 1px solid rgba(34, 197, 94, 0.45);
-  color: #4ade80;
-
-  margin-bottom: 10px;
+  gap: 12px;
+  margin-bottom: 18px;
 }
 
-.login-form-header p {
-  margin: 0;
-  font-size: 13px;
-  color: #9ca3af;
+.login-logo {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
 }
 
-/* ---------------- ERRO ---------------- */
-
-.login-error {
-  margin: 10px 0;
-  padding: 9px 11px;
-  border-radius: 10px;
-  background: rgba(220, 38, 38, 0.16);
-  border: 1px solid rgba(248, 113, 113, 0.75);
-  color: #fecaca;
-  font-size: 12px;
+.login-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #e5e7eb;
 }
 
-/* ---------------- FORM ---------------- */
-
-.login-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+.login-title span {
+  color: #22c55e;
 }
 
-.login-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-}
-
-.login-field label {
-  color: #d1d5db;
-}
-
-.login-field input {
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(15, 23, 42, 0.96);
-  color: #f9fafb;
-
-  padding: 12px 16px;
+/* Subtexto */
+.login-subtitle {
   font-size: 14px;
+  color: #94a3b8;
+  margin-bottom: 24px;
+}
+
+/* Inputs */
+.login-card input {
+  width: 100%;
+  background: rgba(2, 6, 23, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: #e5e7eb;
   outline: none;
 }
 
-.login-field input::placeholder {
-  color: #6b7280;
-}
-
-.login-field input:focus {
+.login-card input:focus {
   border-color: #22c55e;
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.3);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.4);
 }
 
-/* ---------------- OPÇÕES ---------------- */
+/* Botão */
+.login-submit {
+  margin-top: 20px;
+  width: 100%;
+  border-radius: 999px;
+  padding: 12px 16px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #022c22;
+  border: none;
+  cursor: pointer;
+}
 
-.login-options {
+.login-submit:hover {
+  filter: brightness(1.05);
+}
+
+/* Footer info */
+.login-footer {
+  margin-top: 16px;
+  font-size: 12px;
+  color: #64748b;
+  text-align: center;
+}
+/* Link "Esqueci minha senha" */
+.login-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  color: #38bdf8; /* azul claro SaaS */
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.login-link:hover {
+  text-decoration: underline;
+  color: #7dd3fc;
+}
+
+/* Garante que não fique branco por herança */
+.login-link:disabled,
+.login-link:active,
+.login-link:focus {
+  color: #38bdf8;
+}
+.login-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 4px;
-  font-size: 12px;
-  color: #9ca3af;
+  margin-top: 10px;
 }
 
 .login-remember {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  font-size: 13px;
+  color: #cbd5f5;
+  cursor: pointer;
 }
 
 .login-remember input {
-  width: 14px;
-  height: 14px;
-  accent-color: #22c55e;
+  accent-color: #22c55e; /* verde da marca */
+}
+/* Loading dentro do botão */
+.btn-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
-.login-link-button {
-  border: none;
-  background: none;
-  color: #60a5fa;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-}
-
-.login-link-button:hover {
-  text-decoration: underline;
-}
-
-/* ---------------- BOTÃO ENTRAR ---------------- */
-
-.login-submit {
-  margin-top: 6px;
-  border: none;
+.btn-spinner {
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
-  padding: 14px 18px;
-
-  font-size: 14px;
-  font-weight: 600;
-
-  background: linear-gradient(to right, #22c55e, #16a34a);
-  color: #022c22;
-
-  box-shadow: 0 16px 36px rgba(34, 197, 94, 0.45);
-  cursor: pointer;
-
-  transition:
-    transform 0.12s ease,
-    box-shadow 0.12s ease,
-    filter 0.12s ease;
+  border: 2px solid rgba(2, 44, 34, 0.35); /* base */
+  border-top-color: rgba(2, 44, 34, 0.95);  /* destaque */
+  animation: btnSpin 0.8s linear infinite;
 }
 
-.login-submit:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 22px 52px rgba(34, 197, 94, 0.65);
-  filter: brightness(1.04);
+@keyframes btnSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
+/* Estado disabled mais “premium” */
 .login-submit:disabled {
-  opacity: 0.65;
-  cursor: default;
-  box-shadow: none;
-}
-
-/* ---------------- META INFO ---------------- */
-
-.login-meta-info {
-  margin-top: 20px;
-  font-size: 12px;
-  color: #6b7280;
   opacity: 0.85;
-}
-
-/* =============================================
-   ANIMAÇÕES
-============================================= */
-
-@keyframes login-check-pulse {
-  0% {
-    transform: translateY(-50%) scale(1);
-    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.6);
-  }
-  40% {
-    transform: translateY(-50%) scale(1.12);
-    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.25);
-  }
-  100% {
-    transform: translateY(-50%) scale(1);
-    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.6);
-  }
-}
-
-@keyframes login-gradient-move {
-  0% {
-    transform: translate3d(-6%, -4%, 0);
-    opacity: 0.9;
-  }
-  50% {
-    transform: translate3d(4%, 3%, 0);
-    opacity: 1;
-  }
-  100% {
-    transform: translate3d(7%, 6%, 0);
-    opacity: 0.85;
-  }
-}
-
-/* =============================================
-   RESPONSIVO
-============================================= */
-
-@media (max-width: 880px) {
-  .login-page {
-    padding: 16px;
-  }
-
-  .login-card {
-    flex-direction: column;
-    max-width: 500px;
-    border-radius: 28px;
-  }
-
-  .login-brand {
-    width: 100%;
-    padding: 26px 22px 18px;
-  }
-
-  .login-form-wrapper {
-    padding: 24px 22px 20px;
-  }
-
-  .login-brand-main h1 {
-    font-size: 26px;
-  }
+  cursor: not-allowed;
+  filter: saturate(0.95);
 }

@@ -8,36 +8,25 @@ const EMOJI_PALETTE = [
   "❤️","💚","💙","💛","🧡","🤍","🤝","✅"
 ];
 
+// ======================================================
+// HELPERS – IDENTIDADE / TEXTO / DATA
+// ======================================================
 function inferSender(msg) {
-  const from = (msg?.from ?? msg?.sender ?? msg?.role ?? "").toString().toLowerCase();
-  const dir = (msg?.direction ?? msg?.dir ?? "").toString().toLowerCase();
-  const channel = (msg?.channel ?? msg?.origin ?? msg?.source ?? "").toString().toLowerCase();
+  const from = String(msg?.from ?? msg?.sender ?? msg?.role ?? "").toLowerCase();
+  const dir = String(msg?.direction ?? msg?.dir ?? "").toLowerCase();
+  const channel = String(msg?.channel ?? msg?.source ?? "").toLowerCase();
 
-  if (channel === "chatbot" || channel === "bot") return "bot";
-  if (from === "bot" || msg?.isBot || msg?.fromBot) return "bot";
+  if (from === "bot" || msg?.isBot || msg?.fromBot || channel === "bot") return "bot";
+  if (from === "agent" || from === "human" || from === "attendant") return "agent";
+  if (from === "system" || msg?.isSystem) return "system";
 
-  if (from === "visitor" || from === "client" || from === "customer" || from === "user") return "client";
-  if (from === "agent" || from === "attendant" || from === "human") return "agent";
-
-  if (dir === "in" || dir === "inbound") return "client";
-  if (dir === "out" || dir === "outbound") return "agent";
-
-  if (typeof msg?.fromMe === "boolean") return msg.fromMe ? "agent" : "client";
+  if (dir === "in") return "client";
+  if (dir === "out") return "agent";
 
   return "client";
 }
 
 function formatMessageText(msg) {
-  if (msg?.type === "system") {
-    return (
-      msg?.textPublic ||
-      msg?.text ||
-      msg?.message ||
-      msg?.event ||
-      "Atualização do atendimento"
-    );
-  }
-
   return (
     msg?.text?.body ??
     msg?.text ??
@@ -45,20 +34,16 @@ function formatMessageText(msg) {
     msg?.message ??
     msg?.content ??
     msg?.payload?.text ??
+    msg?.event ??
     ""
   );
 }
 
 function formatTimestamp(msg) {
-  const raw = msg?.timestamp ?? msg?.createdAt ?? msg?.sentAt ?? msg?.updatedAt ?? null;
+  const raw = msg?.createdAt ?? msg?.timestamp ?? msg?.sentAt ?? null;
   if (!raw) return "";
-
-  let date;
-  if (typeof raw === "number") date = raw > 10_000_000_000 ? new Date(raw) : new Date(raw * 1000);
-  else date = new Date(raw);
-
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString();
+  const d = typeof raw === "number" ? new Date(raw) : new Date(raw);
+  return isNaN(d.getTime()) ? "" : d.toLocaleString();
 }
 
 function inferMediaType(file) {
@@ -70,12 +55,15 @@ function inferMediaType(file) {
   return "file";
 }
 
+// ======================================================
+// COMPONENT
+// ======================================================
 export default function ChatPanel({
   conversation,
   messages,
   loadingMessages,
   onSendText,
-  onSendMedia, // (opcional) {type, mediaUrl, caption}
+  onSendMedia,
   onChangeStatus
 }) {
   const [draft, setDraft] = useState("");
@@ -90,34 +78,19 @@ export default function ChatPanel({
 
   const headerName =
     conversation?.contactName ||
-    conversation?.contact?.name ||
     conversation?.phone ||
-    conversation?.contactPhone ||
-    "Contato sem nome";
-
-  const headerPhone =
-    conversation?.phone ||
-    conversation?.contactPhone ||
-    conversation?.contact?.phone ||
-    "—";
+    "Contato";
 
   const normalizedMessages = useMemo(() => {
     const arr = Array.isArray(messages) ? messages : [];
     return arr.map((m, idx) => ({
-      __key:
-        m?.id ||
-        m?._id ||
-        m?.messageId ||
-        m?.waMessageId ||
-        m?.timestamp ||
-        `${conversation?.id || "c"}_${idx}_${m?.createdAt || ""}`,
+      __key: m?.id || `${conversation?.id}_${idx}`,
       ...m
     }));
   }, [messages, conversation?.id]);
 
   useEffect(() => {
-    if (!bottomRef.current) return;
-    bottomRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [normalizedMessages, loadingMessages]);
 
   useEffect(() => {
@@ -125,235 +98,126 @@ export default function ChatPanel({
     setShowEmoji(false);
   }, [conversation?.id]);
 
-  function handleSubmit(e) {
+  // ======================================================
+  // SEND
+  // ======================================================
+  async function handleSubmit(e) {
     e.preventDefault();
     const text = draft.trim();
-    if (!text || !conversation || isClosed || sending) return;
+    if (!text || isClosed || sending) return;
 
     setSending(true);
-    Promise.resolve(onSendText?.(text))
-      .finally(() => {
-        setSending(false);
-        setDraft("");
-        setShowEmoji(false);
-        textareaRef.current?.focus();
-      });
-  }
-
-  function handleEmojiClick(emoji) {
-    setDraft((prev) => prev + emoji);
-    textareaRef.current?.focus();
-  }
-
-  function handleStatusChange(e) {
-    const newStatus = e.target.value;
-    if (!conversation || !onChangeStatus) return;
-    if (conversation.status === newStatus) return;
-
-    // ✅ regra: não reabre conversa (histórico é outra tela)
-    if (newStatus === "open") return;
-
-    onChangeStatus(conversation.id, newStatus);
-  }
-
-  function handleCloseClick() {
-    if (!conversation || !onChangeStatus) return;
-    if (conversation.status === "closed") return;
-    onChangeStatus(conversation.id, "closed");
-  }
-
-  function handleKeyDown(e) {
-    // Enter envia, Shift+Enter quebra linha
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      // dispara submit manualmente
-      handleSubmit(e);
-    }
-  }
-
-  function openFilePicker() {
-    if (isClosed) return;
-    fileRef.current?.click();
-  }
-
-  async function handleFilePicked(e) {
     try {
-      const file = e.target.files?.[0];
-      if (!file || isClosed) return;
-
-      // limpa input pra permitir enviar o mesmo arquivo duas vezes
-      e.target.value = "";
-
-      // Se você ainda não implementou upload, não quebra:
-      if (!onSendMedia) {
-        alert("Envio de anexo ainda não está habilitado nesta versão.");
-        return;
-      }
-
-      // ⚠️ Aqui existem duas opções:
-      // A) Seu onSendMedia já aceita { file } e faz upload internamente
-      // B) Seu onSendMedia espera { type, mediaUrl, caption } (como você comentou)
-      //
-      // Vou usar a opção B (mediaUrl), assumindo que você já tem um upload em algum lugar.
-      // Se ainda não tiver, me manda sua rota de upload que eu encaixo.
-
-      // Placeholder seguro: criar um ObjectURL (funciona no frontend, mas NÃO serve pro WhatsApp)
-      // Ideal: você trocar por upload real e usar a URL pública retornada.
-      const tempUrl = URL.createObjectURL(file);
-
-      const type = inferMediaType(file);
-      const caption = draft.trim() || "";
-
-      setSending(true);
-      await onSendMedia({ type, mediaUrl: tempUrl, caption });
+      await onSendText?.(text);
       setDraft("");
-      setShowEmoji(false);
       textareaRef.current?.focus();
-    } catch (err) {
-      console.error("Erro ao enviar anexo:", err);
     } finally {
       setSending(false);
     }
   }
 
+  async function handleFilePicked(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || isClosed || !onSendMedia) return;
+
+    const type = inferMediaType(file);
+    const mediaUrl = URL.createObjectURL(file);
+    const caption = draft.trim();
+
+    setSending(true);
+    try {
+      await onSendMedia({ type, mediaUrl, caption });
+      setDraft("");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // ======================================================
+  // RENDER
+  // ======================================================
+  let humanMarkerShown = false;
+
   return (
     <div className="chat-panel">
+      {/* HEADER */}
       <header className="chat-panel-header">
-        <div className="chat-panel-header-left">
-          <div className="chat-panel-avatar">
-            {String(headerName).charAt(0).toUpperCase()}
-          </div>
-          <div>
-            <div className="chat-header-name">{headerName}</div>
-            <div className="chat-header-phone">{headerPhone}</div>
-          </div>
+        <div>
+          <strong>{headerName}</strong>
         </div>
 
-        <div className="chat-panel-header-right">
-          <div className="chat-panel-status-wrapper">
-            <span style={{ fontSize: 12, marginRight: 6 }}>Status:</span>
-            <select
-              value={conversation?.status || "open"}
-              onChange={handleStatusChange}
-              disabled={!conversation}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "#e5e7eb",
-                fontSize: 12,
-                outline: "none",
-                cursor: conversation ? "pointer" : "default"
-              }}
-            >
-              {/* ✅ não expõe reabertura */}
-              {conversation?.status !== "closed" ? (
-                <option value="open">Aberta</option>
-              ) : null}
-              <option value="closed">Encerrada</option>
-            </select>
-          </div>
-
+        <div>
           {conversation?.status !== "closed" && (
-            <button
-              type="button"
-              className="chat-panel-close-btn"
-              onClick={handleCloseClick}
-            >
-              Encerrar atendimento
+            <button onClick={() => onChangeStatus?.(conversation.id, "closed")}>
+              Encerrar
             </button>
           )}
         </div>
       </header>
 
+      {/* MESSAGES */}
       <div className="chat-messages">
-        {loadingMessages && (
-          <div className="chat-history-empty">Carregando mensagens...</div>
+        {loadingMessages && <div className="chat-history-empty">Carregando…</div>}
+
+        {!loadingMessages && normalizedMessages.length === 0 && (
+          <div className="chat-history-empty">Nenhuma mensagem ainda.</div>
         )}
 
-        {!loadingMessages &&
-          (!normalizedMessages || normalizedMessages.length === 0) && (
-            <div className="chat-history-empty">
-              Nenhuma mensagem nesta conversa ainda.
-            </div>
-          )}
-
         {normalizedMessages.map((msg) => {
-          if (msg?.type === "system") {
-            const text = formatMessageText(msg);
-            const ts = formatTimestamp(msg);
-            return (
-              <div
-                key={msg.__key}
-                className="message-row"
-                style={{ justifyContent: "center" }}
-              >
-                <div
-                  style={{
-                    maxWidth: 560,
-                    background: "rgba(148,163,184,0.12)",
-                    border: "1px solid rgba(148,163,184,0.25)",
-                    color: "#e5e7eb",
-                    padding: "10px 12px",
-                    borderRadius: 14,
-                    textAlign: "center"
-                  }}
-                >
-                  <div className="chat-message-text">{text}</div>
-                  {ts && (
-                    <div
-                      className="message-timestamp"
-                      style={{ opacity: 0.7, marginTop: 6 }}
-                    >
-                      {ts}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          }
-
-          const sender = inferSender(msg); // client | agent | bot
-          const isInbound = sender === "client";
-          const isBot = sender === "bot";
-
-          const rowClass = isInbound
-            ? "message-row message-row-in"
-            : "message-row message-row-out";
-          const bubbleClass = isInbound
-            ? "message-bubble-in"
-            : "message-bubble-out";
-
+          const sender = inferSender(msg);
           const text = formatMessageText(msg);
           const ts = formatTimestamp(msg);
 
-          const senderLabel = isInbound
-            ? (conversation?.contactName || conversation?.phone || "Cliente")
-            : (isBot
-                ? "🤖 Bot"
-                : `👤 ${msg.senderName || msg.byName || msg.agentName || "Atendente"}`);
+          const isBot = sender === "bot";
+          const isAgent = sender === "agent";
+          const isClient = sender === "client";
+          const isSystem = sender === "system";
+
+          const showHumanMarker = isAgent && !humanMarkerShown;
+          if (showHumanMarker) humanMarkerShown = true;
 
           return (
-            <div key={msg.__key} className={rowClass}>
-              <div className={bubbleClass}>
+            <div key={msg.__key}>
+              {/* 🔔 MARCADOR HUMANO */}
+              {showHumanMarker && (
+                <div className="chat-audit-marker human">
+                  👤 Atendimento humano iniciado
+                </div>
+              )}
+
+              {/* 🔔 SISTEMA */}
+              {isSystem && (
+                <div className="chat-audit-marker system">
+                  {text}
+                </div>
+              )}
+
+              {/* 💬 MENSAGEM */}
+              {!isSystem && (
                 <div
-                  style={{
-                    fontSize: 12,
-                    color: "rgba(229,231,235,0.7)",
-                    marginBottom: 6
-                  }}
+                  className={
+                    "message-row " +
+                    (isClient ? "message-row-in" : "message-row-out")
+                  }
                 >
-                  {senderLabel}
-                </div>
+                  <div className="message-bubble">
+                    <div className="message-author">
+                      {isBot && "🤖 Bot"}
+                      {isAgent && "👤 Humano"}
+                      {isClient && "Cliente"}
+                    </div>
 
-                <div className="chat-message-text">
-                  {text || "[mensagem sem texto]"}
-                </div>
+                    <div className="chat-message-text">
+                      {text || "[mensagem sem texto]"}
+                    </div>
 
-                <div className="message-timestamp">
-                  {ts}
-                  {isBot ? " · Bot" : (isInbound ? " · Cliente" : " · Humano")}
+                    <div className="message-timestamp">
+                      {ts}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           );
         })}
@@ -363,74 +227,45 @@ export default function ChatPanel({
 
       {/* COMPOSER */}
       <form className="chat-composer" onSubmit={handleSubmit}>
-        {showEmoji && !isClosed && (
+        {!isClosed && showEmoji && (
           <div className="chat-emoji-picker">
-            {EMOJI_PALETTE.map((emoji) => (
-              <button
-                key={emoji}
-                type="button"
-                className="chat-emoji-item"
-                onClick={() => handleEmojiClick(emoji)}
-              >
-                {emoji}
+            {EMOJI_PALETTE.map((e) => (
+              <button key={e} type="button" onClick={() => setDraft(d => d + e)}>
+                {e}
               </button>
             ))}
           </div>
         )}
 
-        {/* Barra esquerda: emoji + anexo */}
-        <div className="chat-composer-actions">
-          <button
-            type="button"
-            className="chat-composer-emoji-btn"
-            onClick={() => !isClosed && setShowEmoji((v) => !v)}
-            disabled={isClosed}
-            title="Inserir emoji"
-          >
-            😊
-          </button>
+        <button type="button" onClick={() => !isClosed && setShowEmoji(v => !v)}>
+          😊
+        </button>
 
-          <button
-            type="button"
-            className="chat-composer-attach-btn"
-            onClick={openFilePicker}
-            disabled={isClosed}
-            title="Enviar anexo"
-          >
-            📎
-          </button>
+        <button type="button" onClick={() => fileRef.current?.click()}>
+          📎
+        </button>
 
-          <input
-            ref={fileRef}
-            type="file"
-            style={{ display: "none" }}
-            onChange={handleFilePicked}
-            accept="image/*,video/*,audio/*,application/pdf"
-          />
-        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          hidden
+          onChange={handleFilePicked}
+          accept="image/*,video/*,audio/*,application/pdf"
+        />
 
         <textarea
           ref={textareaRef}
-          className="chat-composer-textarea"
+          value={draft}
+          disabled={isClosed}
           placeholder={
             isClosed
-              ? "Atendimento encerrado. Não é possível enviar novas mensagens."
+              ? "Atendimento encerrado."
               : "Digite uma mensagem..."
           }
-          value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={isClosed}
-          rows={1}
         />
 
-        <button
-          type="submit"
-          className="chat-composer-send"
-          disabled={isClosed || sending || !draft.trim()}
-          title="Enviar"
-        >
-          <span style={{ marginRight: 8 }}>📨</span>
+        <button type="submit" disabled={isClosed || sending || !draft.trim()}>
           Enviar
         </button>
       </form>

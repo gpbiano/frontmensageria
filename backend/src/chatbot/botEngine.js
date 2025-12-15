@@ -21,6 +21,17 @@ export async function callGenAIBot({
 
   const client = new OpenAI({ apiKey });
 
+    // ✅ Se já está em atendimento humano, o bot NÃO responde
+  if (String(conversation?.currentMode || "").toLowerCase() === "human") {
+    return { replyText: null, handoff: true };
+  }
+
+  // ✅ Se houve pedido explícito de humano (marcado na conversa), também não responde
+  if (conversation?.handoffRequestedAt) {
+    return { replyText: null, handoff: true };
+  }
+
+
   // ===============================
   // MONTA O SYSTEM PROMPT
   // ===============================

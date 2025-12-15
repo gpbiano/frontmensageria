@@ -2,13 +2,15 @@
 import "../../styles/chat-human.css";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Volume2, VolumeX } from "lucide-react";
+
 import {
   fetchConversations,
   fetchMessages,
   sendTextMessage,
   sendMediaMessage,
   updateConversationStatus
-} from "../../api"; // ✅ IMPORTANTÍSSIMO: use o api.ts (sem .js)
+} from "../../api"; // ✅ use o api.ts (sem .js)
 
 import ChatPanel from "../../components/ChatPanel.jsx";
 
@@ -27,7 +29,7 @@ function labelChannel(source) {
 // Tela de ATENDIMENTO AO VIVO (conversas abertas)
 export default function ChatHumanPage() {
   const [conversations, setConversations] = useState([]);
-  const [selectedConversationId, setSelectedConversationId] = useState(null); // ✅ string | null
+  const [selectedConversationId, setSelectedConversationId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -36,7 +38,7 @@ export default function ChatHumanPage() {
   // sempre "open" aqui
   const statusFilter = "open";
 
-  const [unreadCounts, setUnreadCounts] = useState({}); // ✅ Record<string, number>
+  const [unreadCounts, setUnreadCounts] = useState({});
   const prevOpenConversationsCount = useRef(0);
   const prevConversationsMapRef = useRef(new Map());
 
@@ -46,10 +48,11 @@ export default function ChatHumanPage() {
   const [isTabActive, setIsTabActive] = useState(!document.hidden);
   const lastActivityRef = useRef(Date.now());
 
+  // ✅ Config de notificação
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [quietHoursEnabled, setQuietHoursEnabled] = useState(false);
 
-  // ✅ UI local: tags + notas do agente (persistência no backend)
+  // ✅ UI local: tags + notas
   const [tagInput, setTagInput] = useState("");
   const [localTags, setLocalTags] = useState([]);
   const [localNotes, setLocalNotes] = useState("");
@@ -70,7 +73,10 @@ export default function ChatHumanPage() {
   }
 
   function playNotification(type, { intensity = "soft", force = false } = {}) {
+    // ✅ Som desligado
     if (!notificationsEnabled && !force) return;
+
+    // ✅ Silêncio por horário
     if (!force && isWithinQuietHours()) return;
 
     let file = null;
@@ -144,7 +150,7 @@ export default function ChatHumanPage() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("mousemove", markActivity);
       window.removeEventListener("keydown", markActivity);
-      window.removeEventListener("click", markActivity); // ✅ faltava
+      window.removeEventListener("click", markActivity);
       window.removeEventListener("scroll", markActivity);
     };
   }, []);
@@ -156,7 +162,7 @@ export default function ChatHumanPage() {
 
   const loadConversations = useCallback(
     async (options = { playSoundOnNew: false }) => {
-      if (loadingConvsRef.current) return; // ✅ evita overlap
+      if (loadingConvsRef.current) return;
       loadingConvsRef.current = true;
 
       try {
@@ -165,7 +171,6 @@ export default function ChatHumanPage() {
         const data = await fetchConversations(statusFilter);
         const list = Array.isArray(data) ? data : [];
 
-        // ✅ normaliza ids como string SEMPRE
         const normalizedList = list
           .filter((c) => c && c.id != null)
           .map((c) => ({
@@ -205,7 +210,6 @@ export default function ChatHumanPage() {
           const next = { ...prev };
           const idsSet = new Set(normalizedList.map((c) => String(c.id)));
 
-          // ✅ NÃO converte para Number (ids são string)
           Object.keys(next).forEach((id) => {
             if (!idsSet.has(id)) delete next[id];
           });
@@ -237,7 +241,6 @@ export default function ChatHumanPage() {
         if (options.playSoundOnNew) {
           const openNow = normalizedList.length;
           const prevOpen = prevOpenConversationsCount.current;
-
           if (prevOpen && openNow > prevOpen) newChatDetected = true;
           prevOpenConversationsCount.current = openNow;
         } else {
@@ -258,7 +261,6 @@ export default function ChatHumanPage() {
 
         setConversations(normalizedList);
 
-        // ✅ se conversa sumiu da lista (foi fechada), limpa seleção
         if (normalizedList.length === 0) {
           setSelectedConversationId(null);
           setMessages([]);
@@ -278,7 +280,7 @@ export default function ChatHumanPage() {
         loadingConvsRef.current = false;
       }
     },
-    [selectedConversationId, isTabActive, statusFilter]
+    [selectedConversationId, isTabActive, statusFilter, notificationsEnabled, quietHoursEnabled]
   );
 
   useEffect(() => {
@@ -326,12 +328,14 @@ export default function ChatHumanPage() {
   }, [selectedConversationId, loadMessages]);
 
   // ---------------------------------------------
-  // ALERTA VISUAL BOT (banner no topo)
+  // ALERTA VISUAL BOT
   // ---------------------------------------------
   useEffect(() => {
     if (!messages || messages.length === 0) return;
 
-    const botMessages = messages.filter((m) => m.isBot || m.fromBot || m.from === "bot");
+    const botMessages = messages.filter(
+      (m) => m.isBot || m.fromBot || m.from === "bot"
+    );
     if (botMessages.length === 0) return;
 
     const lastBotMsg = botMessages[botMessages.length - 1];
@@ -355,7 +359,12 @@ export default function ChatHumanPage() {
     const last = messages[messages.length - 1];
     if (!last) return;
 
-    if (last.direction === "in" && !last.isBot && !last.fromBot && last.from !== "bot") {
+    if (
+      last.direction === "in" &&
+      !last.isBot &&
+      !last.fromBot &&
+      last.from !== "bot"
+    ) {
       const { isIdle } = getIdleInfo();
       if (isTabActive && !isIdle) return;
 
@@ -381,17 +390,19 @@ export default function ChatHumanPage() {
 
   const selectedConversation = useMemo(() => {
     if (!selectedConversationId) return null;
-    return conversations.find((c) => String(c.id) === String(selectedConversationId)) || null;
+    return (
+      conversations.find((c) => String(c.id) === String(selectedConversationId)) ||
+      null
+    );
   }, [conversations, selectedConversationId]);
 
-  // ✅ Sempre que selecionar conversa, carregar tags/notas locais
   useEffect(() => {
     if (!selectedConversation) return;
     setLocalTags(Array.isArray(selectedConversation.tags) ? selectedConversation.tags : []);
     setLocalNotes(String(selectedConversation.notes || ""));
     setTagInput("");
     setMetaSavedMsg("");
-  }, [selectedConversationId]); // intencional
+  }, [selectedConversationId]);
 
   // ---------------------------------------------
   // AÇÕES
@@ -407,9 +418,12 @@ export default function ChatHumanPage() {
     if (!selectedConversationId || !text.trim()) return;
 
     try {
-      const created = await sendTextMessage(String(selectedConversationId), text.trim(), "Atendente");
+      const created = await sendTextMessage(
+        String(selectedConversationId),
+        text.trim(),
+        "Atendente"
+      );
       if (created) setMessages((prev) => [...prev, created]);
-      // ✅ puxa de novo pra garantir sincronismo com backend
       loadMessages();
 
       try {
@@ -444,7 +458,6 @@ export default function ChatHumanPage() {
     }
   };
 
-  // ✅ Regra: conversa não pode ser reaberta (histórico é outra tela)
   const handleChangeStatus = async (conversationId, newStatus) => {
     const convId = String(conversationId);
     if (newStatus === "open") return;
@@ -453,7 +466,6 @@ export default function ChatHumanPage() {
       await updateConversationStatus(convId, newStatus);
 
       if (newStatus === "closed") {
-        // ✅ remove da lista local imediatamente e mantém fora
         setConversations((prev) => prev.filter((c) => String(c.id) !== convId));
 
         if (String(selectedConversationId || "") === convId) {
@@ -461,7 +473,6 @@ export default function ChatHumanPage() {
           setMessages([]);
         }
 
-        // ✅ também zera contadores
         setUnreadCounts((prev) => {
           const next = { ...prev };
           delete next[convId];
@@ -495,7 +506,7 @@ export default function ChatHumanPage() {
   }
 
   // ---------------------------------------------
-  // SALVAR META (tags + notes) -> usa sua API helpers
+  // SALVAR META (SEM QUEBRAR BUILD)
   // ---------------------------------------------
   const handleSaveMeta = async () => {
     if (!selectedConversation) return;
@@ -504,14 +515,17 @@ export default function ChatHumanPage() {
       setSavingMeta(true);
       setMetaSavedMsg("");
 
-      // ✅ usa os endpoints já padronizados no api.ts
-      await updateConversationStatus(String(selectedConversation.id), "open", { tags: localTags });
-      await updateConversationNotes(String(selectedConversation.id), localNotes);
-
+      // ⚠️ Aqui fica local por enquanto (pra não quebrar)
+      // Se você me passar o endpoint (tags/notes), eu ligo no backend.
       setConversations((prev) =>
         prev.map((c) =>
           String(c.id) === String(selectedConversation.id)
-            ? { ...c, tags: localTags, notes: localNotes, updatedAt: new Date().toISOString() }
+            ? {
+                ...c,
+                tags: localTags,
+                notes: localNotes,
+                updatedAt: new Date().toISOString()
+              }
             : c
         )
       );
@@ -528,6 +542,12 @@ export default function ChatHumanPage() {
   };
 
   // ---------------------------------------------
+  // UI: estado dos botões de áudio
+  // ---------------------------------------------
+  const soundActive = notificationsEnabled && !quietHoursEnabled;
+  const silentActive = quietHoursEnabled;
+
+  // ---------------------------------------------
   // RENDER
   // ---------------------------------------------
   return (
@@ -540,23 +560,38 @@ export default function ChatHumanPage() {
             <p>Fila de atendimento (tempo real)</p>
           </div>
 
-          <div className="chat-history-notification-controls">
-            <label className="notif-toggle">
-              <input
-                type="checkbox"
-                checked={notificationsEnabled}
-                onChange={(e) => setNotificationsEnabled(e.target.checked)}
-              />
-              <span>🔊 Som</span>
-            </label>
-            <label className="notif-toggle">
-              <input
-                type="checkbox"
-                checked={quietHoursEnabled}
-                onChange={(e) => setQuietHoursEnabled(e.target.checked)}
-              />
-              <span>🔕 Silêncio</span>
-            </label>
+          {/* ✅ Controles de áudio (não bloqueiam a UI) */}
+          <div
+            className="chat-audio-controls"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className={"audio-btn" + (soundActive ? " active" : "")}
+              title="Som ligado"
+              aria-label="Som ligado"
+              onClick={() => {
+                setNotificationsEnabled(true);
+                setQuietHoursEnabled(false);
+              }}
+            >
+              <Volume2 size={18} />
+            </button>
+
+            <button
+              type="button"
+              className={"audio-btn" + (silentActive ? " active" : "")}
+              title="Silêncio (respeita horário silencioso)"
+              aria-label="Silenciar"
+              onClick={() => {
+                // ✅ mantém notificações, mas ativa modo silencioso por horário
+                setNotificationsEnabled(true);
+                setQuietHoursEnabled(true);
+              }}
+            >
+              <VolumeX size={18} />
+            </button>
           </div>
         </div>
 
@@ -602,13 +637,12 @@ export default function ChatHumanPage() {
                     {labelChannel(source)}
                   </span>
 
-                  {unread > 0 && (
-                    <span className="chat-history-unread-badge">{unread}</span>
-                  )}
+                  {unread > 0 && <span className="chat-history-unread-badge">{unread}</span>}
                 </div>
 
                 <div className="chat-history-phone">
-                  {conv.phone || (conv.peerId?.startsWith("wa:") ? conv.peerId.slice(3) : conv.peerId)}
+                  {conv.phone ||
+                    (conv.peerId?.startsWith("wa:") ? conv.peerId.slice(3) : conv.peerId)}
                 </div>
 
                 <div className="chat-history-last-message">

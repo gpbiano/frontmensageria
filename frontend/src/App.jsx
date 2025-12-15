@@ -1,5 +1,5 @@
 // frontend/src/App.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import LoginPage from "./pages/LoginPage.jsx";
 
 // Atendimento (HUMANO)
@@ -18,10 +18,10 @@ import TemplatesPage from "./pages/outbound/TemplatesPage.jsx";
 import CampaignsLegacyPage from "./pages/outbound/campaigns/CampaignsPage.jsx";
 import CampaignCreateWizard from "./pages/outbound/campaigns/CampaignCreateWizard.jsx";
 
-// ✅ Reportes (Analytics “Meta-like”)
+// ✅ Reportes
 import CampaignsAnalyticsPage from "./pages/outbound/campaigns/CampaignsAnalyticsPage.jsx";
 
-// ✅ SMS Campaigns (NOVO)
+// ✅ SMS
 import SmsCampaignsPage from "./pages/outbound/sms/SmsCampaignsPage.jsx";
 
 // Assets
@@ -30,31 +30,47 @@ import AssetsPage from "./pages/outbound/AssetsPage.jsx";
 // Opt-Out
 import OptOutPage from "./pages/outbound/OptOutPage.tsx";
 
-// ✅ Settings — Users
+// ✅ Settings
 import SettingsUsersPage from "./pages/settings/SettingsUsersPage.jsx";
-
-// ✅ Settings — Groups
 import SettingsGroupsPage from "./pages/settings/SettingsGroupsPage.jsx";
-
-// ✅ Settings — Channels (NOVA)
 import SettingsChannelsPage from "./pages/settings/SettingsChannelsPage.jsx";
 
 // Criar Senha (Público)
 import CreatePasswordPage from "./pages/auth/CreatePasswordPage.jsx";
 
-// CSS global
+// CSS
 import "./styles/App.css";
-
-// CSS específico de outbound / reports / analytics
 import "./styles/outbound.css";
-
-// ✅ CSS da página de grupos
 import "./styles/settings-groups.css";
-
-// ✅ CSS da página de canais
 import "./styles/settings-channels.css";
 
+// ✅ Ícones
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  MessageSquare,
+  Layers,
+  History,
+  Bot,
+  Settings,
+  BarChart3,
+  Megaphone,
+  PlusCircle,
+  FileText,
+  Hash,
+  FolderOpen,
+  ShieldOff,
+  Users,
+  Building2,
+  UserCircle
+} from "lucide-react";
+
 const AUTH_KEY = "gpLabsAuthToken";
+
+// Sidebar state
+const SIDEBAR_LS_COLLAPSED = "gp.sidebar.collapsed";
+const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
 
 /* ==========================================================
    APLICAÇÃO PRINCIPAL
@@ -87,9 +103,7 @@ export default function App() {
     setIsAuthenticated(false);
   }
 
-  // ✅ importante: criar senha precisa funcionar SEM autenticação
   if (isCreatePasswordRoute) return <CreatePasswordPage />;
-
   if (!isAuthenticated) return <LoginPage onLogin={handleLogin} />;
 
   return <PlatformShell onLogout={handleLogout} />;
@@ -98,6 +112,32 @@ export default function App() {
 /* ==========================================================
    MENU LATERAL
 ========================================================== */
+const SECTION_ICONS = {
+  atendimento: MessageSquare,
+  chatbot: Bot,
+  campanhas: Megaphone,
+  configuracoes: Settings
+};
+
+const ITEM_ICONS = {
+  conversas: MessageSquare,
+  grupos: Users,
+  historico: History,
+
+  reportes: BarChart3,
+  campanhas: Layers,
+  sms: Megaphone,
+  nova: PlusCircle,
+  templates: FileText,
+  numeros: Hash,
+  arquivos: FolderOpen,
+  optout: ShieldOff,
+
+  canais: Settings,
+  usuarios: Users,
+  config: Settings
+};
+
 const MENU = [
   {
     id: "atendimento",
@@ -122,10 +162,7 @@ const MENU = [
     items: [
       { id: "reportes", label: "Reportes" },
       { id: "campanhas", label: "Campanhas" },
-
-      // ✅ NOVO: SMS logo abaixo de "Campanhas"
       { id: "sms", label: "Campanhas de SMS" },
-
       { id: "nova", label: "Criar campanha" },
       { id: "templates", label: "Templates" },
       { id: "numeros", label: "Números" },
@@ -139,7 +176,6 @@ const MENU = [
     items: [
       { id: "canais", label: "Canais" },
       { id: "usuarios", label: "Usuários" }
-      // { id: "grupos", label: "Grupos" }
     ]
   }
 ];
@@ -150,9 +186,56 @@ const MENU = [
 function PlatformShell({ onLogout }) {
   const [mainSection, setMainSection] = useState("atendimento");
   const [subSection, setSubSection] = useState("conversas");
-  const [openSection, setOpenSection] = useState("atendimento");
+
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(SIDEBAR_LS_COLLAPSED) === "true";
+  });
+
+  const [openSection, setOpenSection] = useState(() => {
+    if (typeof window === "undefined") return "atendimento";
+    return localStorage.getItem(SIDEBAR_LS_OPEN) || "atendimento";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(SIDEBAR_LS_COLLAPSED, String(collapsed));
+  }, [collapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (openSection) localStorage.setItem(SIDEBAR_LS_OPEN, openSection);
+  }, [openSection]);
+
+  // ✅ mock (depois liga no backend /me e /accounts)
+  const companyName = "Grupo GP Participações";
+  const userName = "Genivaldo Peres";
+
+  // dropdowns header
+  const [isCompanyOpen, setIsCompanyOpen] = useState(false);
+  const [isUserOpen, setIsUserOpen] = useState(false);
+  const headerRef = useRef(null);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (!headerRef.current) return;
+      if (!headerRef.current.contains(e.target)) {
+        setIsCompanyOpen(false);
+        setIsUserOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
 
   function handleHeaderClick(sectionId) {
+    // Em modo colapsado: clicar no header leva direto pro primeiro item
+    if (collapsed) {
+      const sec = MENU.find((s) => s.id === sectionId);
+      const first = sec?.items?.[0]?.id || "conversas";
+      handleItemClick(sectionId, first);
+      return;
+    }
     setOpenSection((prev) => (prev === sectionId ? null : sectionId));
   }
 
@@ -171,36 +254,126 @@ function PlatformShell({ onLogout }) {
   return (
     <div className="app-shell">
       {/* HEADER */}
-      <header className="app-header">
+      <header className="app-header gp-header" ref={headerRef}>
         <div className="app-header-left">
-          <div className="app-logo-circle">logo</div>
-          <span className="app-header-title">Plataforma</span>
+          <img src="/gp-labs-logo.png" alt="GP Labs" className="gp-top-logo" />
+          <span className="app-header-title app-product-name">
+            Cliente <span className="app-product-name-accent">OnLine</span>
+          </span>
         </div>
 
-        <div className="app-header-right">
-          <button className="header-pill-btn" type="button">
-            Empresa
-          </button>
-          <button className="header-pill-btn" type="button">
-            Perfil User
-          </button>
-          <button
-            className="header-pill-btn header-logout"
-            type="button"
-            onClick={onLogout}
-          >
-            Sair
-          </button>
+        <div className="app-header-right gp-header-actions">
+          {/* Empresa logada (dropdown) */}
+          <div className="gp-dd">
+            <button
+              type="button"
+              className="gp-dd-btn"
+              onClick={() => {
+                setIsCompanyOpen((v) => !v);
+                setIsUserOpen(false);
+              }}
+              title="Empresa logada"
+            >
+              <Building2 size={16} />
+              <span className="gp-dd-btn-text">{companyName}</span>
+              <ChevronDown size={16} />
+            </button>
+
+            {isCompanyOpen && (
+              <div className="gp-dd-menu">
+                <div className="gp-dd-title">Empresa logada</div>
+                <div className="gp-dd-item is-muted">
+                  {companyName}
+                  <div className="gp-dd-sub">Organização ativa</div>
+                </div>
+                <div className="gp-dd-sep" />
+                <button
+                  type="button"
+                  className="gp-dd-item"
+                  onClick={() => {
+                    setIsCompanyOpen(false);
+                    alert("Em breve: alternar empresa.");
+                  }}
+                >
+                  Alternar empresa (em breve)
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Perfil do usuário (dropdown com sair) */}
+          <div className="gp-dd">
+            <button
+              type="button"
+              className="gp-dd-btn gp-dd-btn--user"
+              onClick={() => {
+                setIsUserOpen((v) => !v);
+                setIsCompanyOpen(false);
+              }}
+              title="Perfil"
+            >
+              <UserCircle size={16} />
+              <span className="gp-dd-btn-text">{userName}</span>
+              <ChevronDown size={16} />
+            </button>
+
+            {isUserOpen && (
+              <div className="gp-dd-menu">
+                <div className="gp-dd-title">Usuário</div>
+                <div className="gp-dd-item is-muted">
+                  {userName}
+                  <div className="gp-dd-sub">Perfil do usuário</div>
+                </div>
+                <div className="gp-dd-sep" />
+                <button
+                  type="button"
+                  className="gp-dd-item"
+                  onClick={() => {
+                    setIsUserOpen(false);
+                    alert("Em breve: página de perfil.");
+                  }}
+                >
+                  Perfil
+                </button>
+                <button
+                  type="button"
+                  className="gp-dd-item is-danger"
+                  onClick={onLogout}
+                >
+                  Sair
+                </button>
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* Linha de destaque */}
+        <div className="gp-header-accent" />
       </header>
 
       {/* BODY */}
       <div className="app-body">
         {/* SIDEBAR */}
-        <nav className="app-sidebar">
+        <nav
+          className={
+            "app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")
+          }
+          style={{ width: collapsed ? 76 : 320 }}
+        >
+          {/* ✅ Toggle SEMPRE visível */}
+          <button
+            type="button"
+            className="sidebar-toggle-fab"
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? "Expandir menu" : "Recolher menu"}
+          >
+            {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          </button>
+
           {MENU.map((section) => {
             const isOpen = openSection === section.id;
             const isActive = mainSection === section.id;
+            const SectionIcon = SECTION_ICONS[section.id] || Layers;
 
             return (
               <div className="sidebar-section" key={section.id}>
@@ -211,20 +384,35 @@ function PlatformShell({ onLogout }) {
                     (isActive ? " sidebar-item-header-active" : "")
                   }
                   onClick={() => handleHeaderClick(section.id)}
+                  title={collapsed ? section.label : undefined}
                 >
-                  <span>{section.label}</span>
-                  <span
-                    className={"sidebar-item-chevron" + (isOpen ? " open" : "")}
-                  >
-                    ▾
+                  <span className="sb-row">
+                    <span className="sb-ic">
+                      <SectionIcon size={18} />
+                    </span>
+
+                    {!collapsed && (
+                      <span className="sb-label">{section.label}</span>
+                    )}
                   </span>
+
+                  {!collapsed && (
+                    <span
+                      className={
+                        "sidebar-item-chevron" + (isOpen ? " open" : "")
+                      }
+                    >
+                      <ChevronDown size={16} />
+                    </span>
+                  )}
                 </button>
 
-                {isOpen && (
+                {!collapsed && isOpen && (
                   <div className="sidebar-subitems">
                     {section.items.map((item) => {
                       const isItemActive =
                         mainSection === section.id && subSection === item.id;
+                      const ItemIcon = ITEM_ICONS[item.id] || Layers;
 
                       return (
                         <button
@@ -236,7 +424,10 @@ function PlatformShell({ onLogout }) {
                           }
                           onClick={() => handleItemClick(section.id, item.id)}
                         >
-                          {item.label}
+                          <span className="sb-sub-ic">
+                            <ItemIcon size={16} />
+                          </span>
+                          <span>{item.label}</span>
                         </button>
                       );
                     })}
@@ -260,7 +451,6 @@ function PlatformShell({ onLogout }) {
    RENDER DE SEÇÕES
 ========================================================== */
 function SectionRenderer({ main, sub, goTo }) {
-  // Atendimento → Conversas
   if (main === "atendimento" && sub === "conversas") {
     return (
       <div className="page-full">
@@ -269,7 +459,6 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // ✅ Atendimento → Grupos
   if (main === "atendimento" && sub === "grupos") {
     return (
       <div className="page-full">
@@ -278,7 +467,6 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // Atendimento → Histórico
   if (main === "atendimento" && sub === "historico") {
     return (
       <div className="page-full">
@@ -287,7 +475,6 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // Chatbot → Histórico
   if (main === "chatbot" && sub === "historico") {
     return (
       <div className="page-full">
@@ -296,7 +483,6 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // Chatbot → Configurações
   if (main === "chatbot" && sub === "config") {
     return (
       <div className="page-full">
@@ -305,7 +491,6 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // Campanhas
   if (main === "campanhas") {
     if (sub === "reportes") {
       return (
@@ -323,7 +508,6 @@ function SectionRenderer({ main, sub, goTo }) {
       );
     }
 
-    // ✅ NOVO: Campanhas de SMS
     if (sub === "sms") {
       return (
         <div className="page-full">
@@ -390,7 +574,6 @@ function SectionRenderer({ main, sub, goTo }) {
     );
   }
 
-  // ✅ Configurações
   if (main === "configuracoes") {
     if (sub === "canais") {
       return (

@@ -1,3 +1,6 @@
+/* ✅ IMPORTS SEMPRE NO TOPO (senão o Vite/PostCSS quebra o CSS inteiro) */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&display=swap");
+
 /* ===============================
    RESET BÁSICO + ALTURA TOTAL
 ================================ */
@@ -10,21 +13,18 @@ body,
   padding: 0;
 }
 
-body {
-  background: #020617;
-  color: #e5e7eb;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    sans-serif;
-}
-
-/* Remove scroll lateral desnecessário */
 * {
   box-sizing: border-box;
 }
 
-/* ✅ RESET DE BOTÕES (evita "desconfigurar listas" por estilo padrão do browser)
-   - importante no macOS/chrome/safari quando button recebe padding/line-height diferentes
-*/
+body {
+  background: #020617;
+  color: #e5e7eb;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    sans-serif;
+}
+
+/* ✅ RESET DE BOTÕES (evita diferenças entre browsers) */
 button {
   font: inherit;
   color: inherit;
@@ -33,19 +33,27 @@ button {
   -webkit-appearance: none;
   appearance: none;
 }
-
 button:focus {
   outline: none;
 }
 
-/* ===============================
-   LAYOUT GERAL DA APLICAÇÃO
-================================ */
+/* ======================================================
+   LAYOUT TRAVADO (HEADER FIXO + SCROLL SÓ NO CONTEÚDO)
+====================================================== */
 
+/* Impede scroll da página inteira */
+html,
+body,
+#root {
+  overflow: hidden;
+}
+
+/* Shell ocupa tela inteira */
 .app-shell {
-  min-height: 100vh; /* ocupa a tela toda */
+  height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: #020617;
   color: #e5e7eb;
 }
@@ -56,13 +64,15 @@ button:focus {
 
 .app-header {
   height: 64px;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   padding: 0 32px;
   border-bottom: 1px solid rgba(15, 23, 42, 0.9);
   display: flex;
   align-items: center;
   justify-content: space-between;
   background: radial-gradient(circle at top left, #022c22, #020617 55%, #000);
+  position: relative;
+  z-index: 100;
 }
 
 .app-header-left {
@@ -71,51 +81,151 @@ button:focus {
   gap: 12px;
 }
 
-.app-logo-circle {
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  text-transform: uppercase;
-  background: rgba(15, 23, 42, 0.9);
-}
-
-.app-header-title {
-  font-size: 20px;
-  font-weight: 600;
-}
-
 .app-header-right {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.header-pill-btn {
-  padding: 6px 16px;
+/* ✅ Linha de destaque (Zenvia-like) */
+.gp-header-accent {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(16, 185, 129, 0.95),
+    rgba(52, 211, 153, 0.95),
+    rgba(20, 83, 45, 0.95)
+  );
+  box-shadow: 0 8px 22px rgba(16, 185, 129, 0.12);
+}
+
+/* Logo topo */
+.gp-top-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  object-fit: contain;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+/* Nome do Produto */
+.app-product-name {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: rgba(226, 232, 240, 0.95);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.app-product-name-accent {
+  color: #22c55e;
+  font-weight: 700;
+  text-shadow: 0 0 12px rgba(34, 197, 94, 0.35);
+}
+
+/* ==========================
+   Header: dropdowns (Empresa + Perfil)
+========================== */
+
+.gp-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gp-dd {
+  position: relative;
+}
+
+.gp-dd-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  background: rgba(15, 23, 42, 0.9);
-  color: #e5e7eb;
-  font-size: 13px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(2, 6, 23, 0.22);
+  color: rgba(226, 232, 240, 0.92);
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease,
-    color 0.15s ease, transform 0.08s ease;
 }
 
-.header-pill-btn:hover {
-  background: rgba(15, 23, 42, 1);
-  border-color: rgba(148, 163, 184, 0.8);
-  transform: translateY(-1px);
+.gp-dd-btn:hover {
+  border-color: rgba(52, 211, 153, 0.28);
 }
 
-.header-logout {
-  border-color: rgba(248, 113, 113, 0.6);
-  color: #fecaca;
+.gp-dd-btn-text {
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gp-dd-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  width: 260px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(2, 6, 23, 0.92);
+  backdrop-filter: blur(10px);
+  padding: 10px;
+  z-index: 9999;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+.gp-dd-title {
+  font-size: 12px;
+  opacity: 0.7;
+  margin: 2px 6px 8px;
+}
+
+.gp-dd-item {
+  width: 100%;
+  text-align: left;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.92);
+  cursor: pointer;
+}
+
+.gp-dd-item:hover {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(148, 163, 184, 0.1);
+}
+
+.gp-dd-item.is-muted {
+  cursor: default;
+  opacity: 0.9;
+}
+
+.gp-dd-sub {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+.gp-dd-sep {
+  height: 1px;
+  background: rgba(148, 163, 184, 0.12);
+  margin: 8px 0;
+}
+
+.gp-dd-item.is-danger {
+  color: rgba(248, 113, 113, 0.95);
+}
+.gp-dd-item.is-danger:hover {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.18);
 }
 
 /* ===============================
@@ -125,13 +235,14 @@ button:focus {
 .app-body {
   flex: 1;
   display: flex;
-  min-height: 0; /* permite o filho usar height:100% */
+  min-height: 0; /* 🔑 */
+  overflow: hidden;
 }
 
-/* SIDEBAR LATERAL */
-
+/* SIDEBAR LATERAL (Zenvia-like) */
 .app-sidebar {
-  width: 260px;
+  flex: 0 0 auto;
+  height: 100%;
   border-right: 1px solid rgba(15, 23, 42, 0.9);
   background: radial-gradient(
       circle at top left,
@@ -144,11 +255,38 @@ button:focus {
   flex-direction: column;
   gap: 8px;
 
-  /* ✅ evita “empurrar” conteúdo e mantém itens alinhados quando tem muitos links */
+  /* sidebar pode rolar */
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
-/* Título das seções (Atendimento / Chatbot etc.) */
+/* toggle “pendurado” */
+.zenvia-sidebar {
+  position: relative;
+  transition: width 220ms ease;
+  overflow: visible; /* ✅ não cortar o toggle */
+}
+
+.sidebar-toggle-fab {
+  position: absolute;
+  top: 16px;
+  right: -14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.55);
+  color: rgba(226, 232, 240, 0.9);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  z-index: 50;
+}
+.sidebar-toggle-fab:hover {
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+/* Seções do menu */
 .sidebar-section {
   margin-bottom: 6px;
 }
@@ -178,13 +316,36 @@ button:focus {
 }
 
 .sidebar-item-chevron {
-  font-size: 11px;
   opacity: 0.8;
   transition: transform 0.18s ease;
 }
-
 .sidebar-item-chevron.open {
   transform: rotate(180deg);
+}
+
+/* linha com ícone + label */
+.sb-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sb-ic {
+  width: 28px;
+  height: 28px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.28);
+  flex: 0 0 auto;
+}
+
+.sb-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-subitems {
@@ -192,10 +353,7 @@ button:focus {
   flex-direction: column;
   gap: 4px;
   padding-left: 6px;
-  margin-bottom: 4px;
-
-  /* ✅ dá “respiro” visual e evita parecer que saiu do lugar */
-  margin-top: 6px;
+  margin: 6px 0 4px;
 }
 
 .sidebar-link {
@@ -208,6 +366,9 @@ button:focus {
   border-radius: 999px;
   cursor: pointer;
   font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -221,36 +382,70 @@ button:focus {
   color: #bbf7d0;
 }
 
+.sb-sub-ic {
+  width: 18px;
+  display: grid;
+  place-items: center;
+}
+
+/* Colapsado */
+.app-sidebar.zenvia-sidebar.is-collapsed .sidebar-item-header {
+  justify-content: center;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.app-sidebar.zenvia-sidebar.is-collapsed .sb-row {
+  justify-content: center;
+}
+
 /* ===============================
-   MAIN AREA
+   MAIN AREA (único scroll)
 ================================ */
 
 .app-main {
   flex: 1;
   min-width: 0;
-  min-height: 0; /* <- ESSENCIAL pro filho ocupar 100% */
-  padding: 24px 28px;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 24px 28px 24px 28px;
   display: flex;
 }
 
-/* Quando a página precisa ocupar tudo (Chat, Histórico etc.) */
+/* scrollbar discreta */
+.app-main::-webkit-scrollbar {
+  width: 10px;
+}
+.app-main::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-main::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 999px;
+}
+.app-main::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.45);
+}
+
+/* Páginas que ocupam tudo */
 .page-full {
   flex: 1;
   display: flex;
-  min-height: 0; /* junto com chat-history-layout height:100% */
+  min-height: 0;
+  height: 100%;
 }
 
-/* Placeholders de telas */
+/* Placeholders */
 .page-placeholder,
 .lobby-placeholder {
   flex: 1;
   border-radius: 16px;
   border: 1px solid rgba(15, 23, 42, 0.9);
   background: radial-gradient(
-      circle at top left,
-      rgba(34, 197, 94, 0.18),
-      rgba(15, 23, 42, 0.98)
-    );
+    circle at top left,
+    rgba(34, 197, 94, 0.18),
+    rgba(15, 23, 42, 0.98)
+  );
   padding: 20px 22px;
   display: flex;
   flex-direction: column;
@@ -268,4 +463,39 @@ button:focus {
 .lobby-placeholder p {
   font-size: 14px;
   opacity: 0.9;
+}
+
+/* ==========================
+   Controles de som / silêncio
+========================== */
+.chat-audio-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.audio-btn:hover {
+  background: rgba(2, 6, 23, 0.85);
+  color: #e5e7eb;
+}
+
+.audio-btn.active {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.6);
+  color: #22c55e;
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
 }

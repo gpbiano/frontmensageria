@@ -1,5 +1,7 @@
 // frontend/src/chatbot/ChatbotPage.jsx
 import { useState } from "react";
+import "../../styles/chatbot.css";
+
 
 const DEFAULT_SETTINGS = {
   enabled: true,

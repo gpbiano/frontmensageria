@@ -1,6 +1,6 @@
 // frontend/src/pages/LoginPage.jsx
 import { useState } from "react";
-import "../styles/LoginPage.css";
+import "../styles/loginpage.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
 
@@ -25,9 +25,7 @@ export default function LoginPage({ onLogin }) {
     try {
       const res = await fetch(`${API_BASE}/login`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
       });
 
@@ -62,10 +60,7 @@ export default function LoginPage({ onLogin }) {
         );
         const fakeData = {
           token: "dev-fallback-token",
-          user: {
-            email,
-            name: "Admin (Dev)"
-          }
+          user: { email, name: "Admin (Dev)" }
         };
         localStorage.setItem("gpLabsAuthToken", fakeData.token);
         onLogin?.(fakeData);
@@ -85,10 +80,16 @@ export default function LoginPage({ onLogin }) {
   return (
     <div className="login-page">
       <div className="login-card">
-        <h1 className="login-title">Entrar na plataforma</h1>
-        <p className="login-subtitle">
+        <div className="login-header">
+          <img src="/gp-labs-logo.png" alt="GP Labs" className="login-logo" />
+          <div className="login-title">
+            Cliente <span>OnLine</span>
+          </div>
+        </div>
+
+        <div className="login-subtitle">
           Acesse com suas credenciais de operador.
-        </p>
+        </div>
 
         {error && <div className="login-error">{error}</div>}
 
@@ -100,6 +101,7 @@ export default function LoginPage({ onLogin }) {
               className="login-input"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
             />
           </label>
 
@@ -110,42 +112,49 @@ export default function LoginPage({ onLogin }) {
               className="login-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
             />
           </label>
 
-          <div className="login-row">
-            <label className="login-remember">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-              />
-              Manter conectado
-            </label>
-            <button
-              type="button"
-              className="login-link"
-              onClick={() =>
-                alert("Fluxo de recuperação ainda não implementado.")
-              }
-            >
-              Esqueci minha senha
-            </button>
-          </div>
+         <div className="login-row">
+  <label className="login-remember">
+    <input
+      type="checkbox"
+      checked={rememberMe}
+      onChange={(e) => setRememberMe(e.target.checked)}
+    />
+    <span>Manter conectado</span>
+  </label>
 
-          <button
-            type="submit"
-            className="login-submit"
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Entrando..." : "Entrar"}
-          </button>
+  <button
+    type="button"
+    className="login-link"
+    onClick={() =>
+      alert("Fluxo de recuperação ainda não implementado.")
+    }
+  >
+    Esqueci minha senha
+  </button>
+</div>
+
+
+          <button type="submit" className="login-submit" disabled={isSubmitting}>
+  {isSubmitting ? (
+    <span className="btn-loading">
+      <span className="btn-spinner" aria-hidden="true" />
+      Entrando...
+    </span>
+  ) : (
+    "Entrar"
+  )}
+</button>
+
         </form>
 
-        <p className="login-env">
+        <div className="login-footer">
           Ambiente: <strong>{import.meta.env.MODE}</strong> · API:{" "}
           <code>{API_BASE}</code>
-        </p>
+        </div>
       </div>
     </div>
   );

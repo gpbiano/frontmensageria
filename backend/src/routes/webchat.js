@@ -2,11 +2,9 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import { loadDB, saveDB } from "../utils/db.js";
-import {
-  findConversationByVisitor,
-  createWebchatConversation,
-  addMessage
-} from "../services/conversationService.js";
+
+// ✅ CORE OFICIAL
+import { getOrCreateChannelConversation, appendMessage } from "./conversations.js";
 
 const router = express.Router();
 
@@ -39,47 +37,8 @@ function ensureDbShape(db) {
   return db;
 }
 
-/**
- * ⚠️ Anti-conflito WhatsApp x Webchat
- * - garante prefixo wc_ para conversas criadas pelo widget
- * - garante que endpoints webchat só operam em conversas source=webchat
- */
-function ensureWebchatConversationIdentity(db, conv) {
-  if (!conv) return conv;
-
-  // marca explicitamente a origem
-  if (!conv.source) conv.source = "webchat";
-  if (!conv.channel) conv.channel = "webchat";
-
-  // se por algum motivo veio uma conversa de outra origem, bloqueia
-  if (conv.source !== "webchat") return null;
-
-  // garante prefixo wc_ no id (evita colisão com conversas do WhatsApp)
-  if (conv.id && !String(conv.id).startsWith("wc_")) {
-    // só renomeia com segurança se não houver mensagens vinculadas ainda
-    const hasMsgs =
-      Array.isArray(db.messagesByConversation?.[conv.id]) &&
-      db.messagesByConversation[conv.id].length > 0;
-
-    if (!hasMsgs) {
-      const oldId = conv.id;
-      conv.id = `wc_${oldId}`;
-
-      // move bucket se existir vazio/placeholder
-      if (db.messagesByConversation?.[oldId] && !db.messagesByConversation[conv.id]) {
-        db.messagesByConversation[conv.id] = db.messagesByConversation[oldId];
-        delete db.messagesByConversation[oldId];
-      }
-    }
-  }
-
-  return conv;
-}
-
 function getConversationOr404(db, id) {
-  const conv = db.conversations.find((c) => String(c.id) === String(id));
-  if (!conv) return null;
-  return conv;
+  return db.conversations.find((c) => String(c.id) === String(id)) || null;
 }
 
 // ----------------------------------------------------
@@ -92,26 +51,18 @@ router.post("/session", (req, res) => {
 
   const db = ensureDbShape(loadDB());
 
-  // procura conversa por visitorId, mas só aceita se for de origem webchat
-  let conversation = findConversationByVisitor(db, visitorId);
-  conversation = ensureWebchatConversationIdentity(db, conversation);
+  // ✅ cria/reutiliza via CORE (Modelo A)
+  const r = getOrCreateChannelConversation(db, {
+    source: "webchat",
+    peerId: `wc:${visitorId}`,
+    visitorId,
+    title: `WebChat ${String(visitorId).slice(0, 6)}`,
+    currentMode: "human"
+  });
 
-  // se não existe (ou não é webchat), cria uma nova
-  if (!conversation) {
-    conversation = createWebchatConversation(db, { visitorId });
+  if (!r?.ok) return res.status(400).json({ error: r?.error || "Falha ao criar sessão" });
 
-    // reforça identidade/prefixo/markers (anti conflito)
-    conversation = ensureWebchatConversationIdentity(db, conversation);
-
-    // fallback: se o service não marcou, garantimos aqui
-    conversation.source = "webchat";
-    conversation.channel = "webchat";
-    conversation.status = conversation.status || "open";
-    conversation.createdAt = conversation.createdAt || nowIso();
-    conversation.updatedAt = nowIso();
-  } else {
-    conversation.updatedAt = nowIso();
-  }
+  const conversation = r.conversation;
 
   const token = jwt.sign(
     {
@@ -141,7 +92,6 @@ router.post("/session", (req, res) => {
 router.get("/conversations/:id/messages", (req, res) => {
   const { id } = req.params;
 
-  // auth
   let decoded;
   try {
     decoded = verifyWebchatToken(req);
@@ -149,7 +99,6 @@ router.get("/conversations/:id/messages", (req, res) => {
     return res.status(401).json({ error: e.message || "Token inválido" });
   }
 
-  // token deve pertencer à conversa solicitada
   if (decoded?.conversationId && String(decoded.conversationId) !== String(id)) {
     return res.status(403).json({ error: "Token não pertence à conversa" });
   }
@@ -159,27 +108,22 @@ router.get("/conversations/:id/messages", (req, res) => {
 
   const db = ensureDbShape(loadDB());
 
-  // garante que é conversa do webchat (anti conflito)
   const conv = getConversationOr404(db, id);
   if (!conv) return res.status(404).json({ error: "Conversa não encontrada" });
   if (String(conv.source || "") !== "webchat") {
     return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
   }
 
-  const all = Array.isArray(db.messagesByConversation?.[id])
-    ? db.messagesByConversation[id]
+  const all = Array.isArray(db.messagesByConversation?.[String(id)])
+    ? db.messagesByConversation[String(id)]
     : [];
 
   let items = all;
 
   if (after) {
-    // aceita cursor por id OU por createdAt ISO
     const idx = all.findIndex((m) => String(m.id) === String(after));
-    if (idx >= 0) {
-      items = all.slice(idx + 1);
-    } else {
-      items = all.filter((m) => String(m.createdAt || "") > after);
-    }
+    if (idx >= 0) items = all.slice(idx + 1);
+    else items = all.filter((m) => String(m.createdAt || "") > after);
   }
 
   items = items.slice(0, limit);
@@ -205,53 +149,45 @@ router.post("/messages", (req, res) => {
   const { conversationId, source } = decoded || {};
   const { text } = req.body || {};
 
-  if (!conversationId)
-    return res.status(400).json({ error: "conversationId ausente no token" });
-  if (source && source !== "webchat")
-    return res.status(403).json({ error: "Token não é de Webchat" });
+  if (!conversationId) return res.status(400).json({ error: "conversationId ausente no token" });
+  if (source && source !== "webchat") return res.status(403).json({ error: "Token não é de Webchat" });
 
-  if (!text || !String(text).trim())
-    return res.status(400).json({ error: "Mensagem vazia" });
+  const cleanText = String(text || "").trim();
+  if (!cleanText) return res.status(400).json({ error: "Mensagem vazia" });
 
   const db = ensureDbShape(loadDB());
 
-  // garante que é conversa do webchat (anti conflito)
   const conv = getConversationOr404(db, conversationId);
   if (!conv) return res.status(404).json({ error: "Conversa não encontrada" });
   if (String(conv.source || "") !== "webchat") {
     return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
   }
+  if (String(conv.status) !== "open") return res.status(410).json({ error: "Conversa encerrada" });
 
-  if (conv.status !== "open") {
-    return res.status(410).json({ error: "Conversa encerrada" });
-  }
-
-  const msg = addMessage(db, conversationId, {
+  // ✅ persiste via CORE oficial
+  const result = appendMessage(db, conv.id, {
     channel: "webchat",
-    from: "visitor",
-    text: String(text).trim()
+    source: "webchat",
+    type: "text",
+    from: "client",
+    direction: "in",
+    text: cleanText,
+    createdAt: nowIso()
   });
 
-  // atualiza timestamp da conversa
-  conv.updatedAt = nowIso();
+  if (!result?.ok) return res.status(400).json({ error: result?.error || "Falha ao salvar mensagem" });
 
   saveDB(db);
 
-  return res.json({
-    ok: true,
-    message: msg,
-    nextCursor: msg.id
-  });
+  return res.json({ ok: true, message: result.msg, nextCursor: result.msg.id });
 });
 
 // ----------------------------------------------------
 // POST /webchat/conversations/:id/close
-// (mantém o auth, e só fecha conversa do webchat)
 // ----------------------------------------------------
 router.post("/conversations/:id/close", (req, res) => {
   const { id } = req.params;
 
-  // auth (evita alguém fechar conversa alheia)
   let decoded;
   try {
     decoded = verifyWebchatToken(req);
