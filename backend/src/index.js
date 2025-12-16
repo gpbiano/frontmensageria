@@ -1,3 +1,5 @@
+// backend/src/index.js
+
 // ===============================
 // IMPORTS (core/libs)
 // ===============================
@@ -29,6 +31,19 @@ const __dirname = path.dirname(__filename);
 
 const ENV = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.join(process.cwd(), `.env.${ENV}`) });
+
+// ✅ Compat WhatsApp ENV (evita 500 em routers antigos)
+if (!process.env.PHONE_NUMBER_ID && process.env.WHATSAPP_PHONE_NUMBER_ID) {
+  process.env.PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+}
+if (!process.env.WHATSAPP_PHONE_NUMBER_ID && process.env.PHONE_NUMBER_ID) {
+  process.env.WHATSAPP_PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+}
+
+// compat VERIFY_TOKEN
+if (!process.env.WHATSAPP_VERIFY_TOKEN && process.env.VERIFY_TOKEN) {
+  process.env.WHATSAPP_VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+}
 
 // logger
 const { default: logger } = await import("./logger.js");
@@ -73,19 +88,21 @@ if (!JWT_SECRET) {
 }
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID; // ✅ canonical
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID; // ✅ compat (já espelhado acima)
 const WABA_ID = process.env.WABA_ID;
 
-// compat VERIFY_TOKEN
-if (!process.env.WHATSAPP_VERIFY_TOKEN && process.env.VERIFY_TOKEN) {
-  process.env.WHATSAPP_VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-}
+// ✅ valor final único pra usar em logs/health
+const EFFECTIVE_PHONE_NUMBER_ID =
+  String(WHATSAPP_PHONE_NUMBER_ID || PHONE_NUMBER_ID || "").trim() || null;
 
 logger.info(
   {
     PORT,
     WABA_ID,
-    PHONE_NUMBER_ID,
+    WHATSAPP_PHONE_NUMBER_ID: WHATSAPP_PHONE_NUMBER_ID || null,
+    PHONE_NUMBER_ID: PHONE_NUMBER_ID || null,
+    EFFECTIVE_PHONE_NUMBER_ID,
     WHATSAPP_TOKEN_defined: !!WHATSAPP_TOKEN
   },
   "✅ Ambiente carregado"
@@ -133,7 +150,7 @@ app.use(
 );
 
 // ===============================
-// CORS (CRÍTICO – CORREÇÃO DO PROBLEMA)
+// CORS
 // ===============================
 const ALLOWED_ORIGINS = [
   "https://cliente.gplabs.com.br",
@@ -239,7 +256,7 @@ app.get("/", (req, res) =>
     status: "ok",
     version: "2.0.0",
     wabaId: WABA_ID || null,
-    phoneNumberId: PHONE_NUMBER_ID || null
+    phoneNumberId: EFFECTIVE_PHONE_NUMBER_ID
   })
 );
 

@@ -14,9 +14,20 @@ const DB_FILE = process.env.DB_FILE
   ? path.resolve(process.cwd(), process.env.DB_FILE)
   : path.join(process.cwd(), "data.json");
 
-// Env WhatsApp
+// ===============================
+// ✅ Env WhatsApp (compat)
+// Aceita tanto PHONE_NUMBER_ID quanto WHATSAPP_PHONE_NUMBER_ID
+// ===============================
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+
+// ⚠️ aqui é o ponto do seu 500:
+// seu .env.production está com WHATSAPP_PHONE_NUMBER_ID,
+// mas este router estava lendo só PHONE_NUMBER_ID.
+const PHONE_NUMBER_ID = String(
+  process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || ""
+).trim();
+
+const WHATSAPP_API_VERSION = String(process.env.WHATSAPP_API_VERSION || "v22.0").trim();
 
 // Upload em memória (CSV pequeno/medio). Depois podemos evoluir.
 const upload = multer({
@@ -482,10 +493,12 @@ function exportReportPdf(report, campaignName, req, res) {
 
 async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = []) {
   if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-    throw new Error("Configuração WhatsApp ausente (WHATSAPP_TOKEN/PHONE_NUMBER_ID)");
+    throw new Error(
+      "Configuração WhatsApp ausente (WHATSAPP_TOKEN e WHATSAPP_PHONE_NUMBER_ID/PHONE_NUMBER_ID)"
+    );
   }
 
-  const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+  const url = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${PHONE_NUMBER_ID}/messages`;
 
   const components = [];
   if (Array.isArray(bodyVars) && bodyVars.length > 0) {
@@ -631,7 +644,9 @@ function analyticsToCsv(analytics, req) {
 
   lines.push(`# GP Labs – Analytics Export`);
   lines.push(`# GeneratedAt: ${new Date().toISOString()}`);
-  lines.push(`# Filters: from=${meta.from || ""} to=${meta.to || ""} campaignId=${meta.campaignId || "all"} template=${meta.template || "all"}`);
+  lines.push(
+    `# Filters: from=${meta.from || ""} to=${meta.to || ""} campaignId=${meta.campaignId || "all"} template=${meta.template || "all"}`
+  );
   lines.push(
     `# Totals: total=${totals.total || 0} delivered=${totals.delivered || 0} read=${totals.read || 0} failed=${totals.failed || 0} | deliveryRate=${(totals.deliveryRate || 0).toFixed?.(1) ?? totals.deliveryRate} readRate=${(totals.readRate || 0).toFixed?.(1) ?? totals.readRate} failRate=${(totals.failRate || 0).toFixed?.(1) ?? totals.failRate}`
   );
@@ -1065,7 +1080,8 @@ router.post("/:id/start", async (req, res) => {
 
     if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
       return res.status(500).json({
-        error: "Env WhatsApp ausente (WHATSAPP_TOKEN/PHONE_NUMBER_ID)."
+        error:
+          "Env WhatsApp ausente (WHATSAPP_TOKEN e WHATSAPP_PHONE_NUMBER_ID/PHONE_NUMBER_ID)."
       });
     }
 
