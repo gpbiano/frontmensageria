@@ -1,6 +1,6 @@
 // frontend/src/pages/LoginPage.jsx
 import { useState } from "react";
-import "../styles/loginpage.css";
+import "../styles/login-page.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
 
