@@ -586,17 +586,43 @@ export async function sendTextMessage(
   text: string,
   senderName?: string
 ): Promise<Message> {
-  const t = String(text || "").trim();
+  const t = String(text ?? "").trim();
   if (!t) throw new Error("Mensagem vazia.");
 
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     body: {
-      text: t, // ✅ backend exige "text"
+      // ✅ principal (o backend está exigindo isso)
+      text: t,
+
+      // ✅ fallback compat (não atrapalha se o backend ignorar)
+      body: t,
+      message: t,
+
       ...(senderName ? { senderName } : {})
     }
   });
 }
+
+export async function sendMediaMessage(
+  conversationId: string,
+  payload: { type: string; mediaUrl: string; caption?: string; senderName?: string }
+): Promise<Message> {
+  const type = String(payload?.type || "text").toLowerCase();
+  const mediaUrl = String(payload?.mediaUrl || "").trim();
+  const caption = String(payload?.caption || "").trim();
+
+  return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
+    method: "POST",
+    body: {
+      type,
+      ...(caption ? { text: caption, body: caption, message: caption } : {}),
+      ...(mediaUrl ? { mediaUrl } : {}),
+      ...(payload?.senderName ? { senderName: payload.senderName } : {})
+    }
+  });
+}
+
 
 export async function sendMediaMessage(
   conversationId: string,
