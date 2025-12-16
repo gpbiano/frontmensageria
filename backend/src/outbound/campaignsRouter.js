@@ -18,19 +18,28 @@ const DB_FILE = process.env.DB_FILE
 // ✅ Env WhatsApp (compat)
 // Aceita tanto PHONE_NUMBER_ID quanto WHATSAPP_PHONE_NUMBER_ID
 // ===============================
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+function getWhatsAppEnv() {
+  const token = String(process.env.WHATSAPP_TOKEN || "").trim();
 
-// compatível com env novo e legado
-const PHONE_NUMBER_ID = String(
-  process.env.WHATSAPP_PHONE_NUMBER_ID ||
-  process.env.PHONE_NUMBER_ID ||
-  ""
-).trim();
+  // compatível com env novo e legado
+  const phoneNumberId = String(
+    process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || ""
+  ).trim();
 
-const WHATSAPP_API_VERSION = String(
-  process.env.WHATSAPP_API_VERSION || "v20.0"
-).trim();
+  const apiVersion = String(process.env.WHATSAPP_API_VERSION || "v20.0").trim();
 
+  return { token, phoneNumberId, apiVersion };
+}
+
+function assertWhatsAppConfigured() {
+  const { token, phoneNumberId, apiVersion } = getWhatsAppEnv();
+  if (!token || !phoneNumberId) {
+    throw new Error(
+      "Env WhatsApp ausente (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID ou PHONE_NUMBER_ID)."
+    );
+  }
+  return { token, phoneNumberId, apiVersion };
+}
 
 // Upload em memória (CSV pequeno/medio). Depois podemos evoluir.
 const upload = multer({
@@ -495,13 +504,9 @@ function exportReportPdf(report, campaignName, req, res) {
 }
 
 async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = []) {
-if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-  throw new Error(
-    "Env WhatsApp ausente (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID)"
-  );
-}
+  const { token, phoneNumberId, apiVersion } = assertWhatsAppConfigured();
 
-const url = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${PHONE_NUMBER_ID}/messages`;
+  const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
 
   const components = [];
   if (Array.isArray(bodyVars) && bodyVars.length > 0) {
@@ -525,7 +530,7 @@ const url = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${PHONE_NUMBER_I
   const res = await fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(payload)
@@ -534,7 +539,8 @@ const url = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${PHONE_NUMBER_I
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const msg = data?.error?.message || data?.message || `Erro WhatsApp (${res.status})`;
+    const msg =
+      data?.error?.message || data?.message || `Erro WhatsApp (${res.status})`;
     const err = new Error(msg);
     err.meta = data?.error || data || null;
     throw err;
@@ -575,7 +581,8 @@ function filterCampaignsForAnalytics(campaigns, query) {
     if (toTs && ts && ts > toTs) return false;
 
     if (campaignId !== "all" && String(c?.id) !== String(campaignId)) return false;
-    if (template !== "all" && String(c?.templateName || "") !== String(template)) return false;
+    if (template !== "all" && String(c?.templateName || "") !== String(template))
+      return false;
 
     return true;
   });
@@ -648,10 +655,20 @@ function analyticsToCsv(analytics, req) {
   lines.push(`# GP Labs – Analytics Export`);
   lines.push(`# GeneratedAt: ${new Date().toISOString()}`);
   lines.push(
-    `# Filters: from=${meta.from || ""} to=${meta.to || ""} campaignId=${meta.campaignId || "all"} template=${meta.template || "all"}`
+    `# Filters: from=${meta.from || ""} to=${meta.to || ""} campaignId=${
+      meta.campaignId || "all"
+    } template=${meta.template || "all"}`
   );
   lines.push(
-    `# Totals: total=${totals.total || 0} delivered=${totals.delivered || 0} read=${totals.read || 0} failed=${totals.failed || 0} | deliveryRate=${(totals.deliveryRate || 0).toFixed?.(1) ?? totals.deliveryRate} readRate=${(totals.readRate || 0).toFixed?.(1) ?? totals.readRate} failRate=${(totals.failRate || 0).toFixed?.(1) ?? totals.failRate}`
+    `# Totals: total=${totals.total || 0} delivered=${
+      totals.delivered || 0
+    } read=${totals.read || 0} failed=${
+      totals.failed || 0
+    } | deliveryRate=${
+      (totals.deliveryRate || 0).toFixed?.(1) ?? totals.deliveryRate
+    } readRate=${
+      (totals.readRate || 0).toFixed?.(1) ?? totals.readRate
+    } failRate=${(totals.failRate || 0).toFixed?.(1) ?? totals.failRate}`
   );
   lines.push("");
 
@@ -674,7 +691,9 @@ function analyticsToCsv(analytics, req) {
   );
 
   for (const r of analytics.rows || []) {
-    const link = r.errorCode ? `${shortLinkBase}${encodeURIComponent(r.errorCode)}` : "";
+    const link = r.errorCode
+      ? `${shortLinkBase}${encodeURIComponent(r.errorCode)}`
+      : "";
     lines.push(
       [
         csvEscape(r.campaignId),
@@ -710,7 +729,9 @@ function exportAnalyticsPdf(analytics, req, res) {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="analytics_${safeFileName(meta.template || "all")}_${meta.campaignId || "all"}_${Date.now()}.pdf"`
+    `attachment; filename="analytics_${safeFileName(meta.template || "all")}_${
+      meta.campaignId || "all"
+    }_${Date.now()}.pdf"`
   );
 
   doc.pipe(res);
@@ -718,7 +739,11 @@ function exportAnalyticsPdf(analytics, req, res) {
   // Header
   doc.rect(0, 0, doc.page.width, 84).fill("#0B1220");
 
-  doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(18).text("GP Labs", 40, 24);
+  doc
+    .fillColor("#FFFFFF")
+    .font("Helvetica-Bold")
+    .fontSize(18)
+    .text("GP Labs", 40, 24);
 
   doc
     .fillColor("#A7F3D0")
@@ -729,11 +754,7 @@ function exportAnalyticsPdf(analytics, req, res) {
   // Body
   let y = 100;
 
-  doc
-    .fillColor("#0F172A")
-    .font("Helvetica-Bold")
-    .fontSize(14)
-    .text("Resumo", 40, y);
+  doc.fillColor("#0F172A").font("Helvetica-Bold").fontSize(14).text("Resumo", 40, y);
 
   y += 18;
 
@@ -835,7 +856,9 @@ function exportAnalyticsPdf(analytics, req, res) {
 
     doc
       .fillColor("#0F172A")
-      .text((r.campaignName || r.campaignId || "-").slice(0, 26), 48, y, { width: 150 })
+      .text((r.campaignName || r.campaignId || "-").slice(0, 26), 48, y, {
+        width: 150
+      })
       .text(r.phone || "-", 210, y, { width: 110 })
       .text(r.status || "-", 325, y, { width: 70 })
       .fillColor(r.errorCode ? "#991B1B" : "#334155")
@@ -862,12 +885,10 @@ function exportAnalyticsPdf(analytics, req, res) {
     .font("Helvetica")
     .fontSize(8)
     .fillColor("#64748B")
-    .text(
-      `Gerado em ${new Date().toLocaleString("pt-BR")} • GP Labs Platform`,
-      40,
-      doc.page.height - 30,
-      { width: doc.page.width - 80, align: "right" }
-    );
+    .text(`Gerado em ${new Date().toLocaleString("pt-BR")} • GP Labs Platform`, 40, doc.page.height - 30, {
+      width: doc.page.width - 80,
+      align: "right"
+    });
 
   doc.end();
 }
@@ -1081,12 +1102,12 @@ router.post("/:id/start", async (req, res) => {
       });
     }
 
-    if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-  return res.status(500).json({
-    error: "Env WhatsApp ausente (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID)."
-  });
-}
-
+    // ✅ valida env whatsapp aqui (mesma regra do sendWhatsAppTemplate)
+    try {
+      assertWhatsAppConfigured();
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
 
     const now = new Date().toISOString();
     campaign.status = "sending";
@@ -1227,4 +1248,3 @@ router.get("/:id/export.pdf", (req, res) => {
 });
 
 export default router;
-
