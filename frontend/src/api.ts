@@ -34,12 +34,26 @@ function getToken(): string | null {
   return localStorage.getItem(AUTH_KEY);
 }
 
+/**
+ * ✅ Ajuste importante:
+ * - Garante que o Authorization do token NÃO seja “sobrescrito” por headers externos.
+ * - (Antes: o extra vinha por último e poderia apagar o Bearer sem querer.)
+ */
 function buildHeaders(extra?: HeadersInit): HeadersInit {
   const token = getToken();
   return {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(extra || {})
+    ...(extra || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
   };
+}
+
+function clearAuth() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(AUTH_KEY);
+}
+
+function isUnauthorized(res: Response) {
+  return res.status === 401;
 }
 
 // ======================================================
@@ -111,6 +125,19 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
     headers
   });
 
+  // ✅ Tratamento padrão de 401: limpa token e força novo login
+  if (isUnauthorized(res)) {
+  const payload = await safeReadJson(res);
+
+  // Apenas sinaliza erro — NÃO limpa token aqui
+  const msg =
+    payload?.error ||
+    payload?.message ||
+    "Não autorizado (401)";
+
+  throw new Error(msg);
+}
+
   if (!res.ok) {
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
@@ -138,6 +165,15 @@ async function requestForm<T = any>(
     body: formData
   });
 
+  // ✅ Tratamento padrão de 401: limpa token e força novo login
+  if (isUnauthorized(res)) {
+    clearAuth();
+    const payload = await safeReadJson(res);
+    const text = payload ? "" : await safeReadText(res);
+    console.error("🔒 API FORM 401:", path, payload || text);
+    throw new Error("Sessão expirada ou token inválido. Faça login novamente.");
+  }
+
   if (!res.ok) {
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
@@ -162,6 +198,15 @@ async function downloadBlob(path: string, filename: string) {
     method: "GET",
     headers: buildHeaders()
   });
+
+  // ✅ Tratamento padrão de 401: limpa token e força novo login
+  if (isUnauthorized(res)) {
+    clearAuth();
+    const payload = await safeReadJson(res);
+    const text = payload ? "" : await safeReadText(res);
+    console.error("🔒 DOWNLOAD 401:", path, payload || text);
+    throw new Error("Sessão expirada ou token inválido. Faça login novamente.");
+  }
 
   if (!res.ok) {
     const payload = await safeReadJson(res);
@@ -485,7 +530,6 @@ export type FetchConversationsOptions = {
 export async function fetchConversations(
   statusOrOpts: ConversationStatus | "all" | FetchConversationsOptions = "open"
 ): Promise<Conversation[]> {
-  // ✅ compat total: fetchConversations("open") / fetchConversations("all") / fetchConversations({ ... })
   const opts: FetchConversationsOptions =
     typeof statusOrOpts === "string" ? { status: statusOrOpts } : (statusOrOpts || {});
 
@@ -512,23 +556,12 @@ export async function sendTextMessage(
   text: string,
   senderName?: string
 ): Promise<Message> {
-  // ✅ mantém exatamente como já estava (envia texto via /messages)
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     body: { text, ...(senderName ? { senderName } : {}) }
   });
 }
 
-/**
- * ✅ NOVO (sem quebrar compat):
- * Reaproveita o export existente "sendMediaMessage" MAS agora envia via:
- *   POST /conversations/:id/messages
- * que é a rota que você já ajustou no backend.
- *
- * Observação:
- * - "caption" vira "text" (o backend usa text para legenda/preview)
- * - "mediaUrl" vai como mediaUrl (backend já aceita mediaUrl/link/etc)
- */
 export async function sendMediaMessage(
   conversationId: string,
   payload: { type: string; mediaUrl: string; caption?: string; senderName?: string }
@@ -541,25 +574,13 @@ export async function sendMediaMessage(
     method: "POST",
     body: {
       type,
-      // backend espera "text" para caption/preview
       ...(text ? { text } : {}),
-      // backend valida mediaUrl para audio/image/document/video/sticker
       ...(mediaUrl ? { mediaUrl } : {}),
       ...(payload?.senderName ? { senderName: payload.senderName } : {})
     }
   });
 }
 
-/**
- * ✅ NOVO: Enviar arquivo direto do front (File) para o usuário.
- * Estratégia (preservando o que já existe no seu projeto):
- * 1) faz upload do arquivo como "asset" (rota já existente: /outbound/assets/upload)
- * 2) pega uma URL pública do retorno
- * 3) chama sendMediaMessage() para disparar no canal (WhatsApp)
- *
- * Se futuramente você criar um endpoint dedicado tipo /conversations/:id/upload,
- * é só trocar o "uploadAsset(file)" aqui dentro.
- */
 export async function sendFileMessage(
   conversationId: string,
   opts: {
@@ -572,10 +593,8 @@ export async function sendFileMessage(
   const file = opts.file;
   const type = String(opts.type || "").toLowerCase();
 
-  // upload usa o que você já tem no projeto (assets)
   const asset = await uploadAsset(file);
 
-  // tenta achar uma URL pública em diferentes formatos
   const mediaUrl =
     (asset as any)?.url ||
     (asset as any)?.publicUrl ||
@@ -629,7 +648,7 @@ export async function downloadConversationCSV(conversationId: string) {
 }
 
 export async function downloadHistoryExcel(params?: {
-  kind?: ConversationKind; // human | bot | bot_only | human_only
+  kind?: ConversationKind;
   status?: ConversationStatus | "all";
   source?: "all" | "whatsapp" | "webchat";
 }) {
@@ -931,13 +950,10 @@ export async function fetchSmsCampaignReport(id: string) {
 // ALIASES (compat com imports antigos do front)
 // ======================================================
 
-// Mantém compat com telas que importam esse nome antigo
 export async function downloadConversationHistoryCSV(conversationId: string) {
   return downloadConversationCSV(conversationId);
 }
 
-// Se sua tela também pedir excel por conversa (opcional)
 export async function downloadConversationHistoryExcel(conversationId: string) {
-  // se você ainda não tiver rota por conversa em xlsx, use CSV ou implemente no backend
   return downloadConversationCSV(conversationId);
 }

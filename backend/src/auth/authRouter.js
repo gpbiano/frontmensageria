@@ -7,7 +7,16 @@ import logger from "../logger.js";
 
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || "gplabs-dev-secret";
+// ✅ PRODUÇÃO: sem fallback de secret (evita invalid signature)
+function getJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    // não mascara com "dev-secret" em produção
+    throw new Error("JWT_SECRET não definido no ambiente (.env.production).");
+  }
+  return secret;
+}
+
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 
 // ======================================================
@@ -20,8 +29,16 @@ const PBKDF2_DIGEST = "sha256";
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERS, PBKDF2_KEYLEN, PBKDF2_DIGEST);
-  return `pbkdf2$${PBKDF2_ITERS}$${salt.toString("base64")}$${hash.toString("base64")}`;
+  const hash = crypto.pbkdf2Sync(
+    password,
+    salt,
+    PBKDF2_ITERS,
+    PBKDF2_KEYLEN,
+    PBKDF2_DIGEST
+  );
+  return `pbkdf2$${PBKDF2_ITERS}$${salt.toString("base64")}$${hash.toString(
+    "base64"
+  )}`;
 }
 
 function verifyPassword(password, passwordHash) {
@@ -38,7 +55,13 @@ function verifyPassword(password, passwordHash) {
     const salt = Buffer.from(parts[2], "base64");
     const expected = Buffer.from(parts[3], "base64");
 
-    const actual = crypto.pbkdf2Sync(password, salt, iters, expected.length, PBKDF2_DIGEST);
+    const actual = crypto.pbkdf2Sync(
+      password,
+      salt,
+      iters,
+      expected.length,
+      PBKDF2_DIGEST
+    );
 
     // timing-safe compare
     return crypto.timingSafeEqual(expected, actual);
@@ -72,18 +95,23 @@ router.post("/login", (req, res) => {
     const { email, password } = req.body || {};
 
     if (!email || !password) {
-      return res.status(400).json({ error: "Informe e-mail e senha para entrar." });
+      return res
+        .status(400)
+        .json({ error: "Informe e-mail e senha para entrar." });
     }
 
     const db = loadDB();
     const users = db.users || [];
 
     const user = users.find(
-      (u) => u.email && String(u.email).toLowerCase() === String(email).toLowerCase()
+      (u) =>
+        u.email &&
+        String(u.email).toLowerCase() === String(email).toLowerCase()
     );
 
     if (!user) return res.status(401).json({ error: "Usuário não encontrado." });
-    if (user.isActive === false) return res.status(403).json({ error: "Usuário está inativo." });
+    if (user.isActive === false)
+      return res.status(403).json({ error: "Usuário está inativo." });
 
     // ✅ Preferência: passwordHash
     if (user.passwordHash) {
@@ -96,9 +124,11 @@ router.post("/login", (req, res) => {
       }
     }
 
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN
-    });
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      getJwtSecret(),
+      { expiresIn: JWT_EXPIRES_IN }
+    );
 
     logger.info({ email: user.email, userId: user.id }, "✅ Login realizado");
 
@@ -108,6 +138,7 @@ router.post("/login", (req, res) => {
     });
   } catch (err) {
     logger.error({ err }, "❌ Erro no login");
+    // Se JWT_SECRET faltar, vai cair aqui com mensagem mais útil
     return res.status(500).json({ error: "Erro ao fazer login." });
   }
 });
@@ -185,7 +216,10 @@ router.post("/auth/set-password", (req, res) => {
 
     saveDB(db);
 
-    logger.info({ userId: user.id, email: user.email, tokenType: t.type }, "🔐 Senha definida com sucesso");
+    logger.info(
+      { userId: user.id, email: user.email, tokenType: t.type },
+      "🔐 Senha definida com sucesso"
+    );
     return res.json({ success: true });
   } catch (err) {
     logger.error({ err }, "❌ Erro ao definir senha");
@@ -194,4 +228,3 @@ router.post("/auth/set-password", (req, res) => {
 });
 
 export default router;
-

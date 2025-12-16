@@ -63,7 +63,14 @@ const { default: whatsappRouter } = await import(
 // VARS
 // ===============================
 const PORT = process.env.PORT || 3010;
-const JWT_SECRET = process.env.JWT_SECRET || "gplabs-dev-secret";
+
+// ✅ JWT_SECRET obrigatório (sem fallback para evitar invalid signature)
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error(
+    "❌ JWT_SECRET não definido. Configure no .env.production (ou no ambiente do PM2)."
+  );
+}
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
@@ -264,18 +271,18 @@ app.post("/login", (req, res) => {
   }
 
   const ok =
-    (user.passwordHash &&
-      verifyPassword(password, user.passwordHash)) ||
+    (user.passwordHash && verifyPassword(password, user.passwordHash)) ||
     (!user.passwordHash && password === user.password);
 
   if (!ok) {
     return res.status(401).json({ error: "Senha incorreta." });
   }
 
+  // ✅ assina com o mesmo JWT_SECRET do requireAuth (sem fallback)
   const token = jwt.sign(
-    { id: user.id, role: user.role, name: user.name },
+    { id: user.id, role: user.role, name: user.name, email: user.email },
     JWT_SECRET,
-    { expiresIn: "8h" }
+    { expiresIn: process.env.JWT_EXPIRES_IN || "8h" }
   );
 
   res.json({ token, user });
