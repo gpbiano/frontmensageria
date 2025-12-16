@@ -124,17 +124,46 @@ function buildQuery(params?: Record<string, any>) {
 // ======================================================
 
 async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
-  const hasBody = options.body !== undefined && options.body !== null;
+  // ======================================================
+  // ✅ FIX GLOBAL: garante "text" em /messages (evita "text obrigatório")
+  // ======================================================
+  let effectiveBody: any = options.body;
+
+  const isMessagesEndpoint = /\/messages(\?|$)/.test(path);
+
+  if (isMessagesEndpoint && isPlainObject(effectiveBody)) {
+    const b: any = effectiveBody;
+
+    const candidate =
+      b.text ??
+      b.body ??
+      b.message ??
+      b.caption ??
+      b.content ??
+      b.payload?.text ??
+      null;
+
+    const hasText =
+      b.text !== undefined &&
+      b.text !== null &&
+      String(b.text).trim() !== "";
+
+    if (!hasText && candidate !== null && String(candidate).trim() !== "") {
+      effectiveBody = { ...b, text: String(candidate).trim() };
+    }
+  }
+
+  const hasBody = effectiveBody !== undefined && effectiveBody !== null;
 
   // Se já veio string/FormData/etc, respeita.
   const body =
-    hasBody && isPlainObject(options.body)
-      ? JSON.stringify(options.body)
-      : options.body;
+    hasBody && isPlainObject(effectiveBody)
+      ? JSON.stringify(effectiveBody)
+      : (effectiveBody as any);
 
   const shouldSetJson =
     hasBody &&
-    isPlainObject(options.body) &&
+    isPlainObject(effectiveBody) &&
     // se alguém já mandou Content-Type no header, respeita
     !new Headers(options.headers || {}).has("Content-Type");
 
@@ -599,7 +628,7 @@ export async function sendTextMessage(
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     body: {
-      text: t, // ✅ obrigatório no backend
+      text: t,
       ...(senderName ? { senderName } : {})
     }
   });
@@ -617,7 +646,7 @@ export async function sendMediaMessage(
     method: "POST",
     body: {
       type,
-      ...(caption ? { text: caption } : {}), // ✅ legenda vai em "text"
+      ...(caption ? { text: caption } : {}),
       ...(mediaUrl ? { mediaUrl } : {}),
       ...(payload?.senderName ? { senderName: payload.senderName } : {})
     }
