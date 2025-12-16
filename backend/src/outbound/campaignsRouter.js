@@ -20,14 +20,17 @@ const DB_FILE = process.env.DB_FILE
 // ===============================
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 
-// ⚠️ aqui é o ponto do seu 500:
-// seu .env.production está com WHATSAPP_PHONE_NUMBER_ID,
-// mas este router estava lendo só PHONE_NUMBER_ID.
+// compatível com env novo e legado
 const PHONE_NUMBER_ID = String(
-  process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || ""
+  process.env.WHATSAPP_PHONE_NUMBER_ID ||
+  process.env.PHONE_NUMBER_ID ||
+  ""
 ).trim();
 
-const WHATSAPP_API_VERSION = String(process.env.WHATSAPP_API_VERSION || "v22.0").trim();
+const WHATSAPP_API_VERSION = String(
+  process.env.WHATSAPP_API_VERSION || "v20.0"
+).trim();
+
 
 // Upload em memória (CSV pequeno/medio). Depois podemos evoluir.
 const upload = multer({
@@ -492,13 +495,13 @@ function exportReportPdf(report, campaignName, req, res) {
 }
 
 async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = []) {
-  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-    throw new Error(
-      "Configuração WhatsApp ausente (WHATSAPP_TOKEN e WHATSAPP_PHONE_NUMBER_ID/PHONE_NUMBER_ID)"
-    );
-  }
+if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+  throw new Error(
+    "Env WhatsApp ausente (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID)"
+  );
+}
 
-  const url = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${PHONE_NUMBER_ID}/messages`;
+const url = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${PHONE_NUMBER_ID}/messages`;
 
   const components = [];
   if (Array.isArray(bodyVars) && bodyVars.length > 0) {
@@ -1079,11 +1082,11 @@ router.post("/:id/start", async (req, res) => {
     }
 
     if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-      return res.status(500).json({
-        error:
-          "Env WhatsApp ausente (WHATSAPP_TOKEN e WHATSAPP_PHONE_NUMBER_ID/PHONE_NUMBER_ID)."
-      });
-    }
+  return res.status(500).json({
+    error: "Env WhatsApp ausente (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID)."
+  });
+}
+
 
     const now = new Date().toISOString();
     campaign.status = "sending";
