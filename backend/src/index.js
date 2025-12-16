@@ -30,7 +30,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const ENV = process.env.NODE_ENV || "development";
-dotenv.config({ path: path.join(process.cwd(), `.env.${ENV}`) });
+dotenv.config({
+  path: process.env.NODE_ENV === "production"
+    ? ".env.production"
+    : ".env"
+});
 
 // ✅ Compat WhatsApp ENV (evita 500 em routers antigos)
 if (!process.env.PHONE_NUMBER_ID && process.env.WHATSAPP_PHONE_NUMBER_ID) {
