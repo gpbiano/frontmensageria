@@ -13,18 +13,7 @@ import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 
 // ===============================
-// DB utils — FONTE ÚNICA
-// ===============================
-import { loadDB, saveDB, ensureArray } from "./utils/db.js";
-
-// Routers estáticos
-import webchatRouter from "./routes/webchat.js";
-import channelsRouter from "./routes/channels.js";
-import conversationsRouter from "./routes/conversations.js";
-import smsCampaignsRouter from "./outbound/smsCampaignsRouter.js";
-
-// ===============================
-// ENV (dotenv ANTES de qualquer uso de process.env)
+// ENV (dotenv TEM que rodar antes de imports locais)
 // ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,11 +21,7 @@ const __dirname = path.dirname(__filename);
 const ENV = process.env.NODE_ENV || "development";
 
 const dotenvResult = dotenv.config({
-  path: path.join(
-    __dirname,
-    "..",
-    ENV === "production" ? ".env.production" : ".env"
-  )
+  path: path.join(__dirname, "..", ENV === "production" ? ".env.production" : ".env")
 });
 
 if (dotenvResult.error) {
@@ -57,13 +42,20 @@ if (!process.env.WHATSAPP_VERIFY_TOKEN && process.env.VERIFY_TOKEN) {
 }
 
 // ===============================
-// Logger (dinâmico)
+// IMPORTS LOCAIS (SÓ AGORA!)
 // ===============================
+const { loadDB, saveDB, ensureArray } = await import("./utils/db.js");
+
+// Routers estáticos (agora via import dinâmico)
+const { default: webchatRouter } = await import("./routes/webchat.js");
+const { default: channelsRouter } = await import("./routes/channels.js");
+const { default: conversationsRouter } = await import("./routes/conversations.js");
+const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
+
+// Logger
 const { default: logger } = await import("./logger.js");
 
-// ===============================
 // Routers dinâmicos
-// ===============================
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
 const { default: humanRouter } = await import("./human/humanRouter.js");
 const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
@@ -85,9 +77,7 @@ const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
 
 // WhatsApp (CANAL ISOLADO)
-const { default: whatsappRouter } = await import(
-  "./routes/channels/whatsappRouter.js"
-);
+const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 
 // ===============================
 // VARS
@@ -118,7 +108,8 @@ logger.info(
     WHATSAPP_PHONE_NUMBER_ID: WHATSAPP_PHONE_NUMBER_ID || null,
     PHONE_NUMBER_ID: PHONE_NUMBER_ID || null,
     EFFECTIVE_PHONE_NUMBER_ID,
-    WHATSAPP_TOKEN_defined: !!WHATSAPP_TOKEN
+    WHATSAPP_TOKEN_defined: !!WHATSAPP_TOKEN,
+    JWT_SECRET_len: (JWT_SECRET || "").length
   },
   "✅ Ambiente carregado"
 );
