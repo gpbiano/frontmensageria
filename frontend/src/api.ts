@@ -35,14 +35,24 @@ function getToken(): string | null {
 }
 
 /**
- * ✅ Ajuste importante:
- * - Garante que o Authorization do token NÃO seja “sobrescrito” por headers externos.
- * - (Antes: o extra vinha por último e poderia apagar o Bearer sem querer.)
+ * ✅ Regra:
+ * - Não deixar "extra headers" sobrescrever Authorization.
+ * - Também não sobrescrever Content-Type automaticamente se for FormData.
  */
 function buildHeaders(extra?: HeadersInit): HeadersInit {
   const token = getToken();
+
+  // Normaliza HeadersInit -> objeto simples (pra merge previsível)
+  const normalized: Record<string, string> = {};
+  if (extra) {
+    const h = new Headers(extra);
+    h.forEach((v, k) => {
+      normalized[k] = v;
+    });
+  }
+
   return {
-    ...(extra || {}),
+    ...normalized,
     ...(token ? { Authorization: `Bearer ${token}` } : {})
   };
 }
@@ -61,7 +71,11 @@ function isUnauthorized(res: Response) {
 // ======================================================
 
 async function safeReadText(res: Response) {
-  return res.text().catch(() => "");
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
 }
 
 async function safeReadJson<T = any>(res: Response): Promise<T | null> {
@@ -85,7 +99,13 @@ function buildApiError(status: number, path: string, payload: any, text: string)
 }
 
 function isPlainObject(v: any) {
-  return v && typeof v === "object" && !(v instanceof FormData);
+  return (
+    v &&
+    typeof v === "object" &&
+    !(v instanceof FormData) &&
+    !(v instanceof Blob) &&
+    !(v instanceof ArrayBuffer)
+  );
 }
 
 function buildQuery(params?: Record<string, any>) {
@@ -100,11 +120,11 @@ function buildQuery(params?: Record<string, any>) {
 }
 
 // ======================================================
-// HELPER FETCH JSON
+// HELPER FETCH (JSON / TEXT / NO CONTENT)
 // ======================================================
 
 async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
-  const hasBody = typeof options.body !== "undefined" && options.body !== null;
+  const hasBody = options.body !== undefined && options.body !== null;
 
   // Se já veio string/FormData/etc, respeita.
   const body =
@@ -112,31 +132,31 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
       ? JSON.stringify(options.body)
       : options.body;
 
+  const shouldSetJson =
+    hasBody &&
+    isPlainObject(options.body) &&
+    // se alguém já mandou Content-Type no header, respeita
+    !new Headers(options.headers || {}).has("Content-Type");
+
   const headers = buildHeaders({
-    ...(hasBody && isPlainObject(options.body)
-      ? { "Content-Type": "application/json" }
-      : {}),
+    ...(shouldSetJson ? { "Content-Type": "application/json" } : {}),
     ...(options.headers || {})
   });
 
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
-    body,
-    headers
+    headers,
+    body
   });
 
-  // ✅ Tratamento padrão de 401: limpa token e força novo login
+  // ✅ 401: (mantém padrão do requestForm/downloadBlob) limpa token
   if (isUnauthorized(res)) {
-  const payload = await safeReadJson(res);
-
-  // Apenas sinaliza erro — NÃO limpa token aqui
-  const msg =
-    payload?.error ||
-    payload?.message ||
-    "Não autorizado (401)";
-
-  throw new Error(msg);
-}
+    clearAuth();
+    const payload = await safeReadJson(res);
+    const text = payload ? "" : await safeReadText(res);
+    console.error("🔒 API 401:", path, payload || text);
+    throw new Error(payload?.message || payload?.error || "Sessão expirada ou token inválido. Faça login novamente.");
+  }
 
   if (!res.ok) {
     const payload = await safeReadJson(res);
@@ -145,8 +165,15 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
     throw buildApiError(res.status, path, payload, text);
   }
 
+  // ✅ suporte a 204 No Content (muito comum em POST/PATCH)
+  if (res.status === 204) return (null as T);
+
+  // ✅ tenta JSON, se não der, devolve texto (útil quando backend retorna string)
   const json = await safeReadJson<T>(res);
-  return (json ?? (null as T)) as T;
+  if (json !== null) return json;
+
+  const text = await safeReadText(res);
+  return (text as unknown as T);
 }
 
 // ======================================================
@@ -165,7 +192,6 @@ async function requestForm<T = any>(
     body: formData
   });
 
-  // ✅ Tratamento padrão de 401: limpa token e força novo login
   if (isUnauthorized(res)) {
     clearAuth();
     const payload = await safeReadJson(res);
@@ -181,8 +207,13 @@ async function requestForm<T = any>(
     throw buildApiError(res.status, path, payload, text);
   }
 
+  if (res.status === 204) return (null as T);
+
   const json = await safeReadJson<T>(res);
-  return (json ?? (null as T)) as T;
+  if (json !== null) return json;
+
+  const text = await safeReadText(res);
+  return (text as unknown as T);
 }
 
 // ======================================================
@@ -199,7 +230,6 @@ async function downloadBlob(path: string, filename: string) {
     headers: buildHeaders()
   });
 
-  // ✅ Tratamento padrão de 401: limpa token e força novo login
   if (isUnauthorized(res)) {
     clearAuth();
     const payload = await safeReadJson(res);
@@ -556,9 +586,11 @@ export async function sendTextMessage(
   text: string,
   senderName?: string
 ): Promise<Message> {
+  // ✅ backend normalmente espera text como string OU { text:{body:""} }
+  // Mantive compat com seu backend atual: { text }
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
-    body: { text, ...(senderName ? { senderName } : {}) }
+    body: { body: text, ...(senderName ? { senderName } : {}) }
   });
 }
 
@@ -568,13 +600,13 @@ export async function sendMediaMessage(
 ): Promise<Message> {
   const type = String(payload?.type || "text").toLowerCase();
   const mediaUrl = String(payload?.mediaUrl || "").trim();
-  const text = String(payload?.caption || "").trim();
+  const caption = String(payload?.caption || "").trim();
 
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     body: {
       type,
-      ...(text ? { text } : {}),
+      ...(caption ? { body: caption } : {}),
       ...(mediaUrl ? { mediaUrl } : {}),
       ...(payload?.senderName ? { senderName: payload.senderName } : {})
     }
@@ -954,6 +986,10 @@ export async function downloadConversationHistoryCSV(conversationId: string) {
   return downloadConversationCSV(conversationId);
 }
 
+// ⚠️ bug antigo: Excel estava apontando pro CSV
 export async function downloadConversationHistoryExcel(conversationId: string) {
-  return downloadConversationCSV(conversationId);
+  return downloadBlob(
+    `/conversations/${encodeURIComponent(conversationId)}/export.xlsx`,
+    `conversation_${conversationId}.xlsx`
+  );
 }
