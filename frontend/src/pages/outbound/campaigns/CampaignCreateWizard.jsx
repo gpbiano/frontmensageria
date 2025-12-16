@@ -14,9 +14,9 @@ import {
 } from "../../../api";
 
 // Steps
-import StepCreateCampaign from "./steps/StepCreateCampaign.jsx";
-import StepUploadAudience from "./steps/StepUploadAudience.jsx";
-import StepStartCampaign from "./steps/StepStartCampaign.jsx";
+import StepCreateCampaign from "./Steps/StepCreateCampaign.jsx";
+import StepUploadAudience from "./Steps/StepUploadAudience.jsx";
+import StepStartCampaign from "./Steps/StepStartCampaign.jsx";
 
 const STEPS = [
   { key: "create", label: "1. Criar campanha" },
