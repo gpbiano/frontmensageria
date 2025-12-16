@@ -13,7 +13,12 @@ import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 
 // ===============================
-// ENV (dotenv TEM que rodar antes de imports locais)
+// DB utils — FONTE ÚNICA
+// ===============================
+import { loadDB, saveDB, ensureArray } from "./utils/db.js";
+
+// ===============================
+// ENV (dotenv ANTES de qualquer router/middleware que use process.env)
 // ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,9 +33,7 @@ if (dotenvResult.error) {
   console.error("❌ Falha ao carregar dotenv:", dotenvResult.error);
 }
 
-// ===============================
-// Compat ENV WhatsApp (evita 500 em routers antigos)
-// ===============================
+// ✅ Compat WhatsApp ENV (evita 500 em routers antigos)
 if (!process.env.PHONE_NUMBER_ID && process.env.WHATSAPP_PHONE_NUMBER_ID) {
   process.env.PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 }
@@ -42,20 +45,21 @@ if (!process.env.WHATSAPP_VERIFY_TOKEN && process.env.VERIFY_TOKEN) {
 }
 
 // ===============================
-// IMPORTS LOCAIS (SÓ AGORA!)
+// Logger (depois do dotenv)
 // ===============================
-const { loadDB, saveDB, ensureArray } = await import("./utils/db.js");
+const { default: logger } = await import("./logger.js");
 
-// Routers estáticos (agora via import dinâmico)
+// ===============================
+// Routers (TODOS dinâmicos — depois do dotenv)
+// ===============================
+
+// Routers que antes estavam estáticos (isso causava o bug do JWT!)
 const { default: webchatRouter } = await import("./routes/webchat.js");
 const { default: channelsRouter } = await import("./routes/channels.js");
 const { default: conversationsRouter } = await import("./routes/conversations.js");
 const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
-// Logger
-const { default: logger } = await import("./logger.js");
-
-// Routers dinâmicos
+// Dinâmicos já existentes
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
 const { default: humanRouter } = await import("./human/humanRouter.js");
 const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
@@ -84,12 +88,11 @@ const { default: whatsappRouter } = await import("./routes/channels/whatsappRout
 // ===============================
 const PORT = process.env.PORT || 3010;
 
-// JWT obrigatório (sem fallback)
+// ✅ JWT_SECRET obrigatório (NUNCA fallback)
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  throw new Error(
-    "❌ JWT_SECRET não definido. Configure no .env.production ou no ambiente do PM2."
-  );
+if (!JWT_SECRET || !String(JWT_SECRET).trim()) {
+  logger.fatal("❌ JWT_SECRET não definido. Configure no .env.production.");
+  throw new Error("JWT_SECRET não definido.");
 }
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
@@ -109,7 +112,7 @@ logger.info(
     PHONE_NUMBER_ID: PHONE_NUMBER_ID || null,
     EFFECTIVE_PHONE_NUMBER_ID,
     WHATSAPP_TOKEN_defined: !!WHATSAPP_TOKEN,
-    JWT_SECRET_len: (JWT_SECRET || "").length
+    JWT_SECRET_len: String(JWT_SECRET).length
   },
   "✅ Ambiente carregado"
 );
@@ -117,9 +120,7 @@ logger.info(
 // ===============================
 // HANDLERS NODE
 // ===============================
-process.on("unhandledRejection", (r) =>
-  logger.error({ r }, "UnhandledRejection")
-);
+process.on("unhandledRejection", (r) => logger.error({ r }, "UnhandledRejection"));
 process.on("uncaughtException", (e) => {
   logger.fatal({ e }, "UncaughtException");
   process.exit(1);
@@ -185,7 +186,7 @@ app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ===============================
-// ADMIN PADRÃO (apenas DEV)
+// ADMIN PADRÃO (somente DEV)
 // ===============================
 if (ENV !== "production") {
   (function ensureAdmin() {
