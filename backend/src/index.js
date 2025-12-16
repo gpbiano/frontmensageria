@@ -129,32 +129,28 @@ app.use(
 // CORS (CRÍTICO – CORREÇÃO DO PROBLEMA)
 // ===============================
 const ALLOWED_ORIGINS = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "https://app.gplabs.com.br",
-  "https://cliente.gplabs.com.br"
+  "https://cliente.gplabs.com.br",
+  "https://gplabs.com.br",
+  "http://localhost:5173"
 ];
 
 app.use(
   cors({
-    origin(origin, callback) {
-      // Permite chamadas server-to-server, webhooks, curl, postman
-      if (!origin) return callback(null, true);
+    origin(origin, cb) {
+      // permite calls server-to-server / curl sem Origin
+      if (!origin) return cb(null, true);
 
-      if (ALLOWED_ORIGINS.includes(origin)) {
-        return callback(null, true);
-      }
+      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
 
-      logger.warn({ origin }, "❌ CORS bloqueado");
-      return callback(new Error(`CORS não permitido para: ${origin}`));
+      return cb(new Error(`CORS blocked: ${origin}`));
     },
+    credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
   })
 );
 
-// Preflight
+// importante para preflight
 app.options("*", cors());
 
 // ===============================
