@@ -24,35 +24,46 @@ import conversationsRouter from "./routes/conversations.js";
 import smsCampaignsRouter from "./outbound/smsCampaignsRouter.js";
 
 // ===============================
-// ENV
+// ENV (dotenv ANTES de qualquer uso de process.env)
 // ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const ENV = process.env.NODE_ENV || "development";
-dotenv.config({
-  path: process.env.NODE_ENV === "production"
-    ? ".env.production"
-    : ".env"
+
+const dotenvResult = dotenv.config({
+  path: path.join(
+    __dirname,
+    "..",
+    ENV === "production" ? ".env.production" : ".env"
+  )
 });
 
-// ✅ Compat WhatsApp ENV (evita 500 em routers antigos)
+if (dotenvResult.error) {
+  console.error("❌ Falha ao carregar dotenv:", dotenvResult.error);
+}
+
+// ===============================
+// Compat ENV WhatsApp (evita 500 em routers antigos)
+// ===============================
 if (!process.env.PHONE_NUMBER_ID && process.env.WHATSAPP_PHONE_NUMBER_ID) {
   process.env.PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 }
 if (!process.env.WHATSAPP_PHONE_NUMBER_ID && process.env.PHONE_NUMBER_ID) {
   process.env.WHATSAPP_PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 }
-
-// compat VERIFY_TOKEN
 if (!process.env.WHATSAPP_VERIFY_TOKEN && process.env.VERIFY_TOKEN) {
   process.env.WHATSAPP_VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 }
 
-// logger
+// ===============================
+// Logger (dinâmico)
+// ===============================
 const { default: logger } = await import("./logger.js");
 
+// ===============================
 // Routers dinâmicos
+// ===============================
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
 const { default: humanRouter } = await import("./human/humanRouter.js");
 const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
@@ -83,25 +94,25 @@ const { default: whatsappRouter } = await import(
 // ===============================
 const PORT = process.env.PORT || 3010;
 
-// ✅ JWT_SECRET obrigatório (sem fallback para evitar invalid signature)
+// JWT obrigatório (sem fallback)
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   throw new Error(
-    "❌ JWT_SECRET não definido. Configure no .env.production (ou no ambiente do PM2)."
+    "❌ JWT_SECRET não definido. Configure no .env.production ou no ambiente do PM2."
   );
 }
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID; // ✅ canonical
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID; // ✅ compat (já espelhado acima)
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const WABA_ID = process.env.WABA_ID;
 
-// ✅ valor final único pra usar em logs/health
 const EFFECTIVE_PHONE_NUMBER_ID =
   String(WHATSAPP_PHONE_NUMBER_ID || PHONE_NUMBER_ID || "").trim() || null;
 
 logger.info(
   {
+    ENV,
     PORT,
     WABA_ID,
     WHATSAPP_PHONE_NUMBER_ID: WHATSAPP_PHONE_NUMBER_ID || null,
@@ -124,9 +135,9 @@ process.on("uncaughtException", (e) => {
 });
 
 // ===============================
-// UPLOADS
+// UPLOADS (path fixo)
 // ===============================
-const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+const UPLOADS_DIR = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -162,24 +173,19 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5173"
 ];
 
-app.use(
-  cors({
-    origin(origin, cb) {
-      // permite calls server-to-server / curl sem Origin
-      if (!origin) return cb(null, true);
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+};
 
-      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-
-      return cb(new Error(`CORS blocked: ${origin}`));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
-  })
-);
-
-// importante para preflight
-app.options("*", cors());
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // ===============================
 // PARSERS
@@ -188,32 +194,34 @@ app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ===============================
-// ADMIN PADRÃO
+// ADMIN PADRÃO (apenas DEV)
 // ===============================
-(function ensureAdmin() {
-  const db = loadDB();
-  db.users = ensureArray(db.users);
+if (ENV !== "production") {
+  (function ensureAdmin() {
+    const db = loadDB();
+    db.users = ensureArray(db.users);
 
-  const email = "admin@gplabs.com.br";
-  const now = new Date().toISOString();
+    const email = "admin@gplabs.com.br";
+    const now = new Date().toISOString();
 
-  let user = db.users.find((u) => u.email === email);
-  if (!user) {
-    db.users.push({
-      id: db.users.length + 1,
-      name: "Administrador",
-      email,
-      password: "gplabs123",
-      passwordHash: null,
-      role: "admin",
-      isActive: true,
-      createdAt: now,
-      updatedAt: now
-    });
-    saveDB(db);
-    logger.info("👤 Admin padrão criado");
-  }
-})();
+    let user = db.users.find((u) => u.email === email);
+    if (!user) {
+      db.users.push({
+        id: db.users.length + 1,
+        name: "Administrador",
+        email,
+        password: "gplabs123",
+        passwordHash: null,
+        role: "admin",
+        isActive: true,
+        createdAt: now,
+        updatedAt: now
+      });
+      saveDB(db);
+      logger.info("👤 Admin padrão criado (DEV)");
+    }
+  })();
+}
 
 // ===============================
 // ROTAS
@@ -235,10 +243,10 @@ app.use("/auth", passwordRouter);
 app.use("/webchat", webchatRouter);
 app.use("/settings/channels", channelsRouter);
 
-// Conversas (FONTE ÚNICA)
+// Conversas
 app.use("/conversations", conversationsRouter);
 
-// WhatsApp Webhook (FONTE ÚNICA)
+// WhatsApp Webhook
 app.use("/webhook/whatsapp", whatsappRouter);
 
 // ===============================
@@ -299,14 +307,14 @@ app.post("/login", (req, res) => {
     return res.status(401).json({ error: "Senha incorreta." });
   }
 
-  // ✅ assina com o mesmo JWT_SECRET do requireAuth (sem fallback)
   const token = jwt.sign(
     { id: user.id, role: user.role, name: user.name, email: user.email },
     JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || "8h" }
   );
 
-  res.json({ token, user });
+  const { password: _p, passwordHash: _ph, ...safeUser } = user;
+  res.json({ token, user: safeUser });
 });
 
 // ===============================
@@ -314,6 +322,9 @@ app.post("/login", (req, res) => {
 // ===============================
 app.use((err, req, res, next) => {
   logger.error({ err }, "Erro não tratado");
+  if (err.message?.startsWith("CORS blocked")) {
+    return res.status(403).json({ error: "CORS blocked." });
+  }
   res.status(500).json({ error: "Internal server error" });
 });
 
