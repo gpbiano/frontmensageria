@@ -586,11 +586,15 @@ export async function sendTextMessage(
   text: string,
   senderName?: string
 ): Promise<Message> {
-  // ✅ backend normalmente espera text como string OU { text:{body:""} }
-  // Mantive compat com seu backend atual: { text }
+  const t = String(text || "").trim();
+  if (!t) throw new Error("Mensagem vazia.");
+
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
-    body: { body: text, ...(senderName ? { senderName } : {}) }
+    body: {
+      text: t, // ✅ backend exige "text"
+      ...(senderName ? { senderName } : {})
+    }
   });
 }
 
@@ -606,12 +610,13 @@ export async function sendMediaMessage(
     method: "POST",
     body: {
       type,
-      ...(caption ? { body: caption } : {}),
+      ...(caption ? { text: caption } : {}), // ✅ caption também vai em "text"
       ...(mediaUrl ? { mediaUrl } : {}),
       ...(payload?.senderName ? { senderName: payload.senderName } : {})
     }
   });
 }
+
 
 export async function sendFileMessage(
   conversationId: string,
