@@ -43,8 +43,12 @@ function formatMessageText(msg) {
 
 function formatTimestamp(msg) {
   const raw = msg?.createdAt ?? msg?.timestamp ?? msg?.sentAt ?? null;
-  if (!raw) return "";
-  const d = typeof raw === "number" ? new Date(raw) : new Date(raw);
+  if (raw == null) return "";
+
+  // aceita epoch number, epoch string e ISO
+  const n = typeof raw === "string" && /^\d+$/.test(raw) ? Number(raw) : raw;
+  const d = typeof n === "number" ? new Date(n) : new Date(n);
+
   return isNaN(d.getTime()) ? "" : d.toLocaleString();
 }
 
@@ -159,6 +163,12 @@ export default function ChatPanel({
   const recordChunksRef = useRef([]);
   const recordTimerRef = useRef(null);
 
+  // ✅ evita duplo disparo em mobile (touch + mouse)
+  const touchActiveRef = useRef(false);
+
+  // ✅ garante que stream seja fechado mesmo se onstop falhar
+  const streamRef = useRef(null);
+
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
   const fileRef = useRef(null);
@@ -193,13 +203,16 @@ export default function ChatPanel({
   async function handleSubmit(e) {
     e.preventDefault();
     const text = draft.trim();
-    if (!text || isClosed || sending) return;
+    if (!text || isClosed || sending || recording) return;
 
     setSending(true);
     try {
       await onSendText?.(text);
       setDraft("");
       textareaRef.current?.focus();
+    } catch (err) {
+      console.error("Falha ao enviar texto:", err);
+      alert(err?.message || "Falha ao enviar mensagem.");
     } finally {
       setSending(false);
     }
@@ -225,6 +238,10 @@ export default function ChatPanel({
         mimeType: file.type
       });
       setDraft("");
+      textareaRef.current?.focus();
+    } catch (err) {
+      console.error("Falha ao enviar mídia:", err);
+      alert(err?.message || "Falha ao enviar arquivo.");
     } finally {
       setSending(false);
     }
@@ -255,6 +272,8 @@ export default function ChatPanel({
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
       const mimeType = pickBestAudioMime();
 
       recordChunksRef.current = [];
@@ -266,18 +285,24 @@ export default function ChatPanel({
 
       rec.onstop = async () => {
         // para as tracks do microfone
-        stream.getTracks().forEach((t) => t.stop());
+        try {
+          stream.getTracks().forEach((t) => t.stop());
+        } catch {}
+        streamRef.current = null;
 
         const chunks = recordChunksRef.current;
         recordChunksRef.current = [];
 
-        if (!chunks.length) return;
+        if (!chunks.length) {
+          setRecordSecs(0);
+          return;
+        }
 
         const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
 
         // gera um File pra reutilizar o pipeline (upload + send)
-        const ext = (blob.type.includes("ogg") ? "ogg" : "webm");
-        const file = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
+        const ext = blob.type.includes("ogg") ? "ogg" : "webm";
+        const file = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type || "audio/webm" });
 
         setSending(true);
         try {
@@ -287,6 +312,9 @@ export default function ChatPanel({
             file,
             mimeType: file.type
           });
+        } catch (err) {
+          console.error("Falha ao enviar áudio:", err);
+          alert(err?.message || "Falha ao enviar áudio.");
         } finally {
           setSending(false);
           setRecordSecs(0);
@@ -306,6 +334,14 @@ export default function ChatPanel({
     } catch (e) {
       console.error("Erro ao iniciar gravação:", e);
       alert("Não foi possível acessar o microfone. Verifique permissões do navegador.");
+      // garante limpeza
+      try {
+        streamRef.current?.getTracks?.().forEach((t) => t.stop());
+      } catch {}
+      streamRef.current = null;
+      setRecording(false);
+      setRecordSecs(0);
+      clearInterval(recordTimerRef.current);
     }
   }
 
@@ -322,16 +358,30 @@ export default function ChatPanel({
       if (rec && rec.state !== "inactive") rec.stop();
     } catch (e) {
       console.warn("Falha ao parar gravação:", e);
+      // fallback: fecha stream se necessário
+      try {
+        streamRef.current?.getTracks?.().forEach((t) => t.stop());
+      } catch {}
+      streamRef.current = null;
+      setRecordSecs(0);
     }
   }
 
   useEffect(() => {
     return () => {
       clearInterval(recordTimerRef.current);
+
+      // tenta parar recorder
       try {
         const rec = recorderRef.current;
         if (rec && rec.state !== "inactive") rec.stop();
       } catch {}
+
+      // garante que stream fecha
+      try {
+        streamRef.current?.getTracks?.().forEach((t) => t.stop());
+      } catch {}
+      streamRef.current = null;
     };
   }, []);
 
@@ -480,6 +530,7 @@ export default function ChatPanel({
           const isClient = sender === "client";
           const isSystem = sender === "system";
 
+          // ⚠️ heurística: marca humano no 1º msg de agente
           const showHumanMarker = isAgent && !humanMarkerShown;
           if (showHumanMarker) humanMarkerShown = true;
 
@@ -539,7 +590,7 @@ export default function ChatPanel({
           😊
         </button>
 
-        <button type="button" onClick={() => fileRef.current?.click()}>
+        <button type="button" onClick={() => fileRef.current?.click()} disabled={isClosed || sending || recording}>
           📎
         </button>
 
@@ -547,11 +598,33 @@ export default function ChatPanel({
         <button
           type="button"
           disabled={isClosed || sending}
-          onMouseDown={(e) => { e.preventDefault(); startRecording(); }}
-          onMouseUp={(e) => { e.preventDefault(); stopRecording(); }}
-          onMouseLeave={(e) => { e.preventDefault(); stopRecording(); }}
-          onTouchStart={(e) => { e.preventDefault(); startRecording(); }}
-          onTouchEnd={(e) => { e.preventDefault(); stopRecording(); }}
+          onMouseDown={(e) => {
+            if (touchActiveRef.current) return;
+            e.preventDefault();
+            startRecording();
+          }}
+          onMouseUp={(e) => {
+            if (touchActiveRef.current) return;
+            e.preventDefault();
+            stopRecording();
+          }}
+          onMouseLeave={(e) => {
+            if (touchActiveRef.current) return;
+            e.preventDefault();
+            stopRecording();
+          }}
+          onTouchStart={(e) => {
+            touchActiveRef.current = true;
+            e.preventDefault();
+            startRecording();
+          }}
+          onTouchEnd={(e) => {
+            e.preventDefault();
+            stopRecording();
+            setTimeout(() => {
+              touchActiveRef.current = false;
+            }, 50);
+          }}
           title={recording ? `Gravando… ${recordSecs}s (solte para enviar)` : "Segure para gravar áudio"}
           style={{
             opacity: recording ? 1 : 0.9,
@@ -573,7 +646,13 @@ export default function ChatPanel({
           ref={textareaRef}
           value={draft}
           disabled={isClosed || sending || recording}
-          placeholder={recording ? "Gravando… solte o 🎙️ para enviar" : isClosed ? "Atendimento encerrado." : "Digite uma mensagem..."}
+          placeholder={
+            recording
+              ? "Gravando… solte o 🎙️ para enviar"
+              : isClosed
+                ? "Atendimento encerrado."
+                : "Digite uma mensagem..."
+          }
           onChange={(e) => setDraft(e.target.value)}
         />
 
