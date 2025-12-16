@@ -149,13 +149,17 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
     body
   });
 
-  // ✅ 401: (mantém padrão do requestForm/downloadBlob) limpa token
+  // ✅ 401: mantém padrão do requestForm/downloadBlob (limpa token)
   if (isUnauthorized(res)) {
     clearAuth();
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
     console.error("🔒 API 401:", path, payload || text);
-    throw new Error(payload?.message || payload?.error || "Sessão expirada ou token inválido. Faça login novamente.");
+    throw new Error(
+      payload?.message ||
+        payload?.error ||
+        "Sessão expirada ou token inválido. Faça login novamente."
+    );
   }
 
   if (!res.ok) {
@@ -165,10 +169,10 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
     throw buildApiError(res.status, path, payload, text);
   }
 
-  // ✅ suporte a 204 No Content (muito comum em POST/PATCH)
+  // ✅ suporte a 204 No Content
   if (res.status === 204) return (null as T);
 
-  // ✅ tenta JSON, se não der, devolve texto (útil quando backend retorna string)
+  // ✅ tenta JSON, se não der, devolve texto
   const json = await safeReadJson<T>(res);
   if (json !== null) return json;
 
@@ -575,12 +579,15 @@ export async function fetchConversations(
 }
 
 export async function fetchMessages(conversationId: string): Promise<Message[]> {
-  const data = await request<any>(
-    `/conversations/${encodeURIComponent(conversationId)}/messages`
-  );
+  const data = await request<any>(`/conversations/${encodeURIComponent(conversationId)}/messages`);
   return Array.isArray(data) ? (data as Message[]) : [];
 }
 
+/**
+ * ✅ IMPORTANTE (p/ seu erro "text obrigatório"):
+ * O backend valida "text" como obrigatório para mensagens de texto.
+ * Então SEMPRE enviamos "text".
+ */
 export async function sendTextMessage(
   conversationId: string,
   text: string,
@@ -592,13 +599,7 @@ export async function sendTextMessage(
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     body: {
-      // ✅ principal (o backend está exigindo isso)
-      text: t,
-
-      // ✅ fallback compat (não atrapalha se o backend ignorar)
-      body: t,
-      message: t,
-
+      text: t, // ✅ obrigatório no backend
       ...(senderName ? { senderName } : {})
     }
   });
@@ -616,33 +617,12 @@ export async function sendMediaMessage(
     method: "POST",
     body: {
       type,
-      ...(caption ? { text: caption, body: caption, message: caption } : {}),
+      ...(caption ? { text: caption } : {}), // ✅ legenda vai em "text"
       ...(mediaUrl ? { mediaUrl } : {}),
       ...(payload?.senderName ? { senderName: payload.senderName } : {})
     }
   });
 }
-
-
-export async function sendMediaMessage(
-  conversationId: string,
-  payload: { type: string; mediaUrl: string; caption?: string; senderName?: string }
-): Promise<Message> {
-  const type = String(payload?.type || "text").toLowerCase();
-  const mediaUrl = String(payload?.mediaUrl || "").trim();
-  const caption = String(payload?.caption || "").trim();
-
-  return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
-    method: "POST",
-    body: {
-      type,
-      ...(caption ? { text: caption } : {}), // ✅ caption também vai em "text"
-      ...(mediaUrl ? { mediaUrl } : {}),
-      ...(payload?.senderName ? { senderName: payload.senderName } : {})
-    }
-  });
-}
-
 
 export async function sendFileMessage(
   conversationId: string,
@@ -846,10 +826,7 @@ export async function uploadCampaignAudience(campaignId: string, file: File) {
   const fd = new FormData();
   fd.append("file", file);
 
-  return requestForm(
-    `/outbound/campaigns/${encodeURIComponent(campaignId)}/audience`,
-    fd
-  );
+  return requestForm(`/outbound/campaigns/${encodeURIComponent(campaignId)}/audience`, fd);
 }
 
 export async function startCampaign(
