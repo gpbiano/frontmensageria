@@ -30,28 +30,29 @@ const HANDOFF_TIMEOUT_MS = 10 * 60 * 1000; // ✅ 10 min
 // ⚠️ NÃO “congele” env no topo do módulo.
 // Esse router é importado antes do dotenv em alguns setups.
 // Sempre leia process.env em runtime.
-function getWaConfig() {
+function getWhatsAppConfig() {
   const token = String(process.env.WHATSAPP_TOKEN || "").trim();
 
-  // ✅ fonte oficial: WHATSAPP_PHONE_NUMBER_ID
-  // ✅ compat: PHONE_NUMBER_ID (caso exista em algum ambiente antigo)
   const phoneNumberId = String(
-    process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || ""
+    process.env.WHATSAPP_PHONE_NUMBER_ID ||
+      process.env.PHONE_NUMBER_ID ||
+      ""
   ).trim();
 
-  const apiVersion = String(process.env.WHATSAPP_API_VERSION || "v20.0").trim();
+  const apiVersion = String(
+    process.env.WHATSAPP_API_VERSION || "v20.0"
+  ).trim();
+
+  if (!token || !phoneNumberId) {
+    throw new Error(
+      "WhatsApp não configurado: defina WHATSAPP_TOKEN e PHONE_NUMBER_ID no .env"
+    );
+  }
 
   return { token, phoneNumberId, apiVersion };
 }
 
-function assertWhatsAppConfigured() {
-  const { token, phoneNumberId } = getWaConfig();
-  if (!token || !phoneNumberId) {
-    throw new Error(
-      "WhatsApp não configurado: defina WHATSAPP_TOKEN e WHATSAPP_PHONE_NUMBER_ID no .env"
-    );
-  }
-}
+
 
 function normalizeWaTo(conv) {
   // conv.peerId pode vir como "wa:5564..." -> queremos só dígitos
