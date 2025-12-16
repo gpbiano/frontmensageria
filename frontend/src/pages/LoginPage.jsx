@@ -1,15 +1,29 @@
 // frontend/src/pages/LoginPage.jsx
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "../styles/login-page.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
+const AUTH_KEY = "gpLabsAuthToken";
 
 export default function LoginPage({ onLogin }) {
-  const [email, setEmail] = useState("admin@gplabs.com.br");
-  const [password, setPassword] = useState("gplabs123");
+  const isDev = import.meta.env.DEV;
+
+  // ✅ Em PROD não preenche credenciais
+  // ✅ Em DEV pode manter praticidade
+  const [email, setEmail] = useState(isDev ? "admin@gplabs.com.br" : "");
+  const [password, setPassword] = useState(isDev ? "gplabs123" : "");
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ✅ Garante que em produção nunca “sobra” senha (ex: hot reload / navegação)
+  useEffect(() => {
+    if (!isDev) setPassword("");
+  }, [isDev]);
+
+  const canSubmit = useMemo(() => {
+    return !!email && !!password && !isSubmitting;
+  }, [email, password, isSubmitting]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -46,14 +60,22 @@ export default function LoginPage({ onLogin }) {
       }
 
       if (data?.token) {
-        localStorage.setItem("gpLabsAuthToken", data.token);
+        // ✅ token sim; senha jamais
+        localStorage.setItem(AUTH_KEY, data.token);
+
+        // (opcional) se no futuro você quiser diferenciar rememberMe:
+        // hoje mantemos o mesmo comportamento para evitar regressões
+        // localStorage.setItem("gpLabsRememberMe", rememberMe ? "1" : "0");
       }
+
+      // ✅ por segurança: limpa senha após sucesso (principalmente em PROD)
+      if (!isDev) setPassword("");
 
       onLogin?.(data);
     } catch (err) {
       console.error("Erro ao logar:", err);
 
-      // Fallback em modo DEV – te coloca pra dentro mesmo sem backend
+      // ⚠️ DEV fallback (mantido como estava, mas sem “guardar senha”)
       if (import.meta.env.DEV) {
         console.warn(
           "[DEV] Backend falhou, usando login de desenvolvimento sem validar no servidor."
@@ -62,7 +84,7 @@ export default function LoginPage({ onLogin }) {
           token: "dev-fallback-token",
           user: { email, name: "Admin (Dev)" }
         };
-        localStorage.setItem("gpLabsAuthToken", fakeData.token);
+        localStorage.setItem(AUTH_KEY, fakeData.token);
         onLogin?.(fakeData);
       } else {
         setError(
@@ -93,7 +115,8 @@ export default function LoginPage({ onLogin }) {
 
         {error && <div className="login-error">{error}</div>}
 
-        <form className="login-form" onSubmit={handleSubmit}>
+        {/* ✅ Preserva o desenho da página */}
+        <form className="login-form" onSubmit={handleSubmit} autoComplete="on">
           <label className="login-label">
             E-mail
             <input
@@ -101,7 +124,10 @@ export default function LoginPage({ onLogin }) {
               className="login-input"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
+              name="username"
+              autoComplete="username"
+              inputMode="email"
+              spellCheck={false}
             />
           </label>
 
@@ -112,43 +138,40 @@ export default function LoginPage({ onLogin }) {
               className="login-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              name="password"
               autoComplete="current-password"
             />
           </label>
 
-         <div className="login-row">
-  <label className="login-remember">
-    <input
-      type="checkbox"
-      checked={rememberMe}
-      onChange={(e) => setRememberMe(e.target.checked)}
-    />
-    <span>Manter conectado</span>
-  </label>
+          <div className="login-row">
+            <label className="login-remember">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+              />
+              <span>Manter conectado</span>
+            </label>
 
-  <button
-    type="button"
-    className="login-link"
-    onClick={() =>
-      alert("Fluxo de recuperação ainda não implementado.")
-    }
-  >
-    Esqueci minha senha
-  </button>
-</div>
+            <button
+              type="button"
+              className="login-link"
+              onClick={() => alert("Fluxo de recuperação ainda não implementado.")}
+            >
+              Esqueci minha senha
+            </button>
+          </div>
 
-
-          <button type="submit" className="login-submit" disabled={isSubmitting}>
-  {isSubmitting ? (
-    <span className="btn-loading">
-      <span className="btn-spinner" aria-hidden="true" />
-      Entrando...
-    </span>
-  ) : (
-    "Entrar"
-  )}
-</button>
-
+          <button type="submit" className="login-submit" disabled={!canSubmit}>
+            {isSubmitting ? (
+              <span className="btn-loading">
+                <span className="btn-spinner" aria-hidden="true" />
+                Entrando...
+              </span>
+            ) : (
+              "Entrar"
+            )}
+          </button>
         </form>
 
         <div className="login-footer">
