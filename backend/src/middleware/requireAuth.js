@@ -4,7 +4,19 @@ import logger from "../logger.js";
 export function requireAuth(req, res, next) {
   try {
     const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+
+    // DEBUG TEMP (remove depois)
+    logger.info(
+      {
+        hasAuth: !!auth,
+        authPrefix: auth.slice(0, 12),
+        tokenLen: token.length,
+        tokenStart: token.slice(0, 12),
+        jwtSecretLen: (process.env.JWT_SECRET || "").length
+      },
+      "🔎 AUTH DEBUG"
+    );
 
     if (!token) {
       return res.status(401).json({ error: "Não autenticado." });
