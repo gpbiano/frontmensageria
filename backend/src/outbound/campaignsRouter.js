@@ -15,29 +15,38 @@ const DB_FILE = process.env.DB_FILE
   : path.join(process.cwd(), "data.json");
 
 // ===============================
-// ✅ Env WhatsApp (compat)
-// Aceita tanto PHONE_NUMBER_ID quanto WHATSAPP_PHONE_NUMBER_ID
+// ✅ WhatsApp ENV (compat + seguro)
+// - token: WHATSAPP_TOKEN
+// - phoneNumberId: WHATSAPP_PHONE_NUMBER_ID (novo) OU PHONE_NUMBER_ID (legado)
+// - apiVersion: WHATSAPP_API_VERSION (ex: v20.0). default v20.0
 // ===============================
+function normalizeApiVersion(v) {
+  const s = String(v || "").trim();
+  if (!s) return "v20.0";
+  return s.startsWith("v") ? s : `v${s}`;
+}
+
 function getWhatsAppEnv() {
   const token = String(process.env.WHATSAPP_TOKEN || "").trim();
 
-  // compatível com env novo e legado
   const phoneNumberId = String(
     process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || ""
   ).trim();
 
-  const apiVersion = String(process.env.WHATSAPP_API_VERSION || "v20.0").trim();
+  const apiVersion = normalizeApiVersion(process.env.WHATSAPP_API_VERSION || "v20.0");
 
   return { token, phoneNumberId, apiVersion };
 }
 
 function assertWhatsAppConfigured() {
   const { token, phoneNumberId, apiVersion } = getWhatsAppEnv();
+
   if (!token || !phoneNumberId) {
     throw new Error(
       "Env WhatsApp ausente (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID ou PHONE_NUMBER_ID)."
     );
   }
+
   return { token, phoneNumberId, apiVersion };
 }
 
@@ -247,9 +256,7 @@ function reportToCsv(report, req) {
   );
 
   for (const r of report.results || []) {
-    const link = r.errorCode
-      ? `${shortLinkBase}${encodeURIComponent(r.errorCode)}`
-      : "";
+    const link = r.errorCode ? `${shortLinkBase}${encodeURIComponent(r.errorCode)}` : "";
     lines.push(
       [
         csvEscape(r.phone),
@@ -325,11 +332,7 @@ function exportReportPdf(report, campaignName, req, res) {
   // Header
   doc.rect(0, 0, doc.page.width, 84).fill("#0B1220");
 
-  doc
-    .fillColor("#FFFFFF")
-    .font("Helvetica-Bold")
-    .fontSize(18)
-    .text("GP Labs", 40, 24);
+  doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(18).text("GP Labs", 40, 24);
 
   doc
     .fillColor("#A7F3D0")
@@ -349,11 +352,7 @@ function exportReportPdf(report, campaignName, req, res) {
   // Body start
   let y = 100;
 
-  doc
-    .fillColor("#0F172A")
-    .font("Helvetica-Bold")
-    .fontSize(16)
-    .text(report.name || "Campanha", 40, y);
+  doc.fillColor("#0F172A").font("Helvetica-Bold").fontSize(16).text(report.name || "Campanha", 40, y);
 
   y += 22;
   doc
@@ -386,42 +385,20 @@ function exportReportPdf(report, campaignName, req, res) {
   const gap = 10;
 
   drawCard(doc, 40, y, cardW, cardH, "Enviadas", report.sent, null);
-  drawCard(
-    doc,
-    40 + (cardW + gap) * 1,
-    y,
-    cardW,
-    cardH,
-    "Entregues",
-    report.delivered,
-    "Depende de status webhook"
-  );
-  drawCard(
-    doc,
-    40 + (cardW + gap) * 2,
-    y,
-    cardW,
-    cardH,
-    "Lidas",
-    report.read,
-    "Depende de status webhook"
-  );
+  drawCard(doc, 40 + (cardW + gap) * 1, y, cardW, cardH, "Entregues", report.delivered, "Depende de status webhook");
+  drawCard(doc, 40 + (cardW + gap) * 2, y, cardW, cardH, "Lidas", report.read, "Depende de status webhook");
   drawCard(doc, 40 + (cardW + gap) * 3, y, cardW, cardH, "Falhas", report.failed, null);
 
   y += cardH + 18;
 
   // Section title
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(12)
-    .fillColor("#0F172A")
-    .text("Destinatários", 40, y);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#0F172A").text("Destinatários", 40, y);
 
   y += 10;
 
   // Table header
   const tableTop = y + 10;
-  const col1 = 40; // Telefone
+  const col1 = 40;  // Telefone
   const col2 = 190; // Status
   const col3 = 280; // Erro
   const col4 = 520; // Atualizado
@@ -539,8 +516,7 @@ async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = [
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const msg =
-      data?.error?.message || data?.message || `Erro WhatsApp (${res.status})`;
+    const msg = data?.error?.message || data?.message || `Erro WhatsApp (${res.status})`;
     const err = new Error(msg);
     err.meta = data?.error || data || null;
     throw err;
@@ -581,8 +557,7 @@ function filterCampaignsForAnalytics(campaigns, query) {
     if (toTs && ts && ts > toTs) return false;
 
     if (campaignId !== "all" && String(c?.id) !== String(campaignId)) return false;
-    if (template !== "all" && String(c?.templateName || "") !== String(template))
-      return false;
+    if (template !== "all" && String(c?.templateName || "") !== String(template)) return false;
 
     return true;
   });
@@ -655,20 +630,10 @@ function analyticsToCsv(analytics, req) {
   lines.push(`# GP Labs – Analytics Export`);
   lines.push(`# GeneratedAt: ${new Date().toISOString()}`);
   lines.push(
-    `# Filters: from=${meta.from || ""} to=${meta.to || ""} campaignId=${
-      meta.campaignId || "all"
-    } template=${meta.template || "all"}`
+    `# Filters: from=${meta.from || ""} to=${meta.to || ""} campaignId=${meta.campaignId || "all"} template=${meta.template || "all"}`
   );
   lines.push(
-    `# Totals: total=${totals.total || 0} delivered=${
-      totals.delivered || 0
-    } read=${totals.read || 0} failed=${
-      totals.failed || 0
-    } | deliveryRate=${
-      (totals.deliveryRate || 0).toFixed?.(1) ?? totals.deliveryRate
-    } readRate=${
-      (totals.readRate || 0).toFixed?.(1) ?? totals.readRate
-    } failRate=${(totals.failRate || 0).toFixed?.(1) ?? totals.failRate}`
+    `# Totals: total=${totals.total || 0} delivered=${totals.delivered || 0} read=${totals.read || 0} failed=${totals.failed || 0} | deliveryRate=${(totals.deliveryRate || 0).toFixed?.(1) ?? totals.deliveryRate} readRate=${(totals.readRate || 0).toFixed?.(1) ?? totals.readRate} failRate=${(totals.failRate || 0).toFixed?.(1) ?? totals.failRate}`
   );
   lines.push("");
 
@@ -691,9 +656,7 @@ function analyticsToCsv(analytics, req) {
   );
 
   for (const r of analytics.rows || []) {
-    const link = r.errorCode
-      ? `${shortLinkBase}${encodeURIComponent(r.errorCode)}`
-      : "";
+    const link = r.errorCode ? `${shortLinkBase}${encodeURIComponent(r.errorCode)}` : "";
     lines.push(
       [
         csvEscape(r.campaignId),
@@ -729,9 +692,7 @@ function exportAnalyticsPdf(analytics, req, res) {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="analytics_${safeFileName(meta.template || "all")}_${
-      meta.campaignId || "all"
-    }_${Date.now()}.pdf"`
+    `attachment; filename="analytics_${safeFileName(meta.template || "all")}_${meta.campaignId || "all"}_${Date.now()}.pdf"`
   );
 
   doc.pipe(res);
@@ -739,11 +700,7 @@ function exportAnalyticsPdf(analytics, req, res) {
   // Header
   doc.rect(0, 0, doc.page.width, 84).fill("#0B1220");
 
-  doc
-    .fillColor("#FFFFFF")
-    .font("Helvetica-Bold")
-    .fontSize(18)
-    .text("GP Labs", 40, 24);
+  doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(18).text("GP Labs", 40, 24);
 
   doc
     .fillColor("#A7F3D0")
@@ -763,9 +720,7 @@ function exportAnalyticsPdf(analytics, req, res) {
     .fontSize(10)
     .fillColor("#334155")
     .text(
-      `Filtros: De ${meta.from || "-"} até ${meta.to || "-"}   •   Campanha: ${
-        meta.campaignId || "all"
-      }   •   Template: ${meta.template || "all"}`,
+      `Filtros: De ${meta.from || "-"} até ${meta.to || "-"}   •   Campanha: ${meta.campaignId || "all"}   •   Template: ${meta.template || "all"}`,
       40,
       y
     );
@@ -777,54 +732,20 @@ function exportAnalyticsPdf(analytics, req, res) {
   const gap = 10;
 
   drawCard(doc, 40, y, cardW, cardH, "Total", totals.total || 0, null);
-  drawCard(
-    doc,
-    40 + (cardW + gap) * 1,
-    y,
-    cardW,
-    cardH,
-    "Entregues",
-    totals.delivered || 0,
-    `${(totals.deliveryRate || 0).toFixed(1)}%`
-  );
-  drawCard(
-    doc,
-    40 + (cardW + gap) * 2,
-    y,
-    cardW,
-    cardH,
-    "Lidas",
-    totals.read || 0,
-    `${(totals.readRate || 0).toFixed(1)}%`
-  );
-  drawCard(
-    doc,
-    40 + (cardW + gap) * 3,
-    y,
-    cardW,
-    cardH,
-    "Falhas",
-    totals.failed || 0,
-    `${(totals.failRate || 0).toFixed(1)}%`
-  );
+  drawCard(doc, 40 + (cardW + gap) * 1, y, cardW, cardH, "Entregues", totals.delivered || 0, `${(totals.deliveryRate || 0).toFixed(1)}%`);
+  drawCard(doc, 40 + (cardW + gap) * 2, y, cardW, cardH, "Lidas", totals.read || 0, `${(totals.readRate || 0).toFixed(1)}%`);
+  drawCard(doc, 40 + (cardW + gap) * 3, y, cardW, cardH, "Falhas", totals.failed || 0, `${(totals.failRate || 0).toFixed(1)}%`);
 
   y += cardH + 18;
 
-  // Destinatários (primeiras linhas – para caber)
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(12)
-    .fillColor("#0F172A")
-    .text("Detalhes (amostra)", 40, y);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#0F172A").text("Detalhes (amostra)", 40, y);
 
   y += 10;
 
   const tableTop = y + 10;
   const rowH = 18;
 
-  doc
-    .roundedRect(40, tableTop, doc.page.width - 80, 26, 8)
-    .fillAndStroke("#F1F5F9", "#E2E8F0");
+  doc.roundedRect(40, tableTop, doc.page.width - 80, 26, 8).fillAndStroke("#F1F5F9", "#E2E8F0");
 
   doc
     .fillColor("#0F172A")
@@ -856,9 +777,7 @@ function exportAnalyticsPdf(analytics, req, res) {
 
     doc
       .fillColor("#0F172A")
-      .text((r.campaignName || r.campaignId || "-").slice(0, 26), 48, y, {
-        width: 150
-      })
+      .text((r.campaignName || r.campaignId || "-").slice(0, 26), 48, y, { width: 150 })
       .text(r.phone || "-", 210, y, { width: 110 })
       .text(r.status || "-", 325, y, { width: 70 })
       .fillColor(r.errorCode ? "#991B1B" : "#334155")
@@ -880,15 +799,16 @@ function exportAnalyticsPdf(analytics, req, res) {
       );
   }
 
-  // Footer
   doc
     .font("Helvetica")
     .fontSize(8)
     .fillColor("#64748B")
-    .text(`Gerado em ${new Date().toLocaleString("pt-BR")} • GP Labs Platform`, 40, doc.page.height - 30, {
-      width: doc.page.width - 80,
-      align: "right"
-    });
+    .text(
+      `Gerado em ${new Date().toLocaleString("pt-BR")} • GP Labs Platform`,
+      40,
+      doc.page.height - 30,
+      { width: doc.page.width - 80, align: "right" }
+    );
 
   doc.end();
 }
@@ -1102,7 +1022,7 @@ router.post("/:id/start", async (req, res) => {
       });
     }
 
-    // ✅ valida env whatsapp aqui (mesma regra do sendWhatsAppTemplate)
+    // valida WhatsApp env (compat)
     try {
       assertWhatsAppConfigured();
     } catch (e) {
