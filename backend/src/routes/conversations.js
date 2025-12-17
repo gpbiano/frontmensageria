@@ -50,20 +50,21 @@ function getWhatsAppConfig() {
   return { token, phoneNumberId, apiVersion };
 }
 
-/**
- * ✅ Compat layer (pra não quebrar o resto do arquivo)
- * Seu código chama getWaConfig() e assertWhatsAppConfigured()
- * então garantimos que existem e apontam pro getWhatsAppConfig().
- */
+// ======================================================
+// ✅ COMPAT (evita ReferenceError em versões antigas do arquivo)
+// Alguns trechos chamam getWaConfig()/assertWhatsAppConfigured().
+// Mantemos esses nomes como aliases para não quebrar nada.
+// ======================================================
 function getWaConfig() {
   return getWhatsAppConfig();
 }
 
 function assertWhatsAppConfigured() {
-  // Se não estiver configurado, getWhatsAppConfig já lança erro com mensagem clara
+  // se não tiver config, o getWhatsAppConfig já lança erro com a msg correta
   getWhatsAppConfig();
   return true;
 }
+
 
 function normalizeWaTo(conv) {
   // conv.peerId pode vir como "wa:5564..." -> queremos só dígitos
