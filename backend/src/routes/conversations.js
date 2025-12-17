@@ -60,10 +60,10 @@ function getWaConfig() {
 }
 
 function assertWhatsAppConfigured() {
-  // se não tiver config, o getWhatsAppConfig já lança erro com a msg correta
-  getWhatsAppConfig();
+  getWhatsAppConfig(); // lança erro se faltar token/phoneNumberId
   return true;
 }
+
 
 
 function normalizeWaTo(conv) {
