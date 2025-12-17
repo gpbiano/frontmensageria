@@ -43,22 +43,40 @@ function getWhatsAppConfig() {
 
   if (!token || !phoneNumberId) {
     throw new Error(
-      "WhatsApp não configurado: defina WHATSAPP_TOKEN e WHATSAPP_PHONE_NUMBER_ID (ou PHONE_NUMBER_ID) no .env"
+      "WhatsApp não configurado: defina WHATSAPP_TOKEN e PHONE_NUMBER_ID no .env"
     );
   }
 
   return { token, phoneNumberId, apiVersion };
 }
 
-// ✅ Compat helpers (evita ReferenceError)
-// Mantém seu código existente (que chama getWaConfig/assertWhatsAppConfigured)
+/**
+ * ✅ Compat layer (pra não quebrar o resto do arquivo)
+ * Seu código chama getWaConfig() e assertWhatsAppConfigured()
+ * então garantimos que existem e apontam pro getWhatsAppConfig().
+ */
 function getWaConfig() {
   return getWhatsAppConfig();
 }
 
 function assertWhatsAppConfigured() {
-  // se não estiver configurado, getWhatsAppConfig() vai lançar erro
+  // Se não estiver configurado, getWhatsAppConfig já lança erro com mensagem clara
   getWhatsAppConfig();
+  return true;
+}
+
+function normalizeWaTo(conv) {
+  // conv.peerId pode vir como "wa:5564..." -> queremos só dígitos
+  const raw =
+    conv?.waId ||
+    conv?.phone ||
+    conv?.contactPhone ||
+    (String(conv?.peerId || "").startsWith("wa:")
+      ? String(conv.peerId).slice(3)
+      : "");
+
+  const digits = String(raw || "").replace(/\D/g, "");
+  return digits || null;
 }
 
 async function sendWhatsAppText({ to, text, timeoutMs = 12000 }) {
