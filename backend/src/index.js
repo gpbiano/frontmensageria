@@ -162,6 +162,7 @@ app.use(
 const ALLOWED_ORIGINS = [
   "https://cliente.gplabs.com.br",
   "https://gplabs.com.br",
+  "https://www.gplabs.com.br",
   "http://localhost:5173"
 ];
 
