@@ -52,6 +52,17 @@ function getWhatsAppConfig() {
   return { token, phoneNumberId, apiVersion };
 }
 
+// ✅ Compat helpers (evita ReferenceError)
+// Mantém o código existente sem refatorar nomes.
+function assertWhatsAppConfigured() {
+  // getWhatsAppConfig já valida e dá throw se faltar env
+  getWhatsAppConfig();
+}
+
+// alias para compat com trechos antigos do código
+function getWaConfig() {
+  return getWhatsAppConfig();
+}
 
 
 function normalizeWaTo(conv) {
