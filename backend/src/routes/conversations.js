@@ -39,13 +39,11 @@ function getWhatsAppConfig() {
       ""
   ).trim();
 
-  const apiVersion = String(
-    process.env.WHATSAPP_API_VERSION || "v20.0"
-  ).trim();
+  const apiVersion = String(process.env.WHATSAPP_API_VERSION || "v20.0").trim();
 
   if (!token || !phoneNumberId) {
     throw new Error(
-      "WhatsApp não configurado: defina WHATSAPP_TOKEN e PHONE_NUMBER_ID no .env"
+      "WhatsApp não configurado: defina WHATSAPP_TOKEN e WHATSAPP_PHONE_NUMBER_ID (ou PHONE_NUMBER_ID) no .env"
     );
   }
 
@@ -53,30 +51,14 @@ function getWhatsAppConfig() {
 }
 
 // ✅ Compat helpers (evita ReferenceError)
-// Mantém o código existente sem refatorar nomes.
-function assertWhatsAppConfigured() {
-  // getWhatsAppConfig já valida e dá throw se faltar env
-  getWhatsAppConfig();
-}
-
-// alias para compat com trechos antigos do código
+// Mantém seu código existente (que chama getWaConfig/assertWhatsAppConfigured)
 function getWaConfig() {
   return getWhatsAppConfig();
 }
 
-
-function normalizeWaTo(conv) {
-  // conv.peerId pode vir como "wa:5564..." -> queremos só dígitos
-  const raw =
-    conv?.waId ||
-    conv?.phone ||
-    conv?.contactPhone ||
-    (String(conv?.peerId || "").startsWith("wa:")
-      ? String(conv.peerId).slice(3)
-      : "");
-
-  const digits = String(raw || "").replace(/\D/g, "");
-  return digits || null;
+function assertWhatsAppConfigured() {
+  // se não estiver configurado, getWhatsAppConfig() vai lançar erro
+  getWhatsAppConfig();
 }
 
 async function sendWhatsAppText({ to, text, timeoutMs = 12000 }) {
@@ -95,7 +77,6 @@ async function sendWhatsAppText({ to, text, timeoutMs = 12000 }) {
     text: { preview_url: false, body: text }
   };
 
-  // timeout para não travar request e gerar 502 no proxy
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
@@ -127,13 +108,13 @@ async function sendWhatsAppText({ to, text, timeoutMs = 12000 }) {
     );
   }
 
-  // Graph geralmente retorna JSON; se vier vazio, ok
   try {
     return rawText ? JSON.parse(rawText) : {};
   } catch {
     return {};
   }
 }
+
 
 // ======================================================
 // ✅ ADD: WhatsApp send AUDIO + IMAGE + LOCATION
