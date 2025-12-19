@@ -3,26 +3,26 @@ import { useEffect, useMemo, useState } from "react";
 import "../styles/login-page.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
-const AUTH_KEY = "gpLabsAuthToken";
+const AUTH_TOKEN_KEY = "gpLabsAuthToken";
+const AUTH_USER_KEY = "gpLabsAuthUser";
 
 export default function LoginPage({ onLogin }) {
   const isDev = import.meta.env.DEV;
 
-  // ✅ Em PROD não preenche credenciais
-  // ✅ Em DEV pode manter praticidade
+  // ✅ Em DEV facilita testes | em PROD nunca preenche
   const [email, setEmail] = useState(isDev ? "admin@gplabs.com.br" : "");
   const [password, setPassword] = useState(isDev ? "gplabs123" : "");
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // ✅ Garante que em produção nunca “sobra” senha (ex: hot reload / navegação)
+  // ✅ Em PROD garante que senha nunca “vaze” por navegação/hot reload
   useEffect(() => {
     if (!isDev) setPassword("");
   }, [isDev]);
 
   const canSubmit = useMemo(() => {
-    return !!email && !!password && !isSubmitting;
+    return Boolean(email && password && !isSubmitting);
   }, [email, password, isSubmitting]);
 
   async function handleSubmit(e) {
@@ -59,38 +59,45 @@ export default function LoginPage({ onLogin }) {
         throw new Error(data?.error || "E-mail ou senha inválidos.");
       }
 
-      if (data?.token) {
-        // ✅ token sim; senha jamais
-        localStorage.setItem(AUTH_KEY, data.token);
-
-        // (opcional) se no futuro você quiser diferenciar rememberMe:
-        // hoje mantemos o mesmo comportamento para evitar regressões
-        // localStorage.setItem("gpLabsRememberMe", rememberMe ? "1" : "0");
+      if (!data?.token || !data?.user) {
+        throw new Error("Resposta inválida da API de login.");
       }
 
-      // ✅ por segurança: limpa senha após sucesso (principalmente em PROD)
-      if (!isDev) setPassword("");
+      // ✅ Persistência segura (token + user)
+      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+
+      // (opcional futuro)
+      // localStorage.setItem("gpLabsRememberMe", rememberMe ? "1" : "0");
+
+      // ✅ Nunca manter senha em memória após login
+      setPassword("");
 
       onLogin?.(data);
     } catch (err) {
       console.error("Erro ao logar:", err);
 
-      // ⚠️ DEV fallback (mantido como estava, mas sem “guardar senha”)
-      if (import.meta.env.DEV) {
+      // ⚠️ Fallback APENAS em DEV (nunca em produção)
+      if (isDev) {
         console.warn(
-          "[DEV] Backend falhou, usando login de desenvolvimento sem validar no servidor."
+          "[DEV] Backend indisponível. Usando login de desenvolvimento."
         );
         const fakeData = {
           token: "dev-fallback-token",
-          user: { email, name: "Admin (Dev)" }
+          user: {
+            id: 0,
+            name: "Admin (Dev)",
+            email
+          }
         };
-        localStorage.setItem(AUTH_KEY, fakeData.token);
+        localStorage.setItem(AUTH_TOKEN_KEY, fakeData.token);
+        localStorage.setItem(AUTH_USER_KEY, JSON.stringify(fakeData.user));
         onLogin?.(fakeData);
       } else {
         setError(
           err.message?.includes("Failed to fetch") ||
             err.message?.includes("NetworkError")
-            ? "Não foi possível conectar ao servidor. Confira se o backend está rodando."
+            ? "Não foi possível conectar ao servidor. Tente novamente."
             : err.message || "Não foi possível entrar. Tente novamente."
         );
       }
@@ -115,7 +122,6 @@ export default function LoginPage({ onLogin }) {
 
         {error && <div className="login-error">{error}</div>}
 
-        {/* ✅ Preserva o desenho da página */}
         <form className="login-form" onSubmit={handleSubmit} autoComplete="on">
           <label className="login-label">
             E-mail
@@ -156,7 +162,9 @@ export default function LoginPage({ onLogin }) {
             <button
               type="button"
               className="login-link"
-              onClick={() => alert("Fluxo de recuperação ainda não implementado.")}
+              onClick={() =>
+                alert("Fluxo de recuperação de senha ainda não implementado.")
+              }
             >
               Esqueci minha senha
             </button>
