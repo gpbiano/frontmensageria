@@ -15,8 +15,20 @@ function ensureDbShape(db) {
 }
 
 /**
- * Retorna TODOS os canais normalizados
- * (formato amigável pro front)
+ * Escape seguro para atributos HTML
+ */
+function escapeAttr(v) {
+  return String(v)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/**
+ * =========================
+ * GET CHANNELS (NORMALIZADO)
+ * =========================
  */
 export function getChannels(db) {
   ensureDbShape(db);
@@ -28,13 +40,15 @@ export function getChannels(db) {
   if (!ch.webchat) {
     ch.webchat = {
       enabled: false,
-      status: "not_connected", // not_connected | connected | disabled
+      status: "not_connected",
       widgetKey: newWidgetKey(),
       allowedOrigins: [],
       config: {
+        primaryColor: "#34d399",
         color: "#34d399",
         position: "right",
         buttonText: "Ajuda",
+        headerTitle: "Atendimento",
         title: "Atendimento",
         greeting: "Olá! Como posso ajudar?"
       },
@@ -49,7 +63,7 @@ export function getChannels(db) {
   if (!ch.whatsapp) {
     ch.whatsapp = {
       enabled: true,
-      status: "connected", // connected | not_connected | disabled
+      status: "connected",
       createdAt: nowIso(),
       updatedAt: nowIso()
     };
@@ -81,7 +95,6 @@ export function getChannels(db) {
 
   db.settings.channels = ch;
 
-  // 🔹 Retorno NORMALIZADO para o front
   return [
     {
       id: "whatsapp",
@@ -111,7 +124,9 @@ export function getChannels(db) {
 }
 
 /**
- * Atualiza APENAS o canal Webchat
+ * =========================
+ * UPDATE WEBCHAT
+ * =========================
  */
 export function updateWebchatChannel(db, patch) {
   ensureDbShape(db);
@@ -136,25 +151,42 @@ export function updateWebchatChannel(db, patch) {
       ...patch.config
     };
 
+    // 🔁 Compatibilidade total frontend/backend
+    if (next.config.primaryColor && !next.config.color) {
+      next.config.color = next.config.primaryColor;
+    }
+    if (next.config.color && !next.config.primaryColor) {
+      next.config.primaryColor = next.config.color;
+    }
+
+    if (next.config.headerTitle && !next.config.title) {
+      next.config.title = next.config.headerTitle;
+    }
+    if (next.config.title && !next.config.headerTitle) {
+      next.config.headerTitle = next.config.title;
+    }
+
     if (next.config.position !== "left") next.config.position = "right";
     if (!next.config.color) next.config.color = "#34d399";
+    if (!next.config.primaryColor) next.config.primaryColor = next.config.color;
   }
 
   // status derivado
-  if (!next.enabled) next.status = "disabled";
-  else next.status = "connected";
-
+  next.status = next.enabled ? "connected" : "disabled";
   next.updatedAt = nowIso();
-  ch.webchat = next;
 
+  ch.webchat = next;
   return ch.webchat;
 }
 
 /**
- * Rotaciona a widgetKey do Webchat
+ * =========================
+ * ROTATE WIDGET KEY
+ * =========================
  */
 export function rotateWebchatKey(db) {
   ensureDbShape(db);
+
   db.settings.channels.webchat.widgetKey = newWidgetKey();
   db.settings.channels.webchat.updatedAt = nowIso();
 
@@ -164,12 +196,32 @@ export function rotateWebchatKey(db) {
 }
 
 /**
- * Gera o snippet do Webchat
+ * =========================
+ * BUILD WEBCHAT SNIPPET (FINAL)
+ * =========================
  */
-export function buildWebchatSnippet({ widgetJsUrl, widgetKey, apiBase }) {
+export function buildWebchatSnippet({
+  widgetJsUrl,
+  widgetKey,
+  apiBase,
+  config
+}) {
+  const cfg = config && typeof config === "object" ? config : {};
+
+  const color = String(cfg.primaryColor || cfg.color || "#34d399").trim();
+  const position = cfg.position === "left" ? "left" : "right";
+  const buttonText = String(cfg.buttonText || "Ajuda");
+  const title = String(cfg.headerTitle || cfg.title || "Atendimento");
+  const greeting = String(cfg.greeting || "Olá! Como posso ajudar?");
+
   const attrs = [
     `src="${widgetJsUrl}"`,
-    `data-widget-key="${widgetKey}"`
+    `data-widget-key="${widgetKey}"`,
+    `data-color="${escapeAttr(color)}"`,
+    `data-position="${escapeAttr(position)}"`,
+    `data-button-text="${escapeAttr(buttonText)}"`,
+    `data-title="${escapeAttr(title)}"`,
+    `data-greeting="${escapeAttr(greeting)}"`
   ];
 
   if (apiBase) {
