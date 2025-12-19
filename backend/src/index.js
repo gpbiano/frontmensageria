@@ -52,8 +52,6 @@ const { default: logger } = await import("./logger.js");
 // ===============================
 // Routers (TODOS dinâmicos — depois do dotenv)
 // ===============================
-
-// Routers que antes estavam estáticos (isso causava o bug do JWT!)
 const { default: webchatRouter } = await import("./routes/webchat.js");
 const { default: channelsRouter } = await import("./routes/channels.js");
 const { default: conversationsRouter } = await import("./routes/conversations.js");
@@ -217,7 +215,6 @@ function corsPerRequest(req, res, next) {
       "X-Widget-Key",
       "X-Webchat-Token"
     ],
-    // (opcional) expor algum header se quiser
     exposedHeaders: ["X-Request-Id"]
   };
 
@@ -234,34 +231,9 @@ app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ===============================
-// ADMIN PADRÃO (somente DEV)
+// ✅ PROD: SEM LOGIN PADRÃO / SEM AUTO-CRIAÇÃO
 // ===============================
-if (ENV !== "production") {
-  (function ensureAdmin() {
-    const db = loadDB();
-    db.users = ensureArray(db.users);
-
-    const email = "admin@gplabs.com.br";
-    const now = new Date().toISOString();
-
-    let user = db.users.find((u) => u.email === email);
-    if (!user) {
-      db.users.push({
-        id: db.users.length + 1,
-        name: "Administrador",
-        email,
-        password: "gplabs123",
-        passwordHash: null,
-        role: "admin",
-        isActive: true,
-        createdAt: now,
-        updatedAt: now
-      });
-      saveDB(db);
-      logger.info("👤 Admin padrão criado (DEV)");
-    }
-  })();
-}
+// (intencionalmente vazio — o primeiro admin entra via payload no db)
 
 // ===============================
 // ROTAS

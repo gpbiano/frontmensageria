@@ -3,7 +3,7 @@
     {
       "id": 1,
       "name": "Administrador",
-      "email": "admin@gplabs.com.br",
+      "email": "contato@gplabs.com.br",
       "password": "Geniv@135",
       "passwordHash": null,
       "role": "admin",
