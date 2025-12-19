@@ -36,7 +36,7 @@ jobs:
             npm ci --omit=dev
 
             echo "== Restart PM2 =="
-            pm2 restart gplabs-api || pm2 start src/index.js --name gplabs-api
+            pm2 restart gplabs-api --update-env
             pm2 save
 
             echo "== Done =="
