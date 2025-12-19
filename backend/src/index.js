@@ -157,28 +157,75 @@ app.use(
 );
 
 // ===============================
-// CORS
+// CORS (FIX: liberar X-Widget-Key + OPTIONS correto pro WebChat)
 // ===============================
-const ALLOWED_ORIGINS = [
+function normalizeOrigin(o) {
+  const s = String(o || "").trim();
+  if (!s) return "";
+  return s.endsWith("/") ? s.slice(0, -1) : s;
+}
+
+// Origens "fixas" da plataforma (admin, app, dev)
+const PLATFORM_ALLOWED_ORIGINS = [
   "https://cliente.gplabs.com.br",
   "https://gplabs.com.br",
   "https://www.gplabs.com.br",
-  "http://localhost:5173"
-];
+  "http://localhost:5173",
+  "http://127.0.0.1:5173"
+].map(normalizeOrigin);
 
-const corsOptions = {
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    return cb(new Error(`CORS blocked: ${origin}`));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
-};
+// Lê allowedOrigins do WebChat via DB (Settings > Canais)
+function getWebchatAllowedOriginsFromDB() {
+  try {
+    const db = loadDB();
+    const allowed =
+      db?.settings?.channels?.webchat?.allowedOrigins ||
+      db?.channels?.webchat?.allowedOrigins || // compat antigo (se existir)
+      [];
+    return Array.isArray(allowed) ? allowed.map(normalizeOrigin).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
 
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+// Middleware CORS por request (permite usar req.path)
+function corsPerRequest(req, res, next) {
+  const isWebchat = String(req.path || "").startsWith("/webchat");
+
+  const dynamicWebchatOrigins = isWebchat ? getWebchatAllowedOriginsFromDB() : [];
+  const allowedList = [...PLATFORM_ALLOWED_ORIGINS, ...dynamicWebchatOrigins]
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+  const corsOptions = {
+    origin(origin, cb) {
+      // Sem origin = chamadas server-to-server / curl
+      if (!origin) return cb(null, true);
+
+      const o = normalizeOrigin(origin);
+      if (allowedList.includes(o)) return cb(null, true);
+
+      return cb(new Error(`CORS blocked: ${origin}`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    // ✅ FIX CRÍTICO: liberar headers usados pelo widget
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "X-Widget-Key",
+      "X-Webchat-Token"
+    ],
+    // (opcional) expor algum header se quiser
+    exposedHeaders: ["X-Request-Id"]
+  };
+
+  return cors(corsOptions)(req, res, next);
+}
+
+app.use(corsPerRequest);
+app.options("*", corsPerRequest);
 
 // ===============================
 // PARSERS
