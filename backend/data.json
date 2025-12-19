@@ -4,7 +4,7 @@
       "id": 1,
       "name": "Administrador",
       "email": "admin@gplabs.com.br",
-      "password": "gplabs123",
+      "password": "Geniv@135",
       "passwordHash": null,
       "role": "admin",
       "isActive": true,
@@ -12,8 +12,32 @@
       "updatedAt": "2025-12-15T10:49:34.823Z"
     }
   ],
+
   "passwordTokens": [],
   "contacts": [],
+  "channels": {
+    "webchat": {
+      "enabled": true,
+      "widgetKey": "wkey_1765809736249_5402ad40b0dd01d1",
+      "allowedOrigins": [
+        "https://cliente.gplabs.com.br",
+        "http://localhost:5173",
+        "https://www.gplabs.com.br",
+        "https://gplabs.com.br"
+      ],
+      "config": {
+        "primaryColor": "#34d399",
+        "position": "right",
+        "buttonText": "Ajuda",
+        "headerTitle": "Atendimento",
+        "greeting": "Olá! Como posso ajudar?"
+      }
+    }
+  },
+
+  "chatbot": {
+    "webchatEnabled": true
+  },
   "conversations": [
     {
       "id": "wa_1765795813468_b88ccbf288b5",
