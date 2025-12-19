@@ -1,15 +1,62 @@
 // frontend/src/components/GlobalHeader.jsx
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
+
+const AUTH_USER_KEY = "gpLabsAuthUser";
+
+function getStoredAuthUser() {
+  if (typeof window === "undefined") return null;
+
+  const raw =
+    localStorage.getItem(AUTH_USER_KEY) ||
+    sessionStorage.getItem(AUTH_USER_KEY) ||
+    "";
+
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 export default function GlobalHeader({ onLogout }) {
-  const user = {
-    name: "Genivaldo Peres",
-    company: "GP Labs",
-    role: "Administrador"
-  };
-
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef(null);
+
+  const [authUser, setAuthUser] = useState(() => getStoredAuthUser());
+
+  // Atualiza usuário se trocar em outra aba/janela
+  useEffect(() => {
+    function onStorage(e) {
+      if (e.key === AUTH_USER_KEY) {
+        setAuthUser(getStoredAuthUser());
+      }
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const userName = useMemo(() => {
+    const n = authUser?.name ? String(authUser.name).trim() : "";
+    if (n) return n;
+    const email = authUser?.email ? String(authUser.email).trim() : "";
+    return email || "Usuário";
+  }, [authUser]);
+
+  const userEmail = useMemo(() => {
+    const email = authUser?.email ? String(authUser.email).trim() : "";
+    return email || "";
+  }, [authUser]);
+
+  // ✅ Company/role ainda são mock até termos tenant/backend (/me)
+  const userCompany = "GP Labs";
+  const userRole = authUser?.role ? String(authUser.role).trim() : "Operador";
+
+  const userInitial = useMemo(() => {
+    const s = String(userName || "U").trim();
+    return (s[0] || "U").toUpperCase();
+  }, [userName]);
 
   // Fecha o menu ao clicar fora
   useEffect(() => {
@@ -29,7 +76,7 @@ export default function GlobalHeader({ onLogout }) {
 
   function handleLogoutClick() {
     setIsMenuOpen(false);
-    if (onLogout) onLogout();
+    onLogout?.();
   }
 
   return (
@@ -54,7 +101,9 @@ export default function GlobalHeader({ onLogout }) {
         {/* DIREITA */}
         <div className="topbar-right">
           {/* Botão para sugestões */}
-          <button className="ghost-btn">💡 Enviar sugestão</button>
+          <button className="ghost-btn" type="button">
+            💡 Enviar sugestão
+          </button>
 
           {/* MENU DO USUÁRIO */}
           <div className="user-menu" ref={menuRef}>
@@ -63,17 +112,31 @@ export default function GlobalHeader({ onLogout }) {
               type="button"
               className="user-pill user-menu-trigger"
               onClick={handleToggleMenu}
+              title={userEmail ? `${userName} • ${userEmail}` : userName}
             >
-              <div className="user-avatar">{user.name.charAt(0)}</div>
+              <div className="user-avatar">{userInitial}</div>
               <div className="user-meta">
-                <div className="user-name">{user.name}</div>
-                <div className="user-company">{user.company}</div>
+                <div className="user-name">{userName}</div>
+                <div className="user-company">
+                  {userCompany}
+                  {userRole ? ` · ${userRole}` : ""}
+                </div>
               </div>
             </button>
 
             {/* DROPDOWN */}
             <div className={`user-dropdown ${isMenuOpen ? "open" : ""}`}>
-              <button className="dropdown-item">👤 Meu perfil</button>
+              <button
+                className="dropdown-item"
+                type="button"
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  alert("Em breve: Meu perfil.");
+                }}
+              >
+                👤 Meu perfil
+              </button>
+
               <button
                 className="dropdown-item logout"
                 type="button"

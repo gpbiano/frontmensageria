@@ -25,6 +25,19 @@ export default function LoginPage({ onLogin }) {
     return Boolean(email && password && !isSubmitting);
   }, [email, password, isSubmitting]);
 
+  function persistSession({ token, user }) {
+    const storage = rememberMe ? localStorage : sessionStorage;
+
+    // evita “misturar” sessão entre storages
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    sessionStorage.removeItem(AUTH_USER_KEY);
+
+    storage.setItem(AUTH_TOKEN_KEY, token);
+    storage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
 
@@ -64,11 +77,7 @@ export default function LoginPage({ onLogin }) {
       }
 
       // ✅ Persistência segura (token + user)
-      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-
-      // (opcional futuro)
-      // localStorage.setItem("gpLabsRememberMe", rememberMe ? "1" : "0");
+      persistSession({ token: data.token, user: data.user });
 
       // ✅ Nunca manter senha em memória após login
       setPassword("");
@@ -79,19 +88,12 @@ export default function LoginPage({ onLogin }) {
 
       // ⚠️ Fallback APENAS em DEV (nunca em produção)
       if (isDev) {
-        console.warn(
-          "[DEV] Backend indisponível. Usando login de desenvolvimento."
-        );
+        console.warn("[DEV] Backend indisponível. Usando login de desenvolvimento.");
         const fakeData = {
           token: "dev-fallback-token",
-          user: {
-            id: 0,
-            name: "Admin (Dev)",
-            email
-          }
+          user: { id: 0, name: "Admin (Dev)", email }
         };
-        localStorage.setItem(AUTH_TOKEN_KEY, fakeData.token);
-        localStorage.setItem(AUTH_USER_KEY, JSON.stringify(fakeData.user));
+        persistSession({ token: fakeData.token, user: fakeData.user });
         onLogin?.(fakeData);
       } else {
         setError(

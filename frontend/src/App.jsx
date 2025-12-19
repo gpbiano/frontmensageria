@@ -66,11 +66,48 @@ import {
   UserCircle
 } from "lucide-react";
 
-const AUTH_KEY = "gpLabsAuthToken";
+const AUTH_TOKEN_KEY = "gpLabsAuthToken";
+const AUTH_USER_KEY = "gpLabsAuthUser";
 
 // Sidebar state
 const SIDEBAR_LS_COLLAPSED = "gp.sidebar.collapsed";
 const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
+
+/* ==========================================================
+   AUTH HELPERS (localStorage OU sessionStorage)
+========================================================== */
+function getStoredAuthToken() {
+  if (typeof window === "undefined") return "";
+  return (
+    localStorage.getItem(AUTH_TOKEN_KEY) ||
+    sessionStorage.getItem(AUTH_TOKEN_KEY) ||
+    ""
+  );
+}
+
+function getStoredAuthUser() {
+  if (typeof window === "undefined") return null;
+
+  const raw =
+    localStorage.getItem(AUTH_USER_KEY) ||
+    sessionStorage.getItem(AUTH_USER_KEY) ||
+    "";
+
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredAuth() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
+  sessionStorage.removeItem(AUTH_TOKEN_KEY);
+  sessionStorage.removeItem(AUTH_USER_KEY);
+}
 
 /* ==========================================================
    APLICAÇÃO PRINCIPAL
@@ -87,19 +124,22 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = localStorage.getItem(AUTH_KEY);
+    const token = getStoredAuthToken();
     if (token) setIsAuthenticated(true);
   }, []);
 
   function handleLogin(data) {
+    // ✅ LoginPage já salva token/user.
+    // Aqui só marca como autenticado.
     if (typeof window === "undefined") return;
-    if (data?.token) localStorage.setItem(AUTH_KEY, data.token);
-    setIsAuthenticated(true);
+
+    const token = data?.token || getStoredAuthToken();
+    if (token) setIsAuthenticated(true);
   }
 
   function handleLogout() {
     if (typeof window === "undefined") return;
-    localStorage.removeItem(AUTH_KEY);
+    clearStoredAuth();
     setIsAuthenticated(false);
   }
 
@@ -207,9 +247,29 @@ function PlatformShell({ onLogout }) {
     if (openSection) localStorage.setItem(SIDEBAR_LS_OPEN, openSection);
   }, [openSection]);
 
-  // ✅ mock (depois liga no backend /me e /accounts)
+  // ✅ Empresa (mock por enquanto)
   const companyName = "Grupo GP Participações";
-  const userName = "Genivaldo Peres";
+
+  // ✅ Usuário logado (real)
+  const [authUser, setAuthUser] = useState(() => getStoredAuthUser());
+
+  useEffect(() => {
+    // Atualiza se o usuário trocar em outra aba/janela
+    function onStorage(e) {
+      if (e.key === AUTH_USER_KEY || e.key === AUTH_TOKEN_KEY) {
+        setAuthUser(getStoredAuthUser());
+      }
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const userDisplayName =
+    (authUser?.name && String(authUser.name).trim()) ||
+    (authUser?.email && String(authUser.email).trim()) ||
+    "Usuário";
+
+  const userEmail = (authUser?.email && String(authUser.email).trim()) || "";
 
   // dropdowns header
   const [isCompanyOpen, setIsCompanyOpen] = useState(false);
@@ -313,17 +373,21 @@ function PlatformShell({ onLogout }) {
               title="Perfil"
             >
               <UserCircle size={16} />
-              <span className="gp-dd-btn-text">{userName}</span>
+              <span className="gp-dd-btn-text">{userDisplayName}</span>
               <ChevronDown size={16} />
             </button>
 
             {isUserOpen && (
               <div className="gp-dd-menu">
                 <div className="gp-dd-title">Usuário</div>
+
                 <div className="gp-dd-item is-muted">
-                  {userName}
-                  <div className="gp-dd-sub">Perfil do usuário</div>
+                  {userDisplayName}
+                  <div className="gp-dd-sub">
+                    {userEmail ? userEmail : "Perfil do usuário"}
+                  </div>
                 </div>
+
                 <div className="gp-dd-sep" />
                 <button
                   type="button"
@@ -338,7 +402,10 @@ function PlatformShell({ onLogout }) {
                 <button
                   type="button"
                   className="gp-dd-item is-danger"
-                  onClick={onLogout}
+                  onClick={() => {
+                    setIsUserOpen(false);
+                    onLogout?.();
+                  }}
                 >
                   Sair
                 </button>
