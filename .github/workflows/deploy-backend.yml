@@ -1,15 +1,43 @@
-- name: Deploy via SSH
-  uses: appleboy/ssh-action@v1.2.0
-  with:
-    host: ${{ secrets.DEPLOY_HOST }}
-    username: ${{ secrets.DEPLOY_USER }}
-    key: ${{ secrets.DEPLOY_KEY }}
-    script_stop: true
-    script: |
-      cd /home/ubuntu/apps/frontmensageria/backend
-      git fetch --all
-      git reset --hard origin/main
-      npm ci --omit=dev
-      pm2 restart gplabs-api --update-env
-      pm2 save
+name: Deploy Backend (EC2)
 
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - backend/**
+      - .github/workflows/deploy-backend.yml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+
+            echo "== Go to repo =="
+            cd /home/ubuntu/apps/frontmensageria
+
+            echo "== Update code =="
+            git fetch --all
+            git checkout main
+            git reset --hard origin/main
+
+            echo "== Install backend deps =="
+            cd backend
+            npm ci --omit=dev
+
+            echo "== Restart PM2 =="
+            pm2 restart gplabs-api || pm2 start src/index.js --name gplabs-api
+            pm2 save
+
+            echo "== Done =="
+            pm2 status
