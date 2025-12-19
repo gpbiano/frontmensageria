@@ -21,9 +21,8 @@
       "widgetKey": "wkey_1765809736249_5402ad40b0dd01d1",
       "allowedOrigins": [
         "https://cliente.gplabs.com.br",
-        "http://localhost:5173",
-        "https://www.gplabs.com.br",
-        "https://gplabs.com.br"
+        "http://localhost:5173"
+
       ],
       "config": {
         "primaryColor": "#34d399",
