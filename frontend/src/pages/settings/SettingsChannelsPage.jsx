@@ -1,19 +1,15 @@
 // frontend/src/settings/SettingsChannelsPage.jsx
 import { useEffect, useMemo, useState } from "react";
 
-// ✅ NÃO importe CSS aqui se você já está importando no App.jsx
-// (e esse caminho estava errado e quebrando o build)
-// import "./styles/settings-channels.css";
-
 import {
   fetchChannels,
   updateWebchatChannel,
   rotateWebchatKey,
   fetchWebchatSnippet
-} from "../../api"; // ✅ ok
+} from "../../api";
 
 /**
- * Settings > Canais (compatível com backend atual)
+ * Configurações > Canais
  *
  * Backend:
  * - GET    /settings/channels
@@ -73,6 +69,7 @@ function Modal({ open, title, children, onClose }) {
           <div style={{ fontWeight: 700 }}>{title}</div>
           <button
             onClick={onClose}
+            title="Fechar"
             style={{
               all: "unset",
               cursor: "pointer",
@@ -82,7 +79,6 @@ function Modal({ open, title, children, onClose }) {
               placeItems: "center",
               borderRadius: 10
             }}
-            title="Fechar"
           >
             ✕
           </button>
@@ -93,21 +89,21 @@ function Modal({ open, title, children, onClose }) {
   );
 }
 
-function fieldStyle() {
-  return {
-    width: "100%",
-    padding: "10px 12px",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,.10)",
-    background: "rgba(255,255,255,.04)",
-    color: "#e5e7eb",
-    outline: "none"
-  };
-}
+const fieldStyle = () => ({
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,.10)",
+  background: "rgba(255,255,255,.04)",
+  color: "#e5e7eb",
+  outline: "none"
+});
 
-function labelStyle() {
-  return { fontSize: 12, opacity: 0.85, marginBottom: 6 };
-}
+const labelStyle = () => ({
+  fontSize: 12,
+  opacity: 0.85,
+  marginBottom: 6
+});
 
 function normalizeOriginLines(text) {
   return String(text || "")
@@ -121,12 +117,11 @@ export default function SettingsChannelsPage() {
   const [loading, setLoading] = useState(true);
   const [channelsState, setChannelsState] = useState(null);
   const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
 
   const [webchatOpen, setWebchatOpen] = useState(false);
   const [webchatDraft, setWebchatDraft] = useState(null);
-
   const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState("");
 
   const [snippetLoading, setSnippetLoading] = useState(false);
   const [snippet, setSnippet] = useState("");
@@ -139,14 +134,12 @@ export default function SettingsChannelsPage() {
         window.location.hostname === "127.0.0.1"
       );
     } catch {
-      return true;
+      return false;
     }
   }, []);
 
   const webchat = channelsState?.webchat || null;
   const whatsapp = channelsState?.whatsapp || null;
-  // const messenger = channelsState?.messenger || null;
-  // const instagram = channelsState?.instagram || null;
 
   async function loadChannels() {
     setLoading(true);
@@ -169,19 +162,17 @@ export default function SettingsChannelsPage() {
     const ch = webchat || {};
     const cfg = ch?.config || {};
 
-    const primaryColor = cfg.primaryColor || cfg.color || "#34d399";
+    const primaryColor = cfg.primaryColor || "#34d399";
 
     setWebchatDraft({
       enabled: !!ch.enabled,
-      status: ch.status || "disconnected",
       widgetKey: ch.widgetKey || "",
       allowedOrigins: Array.isArray(ch.allowedOrigins) ? ch.allowedOrigins : [],
       config: {
         primaryColor,
-        color: cfg.color || primaryColor,
         position: cfg.position === "left" ? "left" : "right",
         buttonText: cfg.buttonText || "Ajuda",
-        title: cfg.title || "Atendimento",
+        headerTitle: cfg.headerTitle || "Atendimento",
         greeting: cfg.greeting || "Olá! Como posso ajudar?"
       }
     });
@@ -195,11 +186,9 @@ export default function SettingsChannelsPage() {
     setSnippetLoading(true);
     try {
       const res = await fetchWebchatSnippet();
-      const scriptTag = res?.scriptTag || res?.snippet || "";
-      setSnippet(scriptTag);
+      setSnippet(res?.scriptTag || res?.snippet || "");
       setSnippetMeta(res || null);
-    } catch (e) {
-      console.warn("Erro ao buscar snippet:", e);
+    } catch {
       setSnippet("");
       setSnippetMeta(null);
     } finally {
@@ -209,7 +198,6 @@ export default function SettingsChannelsPage() {
 
   useEffect(() => {
     if (webchatOpen) loadSnippet();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webchatOpen]);
 
   async function saveWebchat() {
@@ -219,34 +207,26 @@ export default function SettingsChannelsPage() {
     setError("");
 
     try {
-      const allowedOrigins = Array.isArray(webchatDraft.allowedOrigins)
-        ? webchatDraft.allowedOrigins
-        : [];
-
-      const primaryColor =
-        webchatDraft.config?.primaryColor ||
-        webchatDraft.config?.color ||
-        "#34d399";
-
       const payload = {
         enabled: !!webchatDraft.enabled,
-        allowedOrigins,
+        allowedOrigins: webchatDraft.allowedOrigins || [],
         config: {
-          ...(webchatDraft.config || {}),
-          primaryColor,
-          color: primaryColor // backend espera "color"
+          primaryColor: webchatDraft.config.primaryColor,
+          position: webchatDraft.config.position,
+          buttonText: webchatDraft.config.buttonText,
+          headerTitle: webchatDraft.config.headerTitle,
+          greeting: webchatDraft.config.greeting
         }
       };
 
       await updateWebchatChannel(payload);
       await loadChannels();
-
-      setToast("Configuração salva.");
-      setTimeout(() => setToast(""), 2000);
-
       await loadSnippet();
+
+      setToast("Configuração salva com sucesso.");
+      setTimeout(() => setToast(""), 2000);
     } catch (e) {
-      setError(e?.message || String(e));
+      setError(e?.message || "Não foi possível salvar a configuração.");
     } finally {
       setSaving(false);
     }
@@ -254,508 +234,153 @@ export default function SettingsChannelsPage() {
 
   async function rotateKey() {
     const ok = confirm(
-      "Rotacionar a widgetKey invalida os scripts antigos. Tem certeza?"
+      "Ao rotacionar a chave, scripts antigos deixarão de funcionar. Deseja continuar?"
     );
     if (!ok) return;
 
     setSaving(true);
-    setError("");
-
     try {
       const res = await rotateWebchatKey();
-      const newKey = res?.widgetKey || "";
-
-      setWebchatDraft((p) => (p ? { ...p, widgetKey: newKey } : p));
-
+      setWebchatDraft((p) => (p ? { ...p, widgetKey: res?.widgetKey } : p));
       await loadChannels();
       await loadSnippet();
-
-      setToast("widgetKey rotacionada.");
+      setToast("Chave atualizada.");
       setTimeout(() => setToast(""), 2000);
     } catch (e) {
-      setError(e?.message || String(e));
+      setError(e?.message || "Erro ao rotacionar a chave.");
     } finally {
       setSaving(false);
     }
   }
 
   async function copy(text) {
-    try {
-      await navigator.clipboard.writeText(String(text || ""));
-      setToast("Copiado!");
-      setTimeout(() => setToast(""), 1200);
-    } catch {
-      // sem fallback
-    }
+    await navigator.clipboard.writeText(String(text || ""));
+    setToast("Copiado para a área de transferência.");
+    setTimeout(() => setToast(""), 1200);
   }
 
   const webchatStatusVariant = webchat?.enabled ? "on" : "off";
   const whatsappVariant = whatsapp?.enabled ? "on" : "off";
 
-  const webchatStatusLabel = webchat
-    ? webchat.enabled
-      ? "Ativo"
-      : "Desativado"
-    : "Não configurado";
-
-  const whatsappLabel = whatsapp?.status
-    ? whatsapp.status === "connected"
-      ? "Conectado"
-      : "Desconectado"
-    : "Desconectado";
-
-  function embedFallbackFromDraft() {
-    const widgetKey =
-      webchatDraft?.widgetKey || webchat?.widgetKey || "wkey_xxx";
-
-    const apiBase = isDev
-      ? import.meta.env.VITE_API_BASE ||
-        import.meta.env.VITE_API_BASE_URL ||
-        "http://localhost:3010"
-      : "https://api.gplabs.com.br";
-
-    return `<script
-  src="https://widget.gplabs.com.br/widget.js"
-  data-widget-key="${widgetKey}"
-  data-api-base="${apiBase}"
-  async
-></script>`;
-  }
-
-  const embedSnippet = snippet || embedFallbackFromDraft();
+  const embedSnippet =
+    snippet ||
+    `<script src="https://widget.gplabs.com.br/widget.js"
+data-widget-key="${webchatDraft?.widgetKey || ""}"
+data-api-base="https://api.gplabs.com.br"
+async></script>`;
 
   return (
     <div className="settings-page">
       <h1 className="settings-title">Configurações</h1>
       <p className="settings-subtitle">
-        Defina os canais que irão se conectar à sua Plataforma WhatsApp GP Labs.
+        Defina quais canais de atendimento estarão disponíveis para sua empresa.
       </p>
 
-      <div className="settings-env-info">
-        <span>{isDev ? "Dev · Ambiente local" : "Produção"}</span>
-      </div>
+      {!!toast && <div className="settings-toast">{toast}</div>}
+      {!!error && <div className="settings-error">{error}</div>}
 
-      {!!toast && (
-        <div
-          style={{
-            marginTop: 10,
-            padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid rgba(52, 211, 153, .35)",
-            background: "rgba(52, 211, 153, .10)",
-            color: "#d1fae5"
-          }}
-        >
-          {toast}
-        </div>
-      )}
-
-      {!!error && (
-        <div
-          style={{
-            marginTop: 10,
-            padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid rgba(248,113,113,.35)",
-            background: "rgba(248,113,113,.10)",
-            color: "#fecaca"
-          }}
-        >
-          {error}
-        </div>
-      )}
-
+      {/* Canais */}
       <section className="settings-section">
-        <h2 className="settings-section-title">Canais de atendimento</h2>
-        <p className="settings-section-description">
-          Selecione um canal para ver os detalhes e configurar.
-        </p>
+        <h2>Canais de atendimento</h2>
 
         <div className="settings-channels-grid">
-          {/* Web Chat */}
           <div
             className="settings-channel-card"
-            style={{ cursor: "pointer" }}
             onClick={openWebchatConfig}
-            title="Configurar Web Chat"
+            style={{ cursor: "pointer" }}
           >
             <div className="settings-channel-header">
-              <span className="settings-channel-title">
-                Janela Web (Web Chat)
-              </span>
-              <Pill variant={webchatStatusVariant}>{webchatStatusLabel}</Pill>
-            </div>
-
-            <p className="settings-channel-description">
-              Widget de atendimento para seu site. Copie o script e configure
-              origens permitidas.
-            </p>
-
-            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-              <button className="settings-primary-btn" disabled={saving}>
-                Configurar
-              </button>
-            </div>
-          </div>
-
-          {/* WhatsApp */}
-          <div className="settings-channel-card">
-            <div className="settings-channel-header">
-              <span className="settings-channel-title">WhatsApp</span>
-              <Pill variant={whatsappVariant}>
-                {whatsappVariant === "on" ? whatsappLabel : "Desativado"}
+              <span>Janela Web (Web Chat)</span>
+              <Pill variant={webchatStatusVariant}>
+                {webchat?.enabled ? "Ativo" : "Desativado"}
               </Pill>
             </div>
-            <p className="settings-channel-description">
-              Envio e recebimento de mensagens pela API oficial do WhatsApp
-              Business.
-            </p>
+            <p>Atendimento via chat integrado ao seu site.</p>
           </div>
 
-          {/* Messenger */}
-          <div className="settings-channel-card" style={{ opacity: 0.8 }}>
+          <div className="settings-channel-card">
             <div className="settings-channel-header">
-              <span className="settings-channel-title">Messenger</span>
-              <Pill variant="soon">Em breve</Pill>
+              <span>WhatsApp</span>
+              <Pill variant={whatsappVariant}>
+                {whatsappVariant === "on" ? "Ativo" : "Desativado"}
+              </Pill>
             </div>
-            <p className="settings-channel-description">
-              Integração com a caixa de mensagens da sua página do Facebook.
-            </p>
-          </div>
-
-          {/* Instagram */}
-          <div className="settings-channel-card" style={{ opacity: 0.8 }}>
-            <div className="settings-channel-header">
-              <span className="settings-channel-title">Instagram</span>
-              <Pill variant="soon">Em breve</Pill>
-            </div>
-            <p className="settings-channel-description">
-              Mensagens diretas (DM) do Instagram integradas no painel de
-              atendimento.
-            </p>
+            <p>Mensagens pela API oficial do WhatsApp Business.</p>
           </div>
         </div>
 
-        <div style={{ marginTop: 14, opacity: 0.9 }}>
-          {loading ? (
-            <span>Carregando canais...</span>
-          ) : (
-            <span>
-              Canais carregados do backend.
-              <button
-                style={{
-                  marginLeft: 10,
-                  all: "unset",
-                  cursor: "pointer",
-                  textDecoration: "underline"
-                }}
-                onClick={loadChannels}
-              >
-                Recarregar
-              </button>
-            </span>
-          )}
+        <div style={{ marginTop: 12 }}>
+          {loading ? "Carregando canais..." : "Canais carregados com sucesso."}
+          <button onClick={loadChannels} style={{ marginLeft: 10 }}>
+            Recarregar
+          </button>
         </div>
       </section>
 
-      <section className="settings-section">
-        <h2 className="settings-section-title">WhatsApp Business API</h2>
-        <p className="settings-section-description">
-          Envio e recebimento de mensagens pela API oficial do WhatsApp Business.
-        </p>
-
-        <button className="settings-primary-btn" disabled>
-          Reconfigurar canal
-        </button>
-
-        <div className="settings-steps">
-          <p className="settings-steps-title">
-            Integração com WhatsApp Business API
-          </p>
-          <p className="settings-steps-description">
-            Configure o token permanente, selecione a conta e valide seu número
-            de WhatsApp Business.
-          </p>
-
-          <ol className="settings-steps-list">
-            <li>Token Meta</li>
-            <li>Conta &amp; número</li>
-            <li>PIN</li>
-            <li>Conectado</li>
-          </ol>
-        </div>
-      </section>
-
+      {/* Modal WebChat */}
       <Modal
         open={webchatOpen}
         title="Configurar Janela Web (Web Chat)"
         onClose={() => setWebchatOpen(false)}
       >
         {!webchatDraft ? (
-          <div>Carregando...</div>
+          "Carregando..."
         ) : (
-          <div style={{ display: "grid", gap: 14 }}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 12
-              }}
-            >
-              <div>
-                <div style={labelStyle()}>Status</div>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <label
-                    style={{ display: "flex", gap: 8, alignItems: "center" }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!webchatDraft.enabled}
-                      onChange={(e) =>
-                        setWebchatDraft((p) => ({
-                          ...p,
-                          enabled: e.target.checked
-                        }))
-                      }
-                    />
-                    <span>{webchatDraft.enabled ? "Ativo" : "Desativado"}</span>
-                  </label>
-                  <span style={{ opacity: 0.75, fontSize: 12 }}>
-                    (Se desativar, o backend bloqueia a sessão do widget)
-                  </span>
-                </div>
-              </div>
+          <div style={{ display: "grid", gap: 16 }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={webchatDraft.enabled}
+                onChange={(e) =>
+                  setWebchatDraft((p) => ({ ...p, enabled: e.target.checked }))
+                }
+              />{" "}
+              Canal ativo
+            </label>
 
-              <div>
-                <div style={labelStyle()}>widgetKey</div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    style={fieldStyle()}
-                    value={webchatDraft.widgetKey || ""}
-                    readOnly
-                  />
-                  <button
-                    className="settings-primary-btn"
-                    onClick={() => copy(webchatDraft.widgetKey || "")}
-                  >
-                    Copiar
-                  </button>
-                </div>
-                <div style={{ marginTop: 8 }}>
-                  <button
-                    className="settings-primary-btn"
-                    style={{ opacity: 0.9 }}
-                    onClick={rotateKey}
-                    disabled={saving}
-                  >
-                    Rotacionar widgetKey
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 12
-              }}
-            >
-              <div>
-                <div style={labelStyle()}>Cor (primary)</div>
-                <input
-                  style={fieldStyle()}
-                  value={webchatDraft.config?.primaryColor || "#34d399"}
-                  onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: {
-                        ...(p.config || {}),
-                        primaryColor: e.target.value,
-                        color: e.target.value
-                      }
-                    }))
-                  }
-                  placeholder="#34d399"
-                />
-              </div>
-
-              <div>
-                <div style={labelStyle()}>Posição</div>
-                <select
-                  style={fieldStyle()}
-                  value={webchatDraft.config?.position || "right"}
-                  onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: { ...(p.config || {}), position: e.target.value }
-                    }))
-                  }
-                >
-                  <option value="right">Direita</option>
-                  <option value="left">Esquerda</option>
-                </select>
-              </div>
-
-              <div>
-                <div style={labelStyle()}>Texto do botão</div>
-                <input
-                  style={fieldStyle()}
-                  value={webchatDraft.config?.buttonText || ""}
-                  onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: {
-                        ...(p.config || {}),
-                        buttonText: e.target.value
-                      }
-                    }))
-                  }
-                  placeholder="Ajuda"
-                />
-              </div>
-
-              <div>
-                <div style={labelStyle()}>Título do header</div>
-                <input
-                  style={fieldStyle()}
-                  value={webchatDraft.config?.title || ""}
-                  onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: { ...(p.config || {}), title: e.target.value }
-                    }))
-                  }
-                  placeholder="Atendimento"
-                />
-              </div>
-
-              <div style={{ gridColumn: "1 / -1" }}>
-                <div style={labelStyle()}>Mensagem de boas-vindas</div>
-                <input
-                  style={fieldStyle()}
-                  value={webchatDraft.config?.greeting || ""}
-                  onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: { ...(p.config || {}), greeting: e.target.value }
-                    }))
-                  }
-                  placeholder="Olá! Como posso ajudar?"
-                />
+            <div>
+              <div style={labelStyle()}>widgetKey</div>
+              <input style={fieldStyle()} value={webchatDraft.widgetKey} readOnly />
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button onClick={() => copy(webchatDraft.widgetKey)}>
+                  Copiar chave
+                </button>
+                <button onClick={rotateKey} disabled={saving}>
+                  Rotacionar chave
+                </button>
               </div>
             </div>
 
             <div>
-              <div style={labelStyle()}>
-                Allowed Origins (uma por linha) — precisa bater com o Origin do
-                site
-              </div>
+              <div style={labelStyle()}>Allowed Origins</div>
               <textarea
-                style={{ ...fieldStyle(), minHeight: 110, resize: "vertical" }}
-                value={(webchatDraft.allowedOrigins || []).join("\n")}
+                style={{ ...fieldStyle(), minHeight: 100 }}
+                value={webchatDraft.allowedOrigins.join("\n")}
                 onChange={(e) =>
                   setWebchatDraft((p) => ({
                     ...p,
                     allowedOrigins: normalizeOriginLines(e.target.value)
                   }))
                 }
-                placeholder={`Ex:\nhttps://gplabs.com.br\nhttps://www.gplabs.com.br`}
+                placeholder={`https://cliente.gplabs.com.br\nhttps://www.gplabs.com.br`}
               />
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                Dica: em dev, use <code>http://localhost:5173</code> e{" "}
-                <code>http://127.0.0.1:5173</code>.
-              </div>
-
-              {isDev &&
-                (!webchatDraft.allowedOrigins ||
-                  webchatDraft.allowedOrigins.length === 0) && (
-                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
-                    <button
-                      className="settings-primary-btn"
-                      style={{ opacity: 0.9 }}
-                      onClick={() =>
-                        setWebchatDraft((p) => ({
-                          ...p,
-                          allowedOrigins: [
-                            "http://localhost:5173",
-                            "http://127.0.0.1:5173"
-                          ]
-                        }))
-                      }
-                    >
-                      Preencher origins de dev
-                    </button>
-                  </div>
-                )}
             </div>
 
             <div>
-              <div style={labelStyle()}>
-                Script de embed{" "}
-                <span style={{ opacity: 0.75 }}>
-                  (gerado pelo backend; se falhar, usamos fallback)
-                </span>
-              </div>
-
+              <div style={labelStyle()}>Script de embed</div>
               <textarea
-                style={{
-                  ...fieldStyle(),
-                  minHeight: 120,
-                  fontFamily:
-                    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                  fontSize: 12
-                }}
-                value={snippetLoading ? "Carregando snippet..." : embedSnippet}
+                style={{ ...fieldStyle(), minHeight: 110 }}
+                value={snippetLoading ? "Carregando..." : embedSnippet}
                 readOnly
               />
-
-              <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                <button
-                  className="settings-primary-btn"
-                  onClick={() => copy(embedSnippet)}
-                >
-                  Copiar embed
-                </button>
-                <button
-                  className="settings-primary-btn"
-                  style={{ opacity: 0.9 }}
-                  onClick={() => copy(webchatDraft.widgetKey || "")}
-                >
-                  Copiar widgetKey
-                </button>
-                <button
-                  className="settings-primary-btn"
-                  style={{ opacity: 0.9 }}
-                  onClick={loadSnippet}
-                  disabled={snippetLoading}
-                >
-                  {snippetLoading ? "Atualizando..." : "Atualizar snippet"}
-                </button>
-              </div>
-
-              {!!snippetMeta?.allowedOrigins?.length && (
-                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
-                  Origins no backend:{" "}
-                  <code>{(snippetMeta.allowedOrigins || []).join(", ")}</code>
-                </div>
-              )}
+              <button onClick={() => copy(embedSnippet)}>
+                Copiar script
+              </button>
             </div>
 
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button
-                className="settings-primary-btn"
-                style={{ opacity: 0.85 }}
-                onClick={() => setWebchatOpen(false)}
-                disabled={saving}
-              >
-                Cancelar
-              </button>
-              <button
-                className="settings-primary-btn"
-                onClick={saveWebchat}
-                disabled={saving}
-              >
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button onClick={() => setWebchatOpen(false)}>Cancelar</button>
+              <button onClick={saveWebchat} disabled={saving}>
                 {saving ? "Salvando..." : "Salvar"}
               </button>
             </div>
