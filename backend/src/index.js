@@ -29,6 +29,8 @@ const __dirname = path.dirname(__filename);
 
 const ENV = process.env.NODE_ENV || "development";
 
+// Carrega .env.production em production, .env em outros ambientes.
+// Se .env não existir (como no seu caso), não derruba o app.
 dotenv.config({
   path: path.join(__dirname, "..", ENV === "production" ? ".env.production" : ".env")
 });
@@ -141,9 +143,18 @@ const PLATFORM_ALLOWED_ORIGINS = new Set(
 
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // curl / server-to-server
+    // Permite requests server-to-server / curl
+    if (!origin) return cb(null, true);
+
     const o = normalizeOrigin(origin);
+
+    // ✅ Domínios principais permitidos
     if (PLATFORM_ALLOWED_ORIGINS.has(o)) return cb(null, true);
+
+    // ✅ Permite subdomínios do base domain (ex: https://acme.cliente.gplabs.com.br)
+    const base = String(process.env.TENANT_BASE_DOMAIN || "").trim();
+    if (base && o.endsWith(`.${base}`)) return cb(null, true);
+
     return cb(new Error(`CORS blocked: ${origin}`));
   },
   credentials: true,
@@ -197,6 +208,7 @@ async function attachOrgFromToken(req, res, next) {
 
     if (!org || !org.isActive) return next();
 
+    // Compat: core usa req.tenant
     req.tenant = { id: org.id, slug: org.slug, name: org.name, isActive: org.isActive };
     req.organization = { id: org.id, slug: org.slug, name: org.name };
     return next();
@@ -288,6 +300,7 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
 
     let effectiveRole = req.user?.role || "agent";
 
+    // Usuário normal precisa membership ativa; super admin (global) pode tudo.
     if (!isSuperAdmin(req.user)) {
       const membership = await prisma.userTenant.findFirst({
         where: { userId: req.user.id, tenantId: org.id, isActive: true },
@@ -307,6 +320,8 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
         email: req.user.email,
         role: effectiveRole,
         scope: isSuperAdmin(req.user) ? "global" : "user",
+
+        // Mantemos tenantId internamente por compat com enforceTokenTenant
         tenantId: org.id,
         organizationId: org.id
       },
