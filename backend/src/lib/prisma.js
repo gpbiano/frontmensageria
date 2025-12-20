@@ -1,14 +1,10 @@
 // backend/src/lib/prisma.js
+import pkg from "@prisma/client";
+const { PrismaClient } = pkg;
 
-// Prisma 7 (client gerado via prisma.config.ts)
-// Output: ./src/generated/prisma
-import { PrismaClient } from "../generated/prisma/index.js";
+let prisma = globalThis.__prisma;
 
-let prisma;
-
-if (globalThis.__prisma) {
-  prisma = globalThis.__prisma;
-} else {
+if (!prisma) {
   prisma = new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
   });
