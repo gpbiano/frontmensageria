@@ -13,7 +13,7 @@ import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 
 // ===============================
-// DB utils — FONTE ÚNICA
+// DB utils — FONTE ÚNICA (legado / compat)
 // ===============================
 import { loadDB, saveDB, ensureArray } from "./utils/db.js";
 
@@ -44,10 +44,23 @@ if (!process.env.WHATSAPP_VERIFY_TOKEN && process.env.VERIFY_TOKEN) {
   process.env.WHATSAPP_VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 }
 
+// ✅ Multi-tenant base domain (FRONT)
+if (!process.env.TENANT_BASE_DOMAIN) {
+  process.env.TENANT_BASE_DOMAIN = "cliente.gplabs.com.br";
+}
+
 // ===============================
 // Logger (depois do dotenv)
 // ===============================
 const { default: logger } = await import("./logger.js");
+
+// ===============================
+// Multi-tenant middlewares + prisma (DINÂMICO — depois do dotenv)
+// ===============================
+const { prisma } = await import("./lib/prisma.js");
+const { resolveTenant } = await import("./middlewares/resolveTenant.js");
+const { requireTenant } = await import("./middlewares/requireTenant.js");
+const { requireAuth, enforceTokenTenant } = await import("./middlewares/requireAuth.js");
 
 // ===============================
 // Routers (TODOS dinâmicos — depois do dotenv)
@@ -110,7 +123,8 @@ logger.info(
     PHONE_NUMBER_ID: PHONE_NUMBER_ID || null,
     EFFECTIVE_PHONE_NUMBER_ID,
     WHATSAPP_TOKEN_defined: !!WHATSAPP_TOKEN,
-    JWT_SECRET_len: String(JWT_SECRET).length
+    JWT_SECRET_len: String(JWT_SECRET).length,
+    TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN
   },
   "✅ Ambiente carregado"
 );
@@ -155,7 +169,19 @@ app.use(
 );
 
 // ===============================
-// CORS (FIX: liberar X-Widget-Key + OPTIONS correto pro WebChat)
+// RESOLVE TENANT (antes do CORS)
+// - API fixa: resolve tenant pelo Origin/Referer (FRONT) ou X-Tenant-Id (fallback)
+// ===============================
+app.use(
+  resolveTenant({
+    tenantBaseDomain: process.env.TENANT_BASE_DOMAIN || "cliente.gplabs.com.br",
+    // ✅ inclui /login para não bloquear fluxos (especialmente local/dev)
+    allowNoTenantPaths: ["/", "/health", "/login", "/webhook/whatsapp"]
+  })
+);
+
+// ===============================
+// CORS (dinâmico por tenant + widget headers)
 // ===============================
 function normalizeOrigin(o) {
   const s = String(o || "").trim();
@@ -163,7 +189,7 @@ function normalizeOrigin(o) {
   return s.endsWith("/") ? s.slice(0, -1) : s;
 }
 
-// Origens "fixas" da plataforma (admin, app, dev)
+// Origens "fixas" da plataforma (master/admin/dev)
 const PLATFORM_ALLOWED_ORIGINS = [
   "https://cliente.gplabs.com.br",
   "https://gplabs.com.br",
@@ -172,48 +198,73 @@ const PLATFORM_ALLOWED_ORIGINS = [
   "http://127.0.0.1:5173"
 ].map(normalizeOrigin);
 
-// Lê allowedOrigins do WebChat via DB (Settings > Canais)
-function getWebchatAllowedOriginsFromDB() {
+// Busca allowedOrigins do WebChat por tenant (Postgres)
+// ✅ fallback compat: se ainda não tiver ChannelConfig, usa JSON antigo sem quebrar
+async function getWebchatAllowedOriginsFromDB(tenantId) {
+  if (!tenantId) return [];
+
   try {
-    const db = loadDB();
-    const allowed =
-      db?.settings?.channels?.webchat?.allowedOrigins ||
-      db?.channels?.webchat?.allowedOrigins || // compat antigo (se existir)
-      [];
+    const row = await prisma.channelConfig.findFirst({
+      where: { tenantId, type: "webchat" },
+      select: { allowedOrigins: true }
+    });
+
+    const allowed = row?.allowedOrigins || [];
     return Array.isArray(allowed) ? allowed.map(normalizeOrigin).filter(Boolean) : [];
-  } catch {
-    return [];
+  } catch (e) {
+    // Compat / transição: mantém o comportamento antigo (single-tenant JSON)
+    try {
+      const db = loadDB();
+      const allowed =
+        db?.settings?.channels?.webchat?.allowedOrigins ||
+        db?.channels?.webchat?.allowedOrigins ||
+        [];
+      return Array.isArray(allowed) ? allowed.map(normalizeOrigin).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
   }
 }
 
 // Middleware CORS por request (permite usar req.path)
-function corsPerRequest(req, res, next) {
+async function corsPerRequest(req, res, next) {
   const isWebchat = String(req.path || "").startsWith("/webchat");
+  const tenantId = req.tenant?.id || null;
 
-  const dynamicWebchatOrigins = isWebchat ? getWebchatAllowedOriginsFromDB() : [];
-  const allowedList = [...PLATFORM_ALLOWED_ORIGINS, ...dynamicWebchatOrigins]
+  const dynamicWebchatOrigins = isWebchat ? await getWebchatAllowedOriginsFromDB(tenantId) : [];
+
+  const origin = normalizeOrigin(req.headers.origin || "");
+  const allowOriginBecauseTenantResolved =
+    !!origin &&
+    !!req.tenant?.id &&
+    origin.includes(`.${process.env.TENANT_BASE_DOMAIN}`);
+
+  const allowedList = [
+    ...PLATFORM_ALLOWED_ORIGINS,
+    ...dynamicWebchatOrigins,
+    ...(allowOriginBecauseTenantResolved ? [origin] : [])
+  ]
     .map(normalizeOrigin)
     .filter(Boolean);
 
   const corsOptions = {
-    origin(origin, cb) {
-      // Sem origin = chamadas server-to-server / curl
-      if (!origin) return cb(null, true);
+    origin(requestOrigin, cb) {
+      if (!requestOrigin) return cb(null, true);
 
-      const o = normalizeOrigin(origin);
+      const o = normalizeOrigin(requestOrigin);
       if (allowedList.includes(o)) return cb(null, true);
 
-      return cb(new Error(`CORS blocked: ${origin}`));
+      return cb(new Error(`CORS blocked: ${requestOrigin}`));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    // ✅ FIX CRÍTICO: liberar headers usados pelo widget
     allowedHeaders: [
       "Content-Type",
       "Authorization",
       "X-Requested-With",
       "X-Widget-Key",
-      "X-Webchat-Token"
+      "X-Webchat-Token",
+      "X-Tenant-Id"
     ],
     exposedHeaders: ["X-Request-Id"]
   };
@@ -221,8 +272,13 @@ function corsPerRequest(req, res, next) {
   return cors(corsOptions)(req, res, next);
 }
 
-app.use(corsPerRequest);
-app.options("*", corsPerRequest);
+// ✅ FIX: wrapper pro async CORS (evita bug em OPTIONS)
+const corsPerRequestHandler = (req, res, next) => {
+  Promise.resolve(corsPerRequest(req, res, next)).catch(next);
+};
+
+app.use(corsPerRequestHandler);
+app.options("*", corsPerRequestHandler);
 
 // ===============================
 // PARSERS
@@ -231,9 +287,17 @@ app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ===============================
-// ✅ PROD: SEM LOGIN PADRÃO / SEM AUTO-CRIAÇÃO
+// PROTEÇÃO DO PAINEL (multi-tenant)
+// - exige JWT
+// - trava tenant do token vs tenant resolvido
+// - exige tenant resolvido
 // ===============================
-// (intencionalmente vazio — o primeiro admin entra via payload no db)
+app.use(
+  ["/api", "/settings", "/conversations", "/outbound", "/auth"],
+  requireAuth,
+  enforceTokenTenant,
+  requireTenant
+);
 
 // ===============================
 // ROTAS
@@ -248,21 +312,23 @@ app.use("/api/human", assignmentRouter);
 app.use("/settings", usersRouter);
 app.use("/settings/groups", groupsRouter);
 
-// Auth
+// Auth (painel)
 app.use("/auth", passwordRouter);
 
-// WebChat + Channels
+// WebChat (público/widget)
 app.use("/webchat", webchatRouter);
+
+// Settings/channels faz parte do painel (já protegido)
 app.use("/settings/channels", channelsRouter);
 
-// Conversas
+// Conversas (painel)
 app.use("/conversations", conversationsRouter);
 
-// WhatsApp Webhook
+// WhatsApp Webhook (público)
 app.use("/webhook/whatsapp", whatsappRouter);
 
 // ===============================
-// OUTBOUND
+// OUTBOUND (painel)
 // ===============================
 app.use("/outbound/assets", assetsRouter);
 app.use("/outbound/numbers", numbersRouter);
@@ -295,38 +361,59 @@ app.get("/health", (req, res) => {
 });
 
 // ===============================
-// LOGIN
+// LOGIN (multi-tenant definitivo - API fixa)
 // ===============================
-app.post("/login", (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: "Informe e-mail e senha." });
+app.post("/login", async (req, res, next) => {
+  try {
+    const { email, password, tenantSlug } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ error: "Informe e-mail e senha." });
+    }
+
+    const slug = String(req.tenantSlug || tenantSlug || "").trim() || null;
+    if (!slug) {
+      return res.status(400).json({ error: "Informe a empresa (tenant)." });
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug },
+      select: { id: true, slug: true, isActive: true }
+    });
+
+    if (!tenant || !tenant.isActive) {
+      return res.status(404).json({ error: "Tenant inválido." });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: { tenantId: tenant.id, email, isActive: true }
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: "Usuário inválido." });
+    }
+
+    const okPrisma = user.passwordHash && verifyPassword(password, user.passwordHash);
+    if (!okPrisma) {
+      return res.status(401).json({ error: "Senha incorreta." });
+    }
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        tenantId: tenant.id,
+        role: user.role,
+        name: user.name,
+        email: user.email
+      },
+      JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || "8h" }
+    );
+
+    const { passwordHash: _ph, ...safeUser } = user;
+    res.json({ token, user: safeUser, tenant: { id: tenant.id, slug: tenant.slug } });
+  } catch (e) {
+    return next(e);
   }
-
-  const db = loadDB();
-  const users = ensureArray(db.users);
-
-  const user = users.find((u) => u.email === email);
-  if (!user || user.isActive === false) {
-    return res.status(401).json({ error: "Usuário inválido." });
-  }
-
-  const ok =
-    (user.passwordHash && verifyPassword(password, user.passwordHash)) ||
-    (!user.passwordHash && password === user.password);
-
-  if (!ok) {
-    return res.status(401).json({ error: "Senha incorreta." });
-  }
-
-  const token = jwt.sign(
-    { id: user.id, role: user.role, name: user.name, email: user.email },
-    JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || "8h" }
-  );
-
-  const { password: _p, passwordHash: _ph, ...safeUser } = user;
-  res.json({ token, user: safeUser });
 });
 
 // ===============================
