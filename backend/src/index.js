@@ -119,9 +119,53 @@ app.use(
 );
 
 // ===============================
+// CORS (explícito e seguro)
+// - resolve preflight (OPTIONS) corretamente
+// - evita "No Access-Control-Allow-Origin"
+// ===============================
+function normalizeOrigin(o) {
+  const s = String(o || "").trim();
+  if (!s) return "";
+  return s.endsWith("/") ? s.slice(0, -1) : s;
+}
+
+const PLATFORM_ALLOWED_ORIGINS = new Set(
+  [
+    "https://cliente.gplabs.com.br",
+    "https://gplabs.com.br",
+    "https://www.gplabs.com.br",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+  ].map(normalizeOrigin)
+);
+
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // curl / server-to-server
+    const o = normalizeOrigin(origin);
+    if (PLATFORM_ALLOWED_ORIGINS.has(o)) return cb(null, true);
+    return cb(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Tenant-Id"],
+  exposedHeaders: ["X-Request-Id"]
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
+// ===============================
+// PARSERS + STATIC
+// ===============================
+app.use(express.json({ limit: "2mb" }));
+app.use("/uploads", express.static(UPLOADS_DIR));
+
+// ===============================
 // RESOLVE CONTEXTO (por domínio/origin/header)
 // - Mantém "tenant" somente no backend, sem expor no front.
 // - Libera rotas públicas que não exigem contexto.
+// IMPORTANT: fica DEPOIS do CORS pra não quebrar preflight.
 // ===============================
 app.use(
   resolveTenant({
@@ -131,26 +175,16 @@ app.use(
 );
 
 // ===============================
-// CORS + PARSERS
-// ===============================
-app.use(cors({ origin: true, credentials: true }));
-app.options("*", cors({ origin: true, credentials: true }));
-
-app.use(express.json({ limit: "2mb" }));
-app.use("/uploads", express.static(UPLOADS_DIR));
-
-// ===============================
 // HELPERS (interno)
 // ===============================
 function isSuperAdmin(user) {
   return user?.role === "super_admin" || user?.scope === "global";
 }
 
-// Hidrata o contexto da organização a partir do token (quando não houver resolução por domínio/origin)
-// - Isso resolve o caso do frontend rodando em "cliente.gplabs.com.br" (sem subdomínio)
+// Hidrata contexto da organização a partir do token quando não houver subdomínio
+// (frontend em cliente.gplabs.com.br -> sem subdomínio por empresa)
 async function attachOrgFromToken(req, res, next) {
   try {
-    // Já resolvido pelo resolveTenant? ok.
     if (req.tenant?.id) return next();
 
     const orgId = req.user?.tenantId || req.user?.organizationId || null;
@@ -163,7 +197,6 @@ async function attachOrgFromToken(req, res, next) {
 
     if (!org || !org.isActive) return next();
 
-    // Compat: o restante do core já usa req.tenant
     req.tenant = { id: org.id, slug: org.slug, name: org.name, isActive: org.isActive };
     req.organization = { id: org.id, slug: org.slug, name: org.name };
     return next();
@@ -175,7 +208,7 @@ async function attachOrgFromToken(req, res, next) {
 // ===============================
 // LOGIN (PÚBLICO)
 // - Não pede "empresa" no front.
-// - Retorna lista de organizações vinculadas ao usuário.
+// - Retorna lista de organizações vinculadas.
 // - Token inicial NÃO carrega organização (pós-login seleciona).
 // ===============================
 app.post("/login", async (req, res, next) => {
@@ -189,7 +222,6 @@ app.post("/login", async (req, res, next) => {
       where: { email, isActive: true },
       include: {
         tenants: {
-          // userTenant / membership
           select: {
             role: true,
             tenant: { select: { id: true, slug: true, name: true, isActive: true } }
@@ -212,7 +244,6 @@ app.post("/login", async (req, res, next) => {
       }))
       .filter((o) => o.isActive);
 
-    // Token inicial: só identidade + escopo.
     const token = jwt.sign(
       {
         id: user.id,
@@ -257,7 +288,6 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
 
     let effectiveRole = req.user?.role || "agent";
 
-    // Se não for super admin, precisa membership ativa
     if (!isSuperAdmin(req.user)) {
       const membership = await prisma.userTenant.findFirst({
         where: { userId: req.user.id, tenantId: org.id, isActive: true },
@@ -271,7 +301,6 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
       effectiveRole = membership.role || effectiveRole;
     }
 
-    // Token com organização travada (mantemos tenantId internamente por compat com enforceTokenTenant)
     const token = jwt.sign(
       {
         id: req.user.id,
@@ -296,11 +325,11 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
 
 // ===============================
 // ROTAS PROTEGIDAS (organização obrigatória)
-// Ordem importante:
-// 1) requireAuth (lê token)
-// 2) attachOrgFromToken (hidrata req.tenant quando não há subdomínio)
-// 3) enforceTokenTenant (trava token vs tenant resolvido/hidratado)
-// 4) requireTenant (garante contexto ativo)
+// Ordem:
+// 1) requireAuth
+// 2) attachOrgFromToken (quando não houver subdomínio)
+// 3) enforceTokenTenant
+// 4) requireTenant
 // ===============================
 app.use(
   ["/api", "/settings", "/conversations", "/outbound", "/auth"],
@@ -367,7 +396,7 @@ app.use((err, req, res, next) => {
   logger.error({ err }, "Erro não tratado");
   const msg = String(err?.message || "");
 
-  if (msg.startsWith("CORS")) {
+  if (msg.startsWith("CORS blocked")) {
     return res.status(403).json({ error: "CORS blocked." });
   }
 
