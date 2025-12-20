@@ -11,8 +11,9 @@ import path from "path";
 import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
-import { resolveTenant } from "./middlewares/resolveTenant.js";
-import { requireAuth, enforceTokenTenant } from "./middlewares/requireAuth.js";
+import { resolveTenant } from "./middleware/resolveTenant.js";
+import { requireTenant } from "./middleware/requireTenant.js";
+import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
 // ===============================
 // DB utils — FONTE ÚNICA (legado / compat)
 // ===============================
