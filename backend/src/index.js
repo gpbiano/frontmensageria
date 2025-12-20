@@ -60,9 +60,7 @@ const { default: logger } = await import("./logger.js");
 // Multi-tenant middlewares + prisma (DINÂMICO — depois do dotenv)
 // ===============================
 const { prisma } = await import("./lib/prisma.js");
-const { resolveTenant } = await import("./middlewares/resolveTenant.js");
-const { requireTenant } = await import("./middlewares/requireTenant.js");
-const { requireAuth, enforceTokenTenant } = await import("./middlewares/requireAuth.js");
+const { requireAuth, enforceTokenTenant } = await import("./middleware/requireAuth.js");
 
 // ===============================
 // Routers (TODOS dinâmicos — depois do dotenv)
