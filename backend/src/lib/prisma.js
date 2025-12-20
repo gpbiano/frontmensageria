@@ -1,10 +1,12 @@
-import pkg from "@prisma/client";
-const { PrismaClient } = pkg;
+// backend/src/lib/prisma.js
+import { PrismaClient } from "@prisma/client";
 
-const prisma = globalThis.__prisma || new PrismaClient();
+const globalForPrisma = globalThis;
 
-if (process.env.NODE_ENV !== "production") {
-  globalThis.__prisma = prisma;
-}
+export const prisma =
+  globalForPrisma.prisma ||
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
+  });
 
-export { prisma };
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
