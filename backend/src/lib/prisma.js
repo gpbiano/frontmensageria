@@ -1,20 +1,16 @@
 // backend/src/lib/prisma.js
 
-// Compat ESM + CommonJS para @prisma/client
-import pkg from "@prisma/client";
-const { PrismaClient } = pkg;
+// Prisma 7 (client gerado via prisma.config.ts)
+// Output: ./src/generated/prisma
+import { PrismaClient } from "../generated/prisma/index.js";
 
 let prisma;
 
-// Reaproveita instância em dev (hot reload)
 if (globalThis.__prisma) {
   prisma = globalThis.__prisma;
 } else {
   prisma = new PrismaClient({
-    log:
-      process.env.NODE_ENV === "development"
-        ? ["error", "warn"]
-        : ["error"]
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
   });
 
   if (process.env.NODE_ENV !== "production") {
