@@ -22,19 +22,24 @@ import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
 import { loadDB } from "./utils/db.js";
 
 // ===============================
-// ENV
+// PATHS + ENV LOAD
 // ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const ENV = process.env.NODE_ENV || "development";
 
-const dotenvResult = dotenv.config({
-  path: path.join(__dirname, "..", ENV === "production" ? ".env.production" : ".env"),
-});
+// Carrega env de forma robusta (prod -> .env.production, senão .env)
+const envProdPath = path.join(__dirname, "..", ".env.production");
+const envDevPath = path.join(__dirname, "..", ".env");
 
-if (dotenvResult.error) {
-  console.error("❌ Falha ao carregar dotenv:", dotenvResult.error);
+if (ENV === "production" && fs.existsSync(envProdPath)) {
+  dotenv.config({ path: envProdPath });
+} else if (fs.existsSync(envDevPath)) {
+  dotenv.config({ path: envDevPath });
+} else if (fs.existsSync(envProdPath)) {
+  // fallback (às vezes o servidor está em prod mas NODE_ENV não veio)
+  dotenv.config({ path: envProdPath });
 }
 
 // Compat WhatsApp ENV
@@ -56,30 +61,30 @@ const { default: logger } = await import("./logger.js");
 // ===============================
 // Prisma (depois do dotenv)
 // ===============================
-const prismaModule = await import("./lib/prisma.js");
-const prisma = prismaModule?.prisma;
+let prisma;
+let prismaReady = false;
 
-// Validação forte (evita 500 misterioso no /login)
-if (!prisma || typeof prisma !== "object" || typeof prisma.$connect !== "function") {
-  logger.fatal(
-    { exportedKeys: Object.keys(prismaModule || {}) },
-    "❌ Prisma não inicializou (export prisma inválido em ./lib/prisma.js)"
-  );
-  throw new Error("Prisma não inicializou (export prisma inválido).");
-}
+try {
+  const mod = await import("./lib/prisma.js");
+  prisma = mod?.prisma;
 
-// Se seus models existirem, isso deve ser TRUE:
-const prismaReady = !!prisma.user && !!prisma.tenant;
-if (!prismaReady) {
-  logger.fatal(
-    {
-      hasUser: !!prisma.user,
-      hasTenant: !!prisma.tenant,
-      exportedKeys: Object.keys(prisma),
-    },
-    "❌ PrismaClient inválido (models não existem). Rode prisma generate / confira schema."
-  );
-  throw new Error("PrismaClient inválido: prisma.user/prisma.tenant não existem.");
+  // Validação real: models precisam existir (senão o client foi gerado "vazio")
+  prismaReady = !!(prisma?.user && prisma?.tenant);
+
+  if (!prismaReady) {
+    logger.error(
+      {
+        prismaReady,
+        hasUser: !!prisma?.user,
+        hasTenant: !!prisma?.tenant,
+        exportedKeys: prisma ? Object.keys(prisma) : [],
+      },
+      "❌ PrismaClient carregou, mas os models não existem (prisma.user/prisma.tenant). Verifique schema.prisma + prisma generate."
+    );
+  }
+} catch (err) {
+  prismaReady = false;
+  logger.error({ err }, "❌ Falha ao importar Prisma (./lib/prisma.js).");
 }
 
 // ===============================
@@ -116,7 +121,6 @@ const PORT = process.env.PORT || 3010;
 
 const JWT_SECRET = String(process.env.JWT_SECRET || "").trim();
 if (!JWT_SECRET) {
-  logger.fatal({ ENV }, "❌ JWT_SECRET não definido. Verifique .env/.env.production");
   throw new Error("JWT_SECRET não definido");
 }
 
@@ -149,8 +153,6 @@ app.use(
 
 // ===============================
 // CORS (explícito e seguro)
-// - resolve preflight (OPTIONS) corretamente
-// - evita "No Access-Control-Allow-Origin"
 // ===============================
 function normalizeOrigin(o) {
   const s = String(o || "").trim();
@@ -168,28 +170,11 @@ const PLATFORM_ALLOWED_ORIGINS = new Set(
   ].map(normalizeOrigin)
 );
 
-function isAllowedSubdomain(origin) {
-  const base = String(process.env.TENANT_BASE_DOMAIN || "").trim();
-  if (!origin || !base) return false;
-
-  // Ex.: https://empresa.cliente.gplabs.com.br
-  //      https://foo.bar.cliente.gplabs.com.br (se você quiser permitir, mantém o endsWith)
-  try {
-    const u = new URL(origin);
-    return u.hostname === base || u.hostname.endsWith(`.${base}`);
-  } catch {
-    return false;
-  }
-}
-
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true); // curl / server-to-server
-
     const o = normalizeOrigin(origin);
     if (PLATFORM_ALLOWED_ORIGINS.has(o)) return cb(null, true);
-    if (isAllowedSubdomain(o)) return cb(null, true);
-
     return cb(new Error(`CORS blocked: ${origin}`));
   },
   credentials: true,
@@ -208,10 +193,8 @@ app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ===============================
-// RESOLVE CONTEXTO (por domínio/origin/header)
-// - Mantém "tenant" somente no backend, sem expor no front.
-// - Libera rotas públicas que não exigem contexto.
-// IMPORTANT: fica DEPOIS do CORS pra não quebrar preflight.
+// RESOLVE CONTEXTO (tenant)
+// IMPORTANT: depois do CORS pra não quebrar preflight
 // ===============================
 app.use(
   resolveTenant({
@@ -221,20 +204,30 @@ app.use(
 );
 
 // ===============================
-// HELPERS (interno)
+// HELPERS
 // ===============================
 function isSuperAdmin(user) {
   return user?.role === "super_admin" || user?.scope === "global";
 }
 
+// Se Prisma não estiver OK, não deixa “cair”: devolve 503 nas rotas que dependem do DB
+function requirePrisma(req, res, next) {
+  if (prismaReady) return next();
+  return res.status(503).json({
+    error: "DB not ready",
+    code: "DB_NOT_READY",
+  });
+}
+
 // Hidrata contexto da organização a partir do token quando não houver subdomínio
-// (frontend em cliente.gplabs.com.br -> sem subdomínio por organização)
 async function attachOrgFromToken(req, res, next) {
   try {
     if (req.tenant?.id) return next();
 
     const orgId = req.user?.tenantId || req.user?.organizationId || null;
     if (!orgId) return next();
+
+    if (!prismaReady) return next(); // sem prisma, não dá pra hidratar
 
     const org = await prisma.tenant.findUnique({
       where: { id: orgId },
@@ -253,27 +246,20 @@ async function attachOrgFromToken(req, res, next) {
 
 // ===============================
 // LOGIN (PÚBLICO)
-// - Não pede "empresa" no front.
-// - Retorna lista de organizações vinculadas.
-// - Token inicial NÃO carrega organização (pós-login seleciona).
 // ===============================
-app.post("/login", async (req, res, next) => {
+app.post("/login", requirePrisma, async (req, res, next) => {
   try {
     const { email, password } = req.body || {};
     if (!email || !password) {
       return res.status(400).json({ error: "Informe e-mail e senha." });
     }
 
-    // Normaliza email
-    const normalizedEmail = String(email).trim().toLowerCase();
-
     const user = await prisma.user.findFirst({
-      where: { email: normalizedEmail, isActive: true },
+      where: { email, isActive: true },
       include: {
         tenants: {
           select: {
             role: true,
-            isActive: true,
             tenant: { select: { id: true, slug: true, name: true, isActive: true } },
           },
         },
@@ -285,13 +271,14 @@ app.post("/login", async (req, res, next) => {
     }
 
     const organizations = (user.tenants || [])
-      .filter((m) => m.isActive && m.tenant?.isActive)
       .map((m) => ({
         id: m.tenant.id,
         slug: m.tenant.slug,
         name: m.tenant.name,
+        isActive: m.tenant.isActive,
         role: m.role,
-      }));
+      }))
+      .filter((o) => o.isActive);
 
     const token = jwt.sign(
       {
@@ -313,12 +300,8 @@ app.post("/login", async (req, res, next) => {
 
 // ===============================
 // SELECT ORGANIZATION (pós-login)
-// - Front manda organizationId (sem "tenant").
-// - Super admin pode selecionar qualquer.
-// - Usuário normal só seleciona as vinculadas.
-// - Retorna NOVO token com organização travada.
 // ===============================
-app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
+app.post("/auth/select-tenant", requireAuth, requirePrisma, async (req, res, next) => {
   try {
     const { organizationId } = req.body || {};
     const orgId = String(organizationId || "").trim();
@@ -356,8 +339,6 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
         email: req.user.email,
         role: effectiveRole,
         scope: isSuperAdmin(req.user) ? "global" : "user",
-
-        // Interno/compat: mantém tenantId pro enforceTokenTenant
         tenantId: org.id,
         organizationId: org.id,
       },
@@ -378,16 +359,18 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
 // ROTAS PROTEGIDAS (organização obrigatória)
 // Ordem:
 // 1) requireAuth
-// 2) attachOrgFromToken (quando não houver subdomínio)
+// 2) attachOrgFromToken
 // 3) enforceTokenTenant
 // 4) requireTenant
+// 5) requirePrisma (garante DB pronto antes de entrar nos routers)
 // ===============================
 app.use(
   ["/api", "/settings", "/conversations", "/outbound", "/auth"],
   requireAuth,
   attachOrgFromToken,
   enforceTokenTenant,
-  requireTenant
+  requireTenant,
+  requirePrisma
 );
 
 // ===============================
@@ -434,6 +417,8 @@ app.get("/health", (req, res) => {
   const db = loadDB();
   res.json({
     ok: true,
+    env: ENV,
+    prismaReady,
     conversations: db?.conversations?.length || 0,
     users: db?.users?.length || 0,
     uptime: process.uptime(),
@@ -444,21 +429,17 @@ app.get("/health", (req, res) => {
 // ERROR HANDLER
 // ===============================
 app.use((err, req, res, next) => {
+  logger.error({ err, url: req?.url, method: req?.method }, "Erro não tratado");
+
   const msg = String(err?.message || "");
-  logger.error(
-    {
-      err,
-      method: req.method,
-      url: req.originalUrl,
-      origin: req.headers.origin,
-      hasUser: !!req.user,
-      hasOrg: !!req.tenant?.id,
-    },
-    "Erro não tratado"
-  );
 
   if (msg.startsWith("CORS blocked")) {
     return res.status(403).json({ error: "CORS blocked." });
+  }
+
+  // Em dev, ajuda muito a debugar sem abrir dados em prod
+  if (ENV !== "production") {
+    return res.status(500).json({ error: "Internal server error", message: msg });
   }
 
   return res.status(500).json({ error: "Internal server error" });
@@ -468,5 +449,5 @@ app.use((err, req, res, next) => {
 // START
 // ===============================
 app.listen(PORT, () => {
-  logger.info({ PORT, ENV, prismaReady: true }, "🚀 API rodando");
+  logger.info({ PORT, ENV, prismaReady }, "🚀 API rodando");
 });
