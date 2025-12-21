@@ -76,7 +76,7 @@ const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
 
 // ✅ Help Portal
 const HELP_PORTAL_URL =
-  "https://gplabs.atlassian.net/jira/servicedesk/projects/SUP/knowledge/articles";
+  "https://gplabs.atlassian.net/servicedesk/customer/portals";
 
 /* ==========================================================
    AUTH HELPERS (localStorage OU sessionStorage)
