@@ -17,11 +17,6 @@ import { requireTenant } from "./middleware/requireTenant.js";
 import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
 
 // ===============================
-// DB utils — legado/compat (health)
-// ===============================
-import { loadDB } from "./utils/db.js";
-
-// ===============================
 // PATHS + ENV LOAD
 // ===============================
 const __filename = fileURLToPath(import.meta.url);
@@ -72,32 +67,31 @@ try {
 
   const hasUser = !!prisma?.user;
   const hasTenant = !!prisma?.tenant;
+  const hasUserTenant = !!prisma?.userTenant;
 
   // Prisma "ready" só quando os models esperados existem
-  prismaReady = !!(hasUser && hasTenant);
+  prismaReady = !!(hasUser && hasTenant && hasUserTenant);
 
   if (!prismaReady) {
-    // ⚠️ NÃO é erro fatal no core atual (ainda usamos data.json)
-    // Mantemos API rodando e retornamos 503 apenas nas rotas que dependem do DB (requirePrisma)
-    logger.warn(
+    logger.error(
       {
         prismaReady,
         hasUser,
         hasTenant,
+        hasUserTenant,
         exportedKeys: prisma ? Object.keys(prisma) : [],
       },
-      "⚠️ Prisma Client carregou, mas models esperados não existem (user/tenant). Mantendo API no modo data.json. (Isso é OK até migrarmos o core para Postgres.)"
+      "❌ PrismaClient carregou, mas models esperados não existem (user/tenant/userTenant). Verifique schema.prisma + prisma generate."
     );
   } else {
     logger.info(
-      { prismaReady, hasUser, hasTenant },
-      "✅ Prisma pronto (models user/tenant encontrados)."
+      { prismaReady, hasUser, hasTenant, hasUserTenant },
+      "✅ Prisma pronto (models user/tenant/userTenant encontrados)."
     );
   }
 } catch (err) {
   prismaReady = false;
-  // ⚠️ Também não é fatal por enquanto: só indica que DB relacional ainda não está ativo
-  logger.warn({ err }, "⚠️ Prisma não disponível (./lib/prisma.js). Mantendo API no modo data.json.");
+  logger.error({ err }, "❌ Falha ao importar Prisma (./lib/prisma.js).");
 }
 
 // ===============================
@@ -422,18 +416,29 @@ app.use("/outbound/sms-campaigns", smsCampaignsRouter);
 app.use("/outbound", outboundRouter);
 
 // ===============================
-// HEALTH
+// HEALTH (Prisma-only)
 // ===============================
 app.get("/", (req, res) => res.json({ status: "ok" }));
 
-app.get("/health", (req, res) => {
-  const db = loadDB();
+app.get("/health", async (req, res) => {
+  let users = 0;
+  let tenants = 0;
+
+  try {
+    if (prismaReady) {
+      users = await prisma.user.count();
+      tenants = await prisma.tenant.count();
+    }
+  } catch {
+    // não quebra health
+  }
+
   res.json({
     ok: true,
     env: ENV,
     prismaReady,
-    conversations: db?.conversations?.length || 0,
-    users: db?.users?.length || 0,
+    users,
+    tenants,
     uptime: process.uptime(),
   });
 });
