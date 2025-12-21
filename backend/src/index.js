@@ -87,9 +87,8 @@ const { default: whatsappRouter } = await import("./routes/channels/whatsappRout
 const PORT = process.env.PORT || 3010;
 
 const JWT_SECRET = String(process.env.JWT_SECRET || "").trim();
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET não definido");
-}
+if (!JWT_SECRET) throw new Error("JWT_SECRET não definido");
+
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 
 // ===============================
@@ -128,8 +127,6 @@ app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ===============================
 // CORS (ANTES de qualquer middleware que possa bloquear)
-// - garante preflight (OPTIONS) SEM crash
-// - garante Access-Control-Allow-Origin na resposta
 // ===============================
 function normalizeOrigin(o) {
   const s = String(o || "").trim();
@@ -141,7 +138,6 @@ function isAllowedOrigin(origin) {
   const o = normalizeOrigin(origin);
   if (!o) return true;
 
-  // allowlist principal
   const allow = new Set([
     "https://cliente.gplabs.com.br",
     "https://gplabs.com.br",
@@ -152,7 +148,7 @@ function isAllowedOrigin(origin) {
 
   if (allow.has(o)) return true;
 
-  // opcional: permitir subdomínios *.gplabs.com.br
+  // opcional: permite subdomínios *.gplabs.com.br
   try {
     const u = new URL(o);
     if (u.hostname.endsWith(".gplabs.com.br")) return true;
@@ -180,12 +176,10 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // ✅ preflight sempre responde
+app.options("*", cors(corsOptions));
 
 // ===============================
 // RESOLVE CONTEXTO (por domínio/origin/header)
-// - Mantém "tenant" só no backend.
-// - Libera rotas públicas.
 // ===============================
 app.use(
   resolveTenant({
@@ -201,7 +195,7 @@ function isSuperAdmin(user) {
   return user?.role === "super_admin" || user?.scope === "global";
 }
 
-// Hidrata contexto da organização a partir do token quando não houver subdomínio
+// Hidrata contexto a partir do token quando não houver subdomínio
 async function attachOrgFromToken(req, res, next) {
   try {
     if (req.tenant?.id) return next();
@@ -226,6 +220,7 @@ async function attachOrgFromToken(req, res, next) {
 
 // ===============================
 // LOGIN (PÚBLICO)
+// - sem include "tenants" (evita quebrar por nome de relação)
 // ===============================
 app.post("/login", async (req, res, next) => {
   try {
@@ -235,22 +230,23 @@ app.post("/login", async (req, res, next) => {
     }
 
     const user = await prisma.user.findFirst({
-      where: { email, isActive: true },
-      include: {
-        tenants: {
-          select: {
-            role: true,
-            tenant: { select: { id: true, slug: true, name: true, isActive: true } }
-          }
-        }
-      }
+      where: { email, isActive: true }
     });
 
     if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
       return res.status(401).json({ error: "Credenciais inválidas." });
     }
 
-    const organizations = (user.tenants || [])
+    // memberships (tabela de vínculo)
+    const memberships = await prisma.userTenant.findMany({
+      where: { userId: user.id, isActive: true },
+      select: {
+        role: true,
+        tenant: { select: { id: true, slug: true, name: true, isActive: true } }
+      }
+    });
+
+    const organizations = (memberships || [])
       .map((m) => ({
         id: m.tenant.id,
         slug: m.tenant.slug,
@@ -274,6 +270,7 @@ app.post("/login", async (req, res, next) => {
     const { passwordHash, ...safeUser } = user;
     return res.json({ token, user: safeUser, organizations });
   } catch (e) {
+    logger.error({ err: e }, "❌ Erro no /login");
     return next(e);
   }
 });
@@ -319,8 +316,8 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
         email: req.user.email,
         role: effectiveRole,
         scope: isSuperAdmin(req.user) ? "global" : "user",
-        tenantId: org.id,
-        organizationId: org.id
+        tenantId: org.id, // interno
+        organizationId: org.id // pro front
       },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
@@ -331,6 +328,7 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
       organization: { id: org.id, slug: org.slug, name: org.name }
     });
   } catch (e) {
+    logger.error({ err: e }, "❌ Erro no /auth/select-tenant");
     return next(e);
   }
 });
