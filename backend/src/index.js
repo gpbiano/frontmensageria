@@ -50,9 +50,35 @@ process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 const { default: logger } = await import("./logger.js");
 
 // ===============================
-// Prisma (depois do dotenv)
+// Prisma (robusto)
+// - evita prisma undefined por diferença de export no ./lib/prisma.js
 // ===============================
-const { prisma } = await import("./lib/prisma.js");
+const prismaModule = await import("./lib/prisma.js");
+
+// tenta achar o PrismaClient exportado de várias formas comuns
+const prisma =
+  prismaModule.prisma ||
+  prismaModule.default ||
+  prismaModule.client ||
+  prismaModule.db ||
+  null;
+
+if (!prisma) {
+  logger.fatal(
+    { exportedKeys: Object.keys(prismaModule || {}) },
+    "❌ Prisma não encontrado em ./lib/prisma.js"
+  );
+  throw new Error("Prisma não encontrado em ./lib/prisma.js");
+}
+
+// valida que tem pelo menos um model (user) antes de seguir
+if (!prisma.user || typeof prisma.user.findFirst !== "function") {
+  logger.fatal(
+    { hasUser: !!prisma.user, exportedKeys: Object.keys(prismaModule || {}) },
+    "❌ PrismaClient inválido (prisma.user não existe). Verifique exports do ./lib/prisma.js"
+  );
+  throw new Error("PrismaClient inválido: prisma.user não existe");
+}
 
 // ===============================
 // Routers
@@ -126,7 +152,7 @@ app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ===============================
-// CORS (ANTES de qualquer middleware que possa bloquear)
+// CORS (ANTES do resolveTenant)
 // ===============================
 function normalizeOrigin(o) {
   const s = String(o || "").trim();
@@ -148,7 +174,7 @@ function isAllowedOrigin(origin) {
 
   if (allow.has(o)) return true;
 
-  // opcional: permite subdomínios *.gplabs.com.br
+  // permite subdomínios *.gplabs.com.br (opcional)
   try {
     const u = new URL(o);
     if (u.hostname.endsWith(".gplabs.com.br")) return true;
@@ -220,7 +246,6 @@ async function attachOrgFromToken(req, res, next) {
 
 // ===============================
 // LOGIN (PÚBLICO)
-// - sem include "tenants" (evita quebrar por nome de relação)
 // ===============================
 app.post("/login", async (req, res, next) => {
   try {
@@ -237,7 +262,7 @@ app.post("/login", async (req, res, next) => {
       return res.status(401).json({ error: "Credenciais inválidas." });
     }
 
-    // memberships (tabela de vínculo)
+    // memberships
     const memberships = await prisma.userTenant.findMany({
       where: { userId: user.id, isActive: true },
       select: {
@@ -282,9 +307,7 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
   try {
     const { organizationId } = req.body || {};
     const orgId = String(organizationId || "").trim();
-    if (!orgId) {
-      return res.status(400).json({ error: "Informe a organização." });
-    }
+    if (!orgId) return res.status(400).json({ error: "Informe a organização." });
 
     const org = await prisma.tenant.findUnique({
       where: { id: orgId },
@@ -303,9 +326,7 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
         select: { role: true }
       });
 
-      if (!membership) {
-        return res.status(403).json({ error: "Acesso negado." });
-      }
+      if (!membership) return res.status(403).json({ error: "Acesso negado." });
 
       effectiveRole = membership.role || effectiveRole;
     }
@@ -316,8 +337,8 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
         email: req.user.email,
         role: effectiveRole,
         scope: isSuperAdmin(req.user) ? "global" : "user",
-        tenantId: org.id, // interno
-        organizationId: org.id // pro front
+        tenantId: org.id,
+        organizationId: org.id
       },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
