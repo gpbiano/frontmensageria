@@ -29,9 +29,13 @@ const __dirname = path.dirname(__filename);
 
 const ENV = process.env.NODE_ENV || "development";
 
-dotenv.config({
+const dotenvResult = dotenv.config({
   path: path.join(__dirname, "..", ENV === "production" ? ".env.production" : ".env"),
 });
+
+if (dotenvResult.error) {
+  console.error("❌ Falha ao carregar dotenv:", dotenvResult.error);
+}
 
 // Compat WhatsApp ENV
 if (!process.env.PHONE_NUMBER_ID && process.env.WHATSAPP_PHONE_NUMBER_ID) {
@@ -51,15 +55,31 @@ const { default: logger } = await import("./logger.js");
 
 // ===============================
 // Prisma (depois do dotenv)
-// - NÃO derruba o servidor se o Prisma estiver inválido/sem models.
 // ===============================
-let prisma = null;
-try {
-  const mod = await import("./lib/prisma.js");
-  prisma = mod?.prisma || null;
-} catch (e) {
-  prisma = null;
-  logger.error({ err: e }, "❌ Falha ao importar ./lib/prisma.js (Prisma indisponível)");
+const prismaModule = await import("./lib/prisma.js");
+const prisma = prismaModule?.prisma;
+
+// Validação forte (evita 500 misterioso no /login)
+if (!prisma || typeof prisma !== "object" || typeof prisma.$connect !== "function") {
+  logger.fatal(
+    { exportedKeys: Object.keys(prismaModule || {}) },
+    "❌ Prisma não inicializou (export prisma inválido em ./lib/prisma.js)"
+  );
+  throw new Error("Prisma não inicializou (export prisma inválido).");
+}
+
+// Se seus models existirem, isso deve ser TRUE:
+const prismaReady = !!prisma.user && !!prisma.tenant;
+if (!prismaReady) {
+  logger.fatal(
+    {
+      hasUser: !!prisma.user,
+      hasTenant: !!prisma.tenant,
+      exportedKeys: Object.keys(prisma),
+    },
+    "❌ PrismaClient inválido (models não existem). Rode prisma generate / confira schema."
+  );
+  throw new Error("PrismaClient inválido: prisma.user/prisma.tenant não existem.");
 }
 
 // ===============================
@@ -96,8 +116,7 @@ const PORT = process.env.PORT || 3010;
 
 const JWT_SECRET = String(process.env.JWT_SECRET || "").trim();
 if (!JWT_SECRET) {
-  // Se isso acontecer em produção, normalmente é porque o PM2 não está startando com NODE_ENV=production
-  // ou porque o arquivo .env.production não está sendo lido.
+  logger.fatal({ ENV }, "❌ JWT_SECRET não definido. Verifique .env/.env.production");
   throw new Error("JWT_SECRET não definido");
 }
 
@@ -131,6 +150,7 @@ app.use(
 // ===============================
 // CORS (explícito e seguro)
 // - resolve preflight (OPTIONS) corretamente
+// - evita "No Access-Control-Allow-Origin"
 // ===============================
 function normalizeOrigin(o) {
   const s = String(o || "").trim();
@@ -148,11 +168,28 @@ const PLATFORM_ALLOWED_ORIGINS = new Set(
   ].map(normalizeOrigin)
 );
 
+function isAllowedSubdomain(origin) {
+  const base = String(process.env.TENANT_BASE_DOMAIN || "").trim();
+  if (!origin || !base) return false;
+
+  // Ex.: https://empresa.cliente.gplabs.com.br
+  //      https://foo.bar.cliente.gplabs.com.br (se você quiser permitir, mantém o endsWith)
+  try {
+    const u = new URL(origin);
+    return u.hostname === base || u.hostname.endsWith(`.${base}`);
+  } catch {
+    return false;
+  }
+}
+
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true); // curl / server-to-server
+
     const o = normalizeOrigin(origin);
     if (PLATFORM_ALLOWED_ORIGINS.has(o)) return cb(null, true);
+    if (isAllowedSubdomain(o)) return cb(null, true);
+
     return cb(new Error(`CORS blocked: ${origin}`));
   },
   credentials: true,
@@ -174,7 +211,7 @@ app.use("/uploads", express.static(UPLOADS_DIR));
 // RESOLVE CONTEXTO (por domínio/origin/header)
 // - Mantém "tenant" somente no backend, sem expor no front.
 // - Libera rotas públicas que não exigem contexto.
-// IMPORTANTE: fica DEPOIS do CORS pra não quebrar preflight.
+// IMPORTANT: fica DEPOIS do CORS pra não quebrar preflight.
 // ===============================
 app.use(
   resolveTenant({
@@ -184,27 +221,20 @@ app.use(
 );
 
 // ===============================
-// HELPERS
+// HELPERS (interno)
 // ===============================
 function isSuperAdmin(user) {
   return user?.role === "super_admin" || user?.scope === "global";
 }
 
-function prismaReady() {
-  // Prisma válido precisa ter os delegates (user/tenant/userTenant etc).
-  return !!(prisma && prisma.user && prisma.tenant);
-}
-
 // Hidrata contexto da organização a partir do token quando não houver subdomínio
+// (frontend em cliente.gplabs.com.br -> sem subdomínio por organização)
 async function attachOrgFromToken(req, res, next) {
   try {
     if (req.tenant?.id) return next();
 
     const orgId = req.user?.tenantId || req.user?.organizationId || null;
     if (!orgId) return next();
-
-    // Se prisma não está pronto, não dá pra hidratar por Postgres
-    if (!prismaReady()) return next();
 
     const org = await prisma.tenant.findUnique({
       where: { id: orgId },
@@ -224,8 +254,8 @@ async function attachOrgFromToken(req, res, next) {
 // ===============================
 // LOGIN (PÚBLICO)
 // - Não pede "empresa" no front.
-// - Retorna lista de organizações vinculadas (quando Prisma estiver pronto).
-// - Se Prisma NÃO estiver pronto, retorna 503 claro.
+// - Retorna lista de organizações vinculadas.
+// - Token inicial NÃO carrega organização (pós-login seleciona).
 // ===============================
 app.post("/login", async (req, res, next) => {
   try {
@@ -234,20 +264,16 @@ app.post("/login", async (req, res, next) => {
       return res.status(400).json({ error: "Informe e-mail e senha." });
     }
 
-    if (!prismaReady()) {
-      logger.error(
-        { exportedKeys: prisma ? Object.keys(prisma) : [], hasUser: !!prisma?.user, hasTenant: !!prisma?.tenant },
-        "❌ PrismaClient inválido (prisma.user/prisma.tenant não existem). Schema sem models."
-      );
-      return res.status(503).json({ error: "Banco (Prisma) ainda não está pronto. Gere o client e/ou ajuste o schema." });
-    }
+    // Normaliza email
+    const normalizedEmail = String(email).trim().toLowerCase();
 
     const user = await prisma.user.findFirst({
-      where: { email, isActive: true },
+      where: { email: normalizedEmail, isActive: true },
       include: {
         tenants: {
           select: {
             role: true,
+            isActive: true,
             tenant: { select: { id: true, slug: true, name: true, isActive: true } },
           },
         },
@@ -259,14 +285,13 @@ app.post("/login", async (req, res, next) => {
     }
 
     const organizations = (user.tenants || [])
+      .filter((m) => m.isActive && m.tenant?.isActive)
       .map((m) => ({
         id: m.tenant.id,
         slug: m.tenant.slug,
         name: m.tenant.name,
-        isActive: m.tenant.isActive,
         role: m.role,
-      }))
-      .filter((o) => o.isActive);
+      }));
 
     const token = jwt.sign(
       {
@@ -279,7 +304,6 @@ app.post("/login", async (req, res, next) => {
       { expiresIn: JWT_EXPIRES_IN }
     );
 
-    // remove passwordHash do retorno
     const { passwordHash, ...safeUser } = user;
     return res.json({ token, user: safeUser, organizations });
   } catch (e) {
@@ -298,10 +322,8 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
   try {
     const { organizationId } = req.body || {};
     const orgId = String(organizationId || "").trim();
-    if (!orgId) return res.status(400).json({ error: "Informe a organização." });
-
-    if (!prismaReady()) {
-      return res.status(503).json({ error: "Banco (Prisma) ainda não está pronto para seleção de organização." });
+    if (!orgId) {
+      return res.status(400).json({ error: "Informe a organização." });
     }
 
     const org = await prisma.tenant.findUnique({
@@ -315,14 +337,16 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
 
     let effectiveRole = req.user?.role || "agent";
 
-    // Se não for super admin, precisa membership ativa
     if (!isSuperAdmin(req.user)) {
       const membership = await prisma.userTenant.findFirst({
         where: { userId: req.user.id, tenantId: org.id, isActive: true },
         select: { role: true },
       });
 
-      if (!membership) return res.status(403).json({ error: "Acesso negado." });
+      if (!membership) {
+        return res.status(403).json({ error: "Acesso negado." });
+      }
+
       effectiveRole = membership.role || effectiveRole;
     }
 
@@ -332,8 +356,10 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
         email: req.user.email,
         role: effectiveRole,
         scope: isSuperAdmin(req.user) ? "global" : "user",
-        tenantId: org.id, // compat interno
-        organizationId: org.id, // nome que o front usa
+
+        // Interno/compat: mantém tenantId pro enforceTokenTenant
+        tenantId: org.id,
+        organizationId: org.id,
       },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
@@ -352,7 +378,7 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
 // ROTAS PROTEGIDAS (organização obrigatória)
 // Ordem:
 // 1) requireAuth
-// 2) attachOrgFromToken
+// 2) attachOrgFromToken (quando não houver subdomínio)
 // 3) enforceTokenTenant
 // 4) requireTenant
 // ===============================
@@ -367,22 +393,30 @@ app.use(
 // ===============================
 // ROTAS
 // ===============================
+
+// API (chatbot / humano)
 app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
 app.use("/api/human", assignmentRouter);
 
+// Settings
 app.use("/settings", usersRouter);
 app.use("/settings/groups", groupsRouter);
 app.use("/settings/channels", channelsRouter);
 
+// Auth (painel)
 app.use("/auth", passwordRouter);
 
+// WebChat (público/widget)
 app.use("/webchat", webchatRouter);
 
+// Conversas
 app.use("/conversations", conversationsRouter);
 
+// WhatsApp webhook (público)
 app.use("/webhook/whatsapp", whatsappRouter);
 
+// Outbound
 app.use("/outbound/assets", assetsRouter);
 app.use("/outbound/numbers", numbersRouter);
 app.use("/outbound/templates", templatesRouter);
@@ -403,7 +437,6 @@ app.get("/health", (req, res) => {
     conversations: db?.conversations?.length || 0,
     users: db?.users?.length || 0,
     uptime: process.uptime(),
-    prismaReady: prismaReady(),
   });
 });
 
@@ -411,8 +444,18 @@ app.get("/health", (req, res) => {
 // ERROR HANDLER
 // ===============================
 app.use((err, req, res, next) => {
-  logger.error({ err }, "Erro não tratado");
   const msg = String(err?.message || "");
+  logger.error(
+    {
+      err,
+      method: req.method,
+      url: req.originalUrl,
+      origin: req.headers.origin,
+      hasUser: !!req.user,
+      hasOrg: !!req.tenant?.id,
+    },
+    "Erro não tratado"
+  );
 
   if (msg.startsWith("CORS blocked")) {
     return res.status(403).json({ error: "CORS blocked." });
@@ -425,5 +468,5 @@ app.use((err, req, res, next) => {
 // START
 // ===============================
 app.listen(PORT, () => {
-  logger.info({ PORT, ENV, prismaReady: prismaReady() }, "🚀 API rodando");
+  logger.info({ PORT, ENV, prismaReady: true }, "🚀 API rodando");
 });
