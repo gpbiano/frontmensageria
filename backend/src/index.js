@@ -1,5 +1,8 @@
 // backend/src/index.js
 
+// ===============================
+// IMPORTS (core/libs)
+// ===============================
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -13,8 +16,14 @@ import { resolveTenant } from "./middleware/resolveTenant.js";
 import { requireTenant } from "./middleware/requireTenant.js";
 import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
 
+// ===============================
+// DB utils — legado/compat (health)
+// ===============================
 import { loadDB } from "./utils/db.js";
 
+// ===============================
+// ENV
+// ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -35,10 +44,19 @@ if (!process.env.WHATSAPP_PHONE_NUMBER_ID && process.env.PHONE_NUMBER_ID) {
 // Base domain (resolução por domínio/origin)
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
+// ===============================
+// Logger (depois do dotenv)
+// ===============================
 const { default: logger } = await import("./logger.js");
+
+// ===============================
+// Prisma (depois do dotenv)
+// ===============================
 const { prisma } = await import("./lib/prisma.js");
 
+// ===============================
 // Routers
+// ===============================
 const { default: webchatRouter } = await import("./routes/webchat.js");
 const { default: channelsRouter } = await import("./routes/channels.js");
 const { default: conversationsRouter } = await import("./routes/conversations.js");
@@ -63,86 +81,112 @@ const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRou
 
 const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 
-// Vars
+// ===============================
+// VARS
+// ===============================
 const PORT = process.env.PORT || 3010;
 
 const JWT_SECRET = String(process.env.JWT_SECRET || "").trim();
-if (!JWT_SECRET) throw new Error("JWT_SECRET não definido");
-
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET não definido");
+}
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 
-// Uploads
+// ===============================
+// UPLOADS
+// ===============================
 const UPLOADS_DIR = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-// App
+// ===============================
+// APP
+// ===============================
 const app = express();
 app.set("etag", false);
 
-// Logger HTTP
+// ===============================
+// LOGGER HTTP
+// ===============================
 app.use(
   pinoHttp({
     logger,
     quietReqLogger: true,
     autoLogging: {
-      ignore: (req) => req.method === "OPTIONS" || req.url.startsWith("/health")
+      ignore: (req) =>
+        req.method === "OPTIONS" ||
+        req.url.startsWith("/health") ||
+        req.url.startsWith("/uploads/")
     }
   })
 );
 
-// Helpers CORS
+// ===============================
+// PARSERS + STATIC
+// ===============================
+app.use(express.json({ limit: "2mb" }));
+app.use("/uploads", express.static(UPLOADS_DIR));
+
+// ===============================
+// CORS (ANTES de qualquer middleware que possa bloquear)
+// - garante preflight (OPTIONS) SEM crash
+// - garante Access-Control-Allow-Origin na resposta
+// ===============================
 function normalizeOrigin(o) {
   const s = String(o || "").trim();
   if (!s) return "";
   return s.endsWith("/") ? s.slice(0, -1) : s;
 }
 
-const BASE = String(process.env.TENANT_BASE_DOMAIN || "").trim();
+function isAllowedOrigin(origin) {
+  const o = normalizeOrigin(origin);
+  if (!o) return true;
 
-const PLATFORM_ALLOWED_ORIGINS = new Set(
-  [
+  // allowlist principal
+  const allow = new Set([
     "https://cliente.gplabs.com.br",
     "https://gplabs.com.br",
     "https://www.gplabs.com.br",
     "http://localhost:5173",
     "http://127.0.0.1:5173"
-  ].map(normalizeOrigin)
-);
+  ]);
 
-function isOriginAllowed(origin) {
-  const o = normalizeOrigin(origin);
-  if (!o) return true; // server-to-server
-  if (PLATFORM_ALLOWED_ORIGINS.has(o)) return true;
-  if (BASE && o.endsWith(`.${BASE}`)) return true; // subdomínios
+  if (allow.has(o)) return true;
+
+  // opcional: permitir subdomínios *.gplabs.com.br
+  try {
+    const u = new URL(o);
+    if (u.hostname.endsWith(".gplabs.com.br")) return true;
+  } catch {}
+
   return false;
 }
 
-// ✅ CORS “blindado”
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    if (isAllowedOrigin(origin)) return cb(null, true);
+    return cb(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "X-Tenant-Id",
+    "X-Request-Id"
+  ],
+  exposedHeaders: ["X-Request-Id"]
+};
 
-  if (origin && isOriginAllowed(origin)) {
-    res.header("Access-Control-Allow-Origin", normalizeOrigin(origin));
-    res.header("Vary", "Origin");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Requested-With, X-Tenant-Id"
-    );
-    res.header("Access-Control-Expose-Headers", "X-Request-Id");
-  }
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // ✅ preflight sempre responde
 
-  // Preflight sempre retorna rápido
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  return next();
-});
-
-// Parsers + static
-app.use(express.json({ limit: "2mb" }));
-app.use("/uploads", express.static(UPLOADS_DIR));
-
-// Resolve contexto (depois do CORS)
+// ===============================
+// RESOLVE CONTEXTO (por domínio/origin/header)
+// - Mantém "tenant" só no backend.
+// - Libera rotas públicas.
+// ===============================
 app.use(
   resolveTenant({
     tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
@@ -150,10 +194,14 @@ app.use(
   })
 );
 
+// ===============================
+// HELPERS
+// ===============================
 function isSuperAdmin(user) {
   return user?.role === "super_admin" || user?.scope === "global";
 }
 
+// Hidrata contexto da organização a partir do token quando não houver subdomínio
 async function attachOrgFromToken(req, res, next) {
   try {
     if (req.tenant?.id) return next();
@@ -176,11 +224,15 @@ async function attachOrgFromToken(req, res, next) {
   }
 }
 
-// Login
+// ===============================
+// LOGIN (PÚBLICO)
+// ===============================
 app.post("/login", async (req, res, next) => {
   try {
     const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: "Informe e-mail e senha." });
+    if (!email || !password) {
+      return res.status(400).json({ error: "Informe e-mail e senha." });
+    }
 
     const user = await prisma.user.findFirst({
       where: { email, isActive: true },
@@ -226,19 +278,25 @@ app.post("/login", async (req, res, next) => {
   }
 });
 
-// Select organization
+// ===============================
+// SELECT ORGANIZATION (pós-login)
+// ===============================
 app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
   try {
     const { organizationId } = req.body || {};
     const orgId = String(organizationId || "").trim();
-    if (!orgId) return res.status(400).json({ error: "Informe a organização." });
+    if (!orgId) {
+      return res.status(400).json({ error: "Informe a organização." });
+    }
 
     const org = await prisma.tenant.findUnique({
       where: { id: orgId },
       select: { id: true, slug: true, name: true, isActive: true }
     });
 
-    if (!org || !org.isActive) return res.status(404).json({ error: "Organização inválida." });
+    if (!org || !org.isActive) {
+      return res.status(404).json({ error: "Organização inválida." });
+    }
 
     let effectiveRole = req.user?.role || "agent";
 
@@ -248,7 +306,10 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
         select: { role: true }
       });
 
-      if (!membership) return res.status(403).json({ error: "Acesso negado." });
+      if (!membership) {
+        return res.status(403).json({ error: "Acesso negado." });
+      }
+
       effectiveRole = membership.role || effectiveRole;
     }
 
@@ -265,13 +326,18 @@ app.post("/auth/select-tenant", requireAuth, async (req, res, next) => {
       { expiresIn: JWT_EXPIRES_IN }
     );
 
-    return res.json({ token, organization: { id: org.id, slug: org.slug, name: org.name } });
+    return res.json({
+      token,
+      organization: { id: org.id, slug: org.slug, name: org.name }
+    });
   } catch (e) {
     return next(e);
   }
 });
 
-// Protected routes
+// ===============================
+// ROTAS PROTEGIDAS
+// ===============================
 app.use(
   ["/api", "/settings", "/conversations", "/outbound", "/auth"],
   requireAuth,
@@ -280,21 +346,29 @@ app.use(
   requireTenant
 );
 
-// Routes
+// API
 app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
 app.use("/api/human", assignmentRouter);
 
+// Settings
 app.use("/settings", usersRouter);
 app.use("/settings/groups", groupsRouter);
 app.use("/settings/channels", channelsRouter);
 
+// Auth
 app.use("/auth", passwordRouter);
 
+// WebChat (público/widget)
 app.use("/webchat", webchatRouter);
+
+// Conversas
 app.use("/conversations", conversationsRouter);
+
+// WhatsApp webhook (público)
 app.use("/webhook/whatsapp", whatsappRouter);
 
+// Outbound
 app.use("/outbound/assets", assetsRouter);
 app.use("/outbound/numbers", numbersRouter);
 app.use("/outbound/templates", templatesRouter);
@@ -303,7 +377,9 @@ app.use("/outbound/optout", optoutRouter);
 app.use("/outbound/sms-campaigns", smsCampaignsRouter);
 app.use("/outbound", outboundRouter);
 
-// Health
+// ===============================
+// HEALTH
+// ===============================
 app.get("/", (req, res) => res.json({ status: "ok" }));
 
 app.get("/health", (req, res) => {
@@ -316,18 +392,23 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Error handler
+// ===============================
+// ERROR HANDLER
+// ===============================
 app.use((err, req, res, next) => {
   logger.error({ err }, "Erro não tratado");
   const msg = String(err?.message || "");
 
-  if (msg.startsWith("CORS")) {
+  if (msg.startsWith("CORS blocked")) {
     return res.status(403).json({ error: "CORS blocked." });
   }
 
   return res.status(500).json({ error: "Internal server error" });
 });
 
+// ===============================
+// START
+// ===============================
 app.listen(PORT, () => {
   logger.info({ PORT, ENV }, "🚀 API rodando");
 });
