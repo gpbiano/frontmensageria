@@ -63,7 +63,8 @@ import {
   ShieldOff,
   Users,
   Building2,
-  UserCircle
+  UserCircle,
+  LifeBuoy
 } from "lucide-react";
 
 const AUTH_TOKEN_KEY = "gpLabsAuthToken";
@@ -72,6 +73,10 @@ const AUTH_USER_KEY = "gpLabsAuthUser";
 // Sidebar state
 const SIDEBAR_LS_COLLAPSED = "gp.sidebar.collapsed";
 const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
+
+// ✅ Help Portal
+const HELP_PORTAL_URL =
+  "https://gplabs.atlassian.net/jira/servicedesk/projects/SUP/knowledge/articles";
 
 /* ==========================================================
    AUTH HELPERS (localStorage OU sessionStorage)
@@ -360,6 +365,18 @@ function PlatformShell({ onLogout }) {
               </div>
             )}
           </div>
+
+          {/* ✅ Ajuda (Portal / Knowledge Base) */}
+          <a
+            className="gp-help-btn"
+            href={HELP_PORTAL_URL}
+            target="_blank"
+            rel="noreferrer"
+            title="Central de Ajuda"
+          >
+            <LifeBuoy size={16} />
+            {!collapsed && <span className="gp-help-text">Ajuda</span>}
+          </a>
 
           {/* Perfil do usuário (dropdown com sair) */}
           <div className="gp-dd">
