@@ -66,25 +66,38 @@ let prismaReady = false;
 
 try {
   const mod = await import("./lib/prisma.js");
-  prisma = mod?.prisma;
 
-  // Validação real: models precisam existir (senão o client foi gerado "vazio")
-  prismaReady = !!(prisma?.user && prisma?.tenant);
+  // Aceita tanto export default quanto export nomeado (compat)
+  prisma = mod?.default || mod?.prisma;
+
+  const hasUser = !!prisma?.user;
+  const hasTenant = !!prisma?.tenant;
+
+  // Prisma "ready" só quando os models esperados existem
+  prismaReady = !!(hasUser && hasTenant);
 
   if (!prismaReady) {
-    logger.error(
+    // ⚠️ NÃO é erro fatal no core atual (ainda usamos data.json)
+    // Mantemos API rodando e retornamos 503 apenas nas rotas que dependem do DB (requirePrisma)
+    logger.warn(
       {
         prismaReady,
-        hasUser: !!prisma?.user,
-        hasTenant: !!prisma?.tenant,
+        hasUser,
+        hasTenant,
         exportedKeys: prisma ? Object.keys(prisma) : [],
       },
-      "❌ PrismaClient carregou, mas os models não existem (prisma.user/prisma.tenant). Verifique schema.prisma + prisma generate."
+      "⚠️ Prisma Client carregou, mas models esperados não existem (user/tenant). Mantendo API no modo data.json. (Isso é OK até migrarmos o core para Postgres.)"
+    );
+  } else {
+    logger.info(
+      { prismaReady, hasUser, hasTenant },
+      "✅ Prisma pronto (models user/tenant encontrados)."
     );
   }
 } catch (err) {
   prismaReady = false;
-  logger.error({ err }, "❌ Falha ao importar Prisma (./lib/prisma.js).");
+  // ⚠️ Também não é fatal por enquanto: só indica que DB relacional ainda não está ativo
+  logger.warn({ err }, "⚠️ Prisma não disponível (./lib/prisma.js). Mantendo API no modo data.json.");
 }
 
 // ===============================
