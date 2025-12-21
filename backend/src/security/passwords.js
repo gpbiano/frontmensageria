@@ -30,7 +30,6 @@ export function verifyPassword(password, stored) {
       .pbkdf2Sync(String(password), salt, iters, KEYLEN, digest)
       .toString("hex");
 
-    // timing safe compare
     return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(computed, "hex"));
   } catch {
     return false;
