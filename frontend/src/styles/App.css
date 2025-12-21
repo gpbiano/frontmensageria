@@ -499,3 +499,23 @@ body,
   color: #22c55e;
   box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
 }
+.gp-help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: inherit;
+  opacity: 0.95;
+}
+
+.gp-help-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 1;
+}
+
+.gp-help-text {
+  font-size: 13px;
+  font-weight: 600;
+}
