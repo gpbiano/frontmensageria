@@ -2,7 +2,6 @@
 import pkg from "@prisma/client";
 const { PrismaClient } = pkg;
 
-// evita múltiplas conexões em dev / reload
 const prisma =
   globalThis.__prisma ||
   new PrismaClient({
@@ -13,6 +12,6 @@ if (process.env.NODE_ENV !== "production") {
   globalThis.__prisma = prisma;
 }
 
-// Exporta dos DOIS jeitos pra não quebrar imports existentes:
+// Exporta dos dois jeitos (compat)
 export { prisma, PrismaClient };
 export default prisma;
