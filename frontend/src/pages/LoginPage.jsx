@@ -2,25 +2,35 @@
 import { useEffect, useMemo, useState } from "react";
 import "../styles/login-page.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
+// ✅ mesma regra do backend/api.ts (prioridade: VITE_API_BASE -> VITE_API_BASE_URL -> fallback)
+const API_BASE =
+  import.meta.env.VITE_API_BASE ||
+  import.meta.env.VITE_API_BASE_URL ||
+  // ✅ fallback PROD (evita cair em localhost por acidente)
+  (import.meta.env.MODE === "production"
+    ? "https://api.gplabs.com.br"
+    : "http://localhost:3010");
+
 const AUTH_TOKEN_KEY = "gpLabsAuthToken";
 const AUTH_USER_KEY = "gpLabsAuthUser";
 
 async function fetchJson(url, options = {}) {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...options
-  });
+  const mergedHeaders = {
+    "Content-Type": "application/json",
+    ...(options.headers || {})
+  };
+
+  const res = await fetch(url, { ...options, headers: mergedHeaders });
 
   const contentType = res.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
-    const text = await res.text();
+    const text = await res.text().catch(() => "");
     throw new Error(
-      `Resposta inválida da API (${res.status}): ${text?.slice?.(0, 200) || ""}`
+      `Resposta inválida da API (${res.status}): ${String(text).slice(0, 200)}`
     );
   }
 
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || data?.message || "Erro na API.");
   return data;
 }
@@ -32,6 +42,7 @@ export default function LoginPage({ onLogin }) {
   const [email, setEmail] = useState(isDev ? "admin@gplabs.com.br" : "");
   const [password, setPassword] = useState(isDev ? "gplabs123" : "");
   const [rememberMe, setRememberMe] = useState(true);
+
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -45,20 +56,23 @@ export default function LoginPage({ onLogin }) {
     [email, password, isSubmitting]
   );
 
-  function persistSession({ token, user }) {
-    // ✅ limpa sempre (evita “mismatch”)
+  function clearSession() {
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
     sessionStorage.removeItem(AUTH_TOKEN_KEY);
     sessionStorage.removeItem(AUTH_USER_KEY);
+  }
 
-    // ✅ FIX DEFINITIVO: token gravado nos DOIS storages
-    // (assim qualquer parte do app encontra)
-    localStorage.setItem(AUTH_TOKEN_KEY, token);
-    sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+  function persistSession({ token, user }) {
+    // ✅ evita “mismatch” de token antigo
+    clearSession();
 
-    // user segue a regra do rememberMe
+    // ✅ REGRA ÚNICA:
+    // - se marcar "manter conectado": token + user no localStorage
+    // - se não: token + user no sessionStorage
     const storage = rememberMe ? localStorage : sessionStorage;
+
+    storage.setItem(AUTH_TOKEN_KEY, token);
     storage.setItem(AUTH_USER_KEY, JSON.stringify(user));
   }
 
@@ -83,41 +97,34 @@ export default function LoginPage({ onLogin }) {
         throw new Error("Resposta inválida da API de login.");
       }
 
-      // ✅ salva token + user
       persistSession({ token: data.token, user: data.user });
 
-      // ✅ sanity check: garante que realmente salvou
-      const saved =
-        localStorage.getItem(AUTH_TOKEN_KEY) ||
-        sessionStorage.getItem(AUTH_TOKEN_KEY);
+      // ✅ sanity check: garante que salvou no storage certo
+      const storage = rememberMe ? localStorage : sessionStorage;
+      const saved = storage.getItem(AUTH_TOKEN_KEY);
 
-      if (!saved) {
+      if (!saved || saved !== data.token) {
         throw new Error(
-          "Login ok, mas não consegui salvar o token no browser (storage bloqueado)."
+          "Login ok, mas não consegui salvar o token no navegador (storage bloqueado)."
         );
       }
 
+      // ✅ limpa senha da tela
       setPassword("");
+
       onLogin?.({ token: data.token, user: data.user });
     } catch (err) {
       console.error("Erro ao logar:", err);
 
-      // ⚠️ Fallback APENAS em DEV
-      if (isDev) {
-        console.warn("[DEV] Usando login de fallback.");
-        const fakeData = {
-          token: "dev-fallback-token",
-          user: { id: 0, name: "Admin (Dev)", email }
-        };
-        persistSession(fakeData);
-        onLogin?.(fakeData);
-      } else {
-        setError(
-          err.message?.includes("Failed to fetch")
-            ? "Não foi possível conectar ao servidor."
-            : err.message || "Não foi possível entrar."
-        );
-      }
+      // ✅ sem fallback (isso causa 401 depois e mascara problema real)
+      setError(
+        String(err?.message || "").includes("Failed to fetch")
+          ? "Não foi possível conectar ao servidor."
+          : err?.message || "Não foi possível entrar."
+      );
+
+      // ✅ se deu erro, garante limpeza
+      clearSession();
     } finally {
       setIsSubmitting(false);
     }
@@ -133,7 +140,9 @@ export default function LoginPage({ onLogin }) {
           </div>
         </div>
 
-        <div className="login-subtitle">Acesse com suas credenciais de operador.</div>
+        <div className="login-subtitle">
+          Acesse com suas credenciais de operador.
+        </div>
 
         {error && <div className="login-error">{error}</div>}
 
