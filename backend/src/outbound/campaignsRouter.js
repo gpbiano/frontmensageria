@@ -1,86 +1,98 @@
-// backend/src/outbound/campaignsRouter.js
 import express from "express";
-import fs from "fs";
-import path from "path";
 import multer from "multer";
-import fetch from "node-fetch";
 import PDFDocument from "pdfkit";
 import logger from "../logger.js";
+import prisma from "../lib/prisma.js";
 
 const router = express.Router();
 
-// Usa o mesmo DB_FILE do index (compatível com env)
-const DB_FILE = process.env.DB_FILE
-  ? path.resolve(process.cwd(), process.env.DB_FILE)
-  : path.join(process.cwd(), "data.json");
+/**
+ * ============================================================
+ * MULTI-TENANT
+ * ============================================================
+ */
+function getTenantId(req) {
+  const tenantId = req.tenant?.id || req.tenantId || req.user?.tenantId;
+  return tenantId ? String(tenantId) : null;
+}
 
-// ===============================
-// ✅ WhatsApp ENV (compat + seguro)
-// - token: WHATSAPP_TOKEN
-// - phoneNumberId: WHATSAPP_PHONE_NUMBER_ID (novo) OU PHONE_NUMBER_ID (legado)
-// - apiVersion: WHATSAPP_API_VERSION (ex: v20.0). default v20.0
-// ===============================
+/**
+ * ============================================================
+ * WhatsApp ENV por tenant (ChannelConfig) + fallback ENV
+ * channel sugerido: "whatsapp"
+ * config JSON:
+ *  { "token":"...", "phoneNumberId":"...", "apiVersion":"v22.0" }
+ * ============================================================
+ */
 function normalizeApiVersion(v) {
   const s = String(v || "").trim();
-  if (!s) return "v20.0";
+  if (!s) return "v22.0";
   return s.startsWith("v") ? s : `v${s}`;
 }
 
-function getWhatsAppEnv() {
-  const token = String(process.env.WHATSAPP_TOKEN || "").trim();
+async function getWhatsAppEnvForTenant(tenantId) {
+  let token = "";
+  let phoneNumberId = "";
+  let apiVersion = "v22.0";
 
-  const phoneNumberId = String(
-    process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || ""
-  ).trim();
+  try {
+    const row = await prisma.channelConfig.findFirst({
+      where: { tenantId, channel: "whatsapp" },
+      select: { config: true }
+    });
 
-  const apiVersion = normalizeApiVersion(process.env.WHATSAPP_API_VERSION || "v20.0");
+    const cfg = row?.config && typeof row.config === "object" ? row.config : {};
 
-  return { token, phoneNumberId, apiVersion };
-}
-
-function assertWhatsAppConfigured() {
-  const { token, phoneNumberId, apiVersion } = getWhatsAppEnv();
-
-  if (!token || !phoneNumberId) {
-    throw new Error(
-      "Env WhatsApp ausente (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID ou PHONE_NUMBER_ID)."
-    );
+    token = String(cfg.token || cfg.WHATSAPP_TOKEN || "").trim();
+    phoneNumberId = String(cfg.phoneNumberId || cfg.PHONE_NUMBER_ID || cfg.WHATSAPP_PHONE_NUMBER_ID || "").trim();
+    apiVersion = normalizeApiVersion(cfg.apiVersion || cfg.WHATSAPP_API_VERSION || apiVersion);
+  } catch (e) {
+    logger.warn({ e }, "campaignsRouter: falha ao ler ChannelConfig, usando ENV");
   }
 
+  // fallback ENV (pra não quebrar enquanto migra configs por tenant)
+  if (!token) token = String(process.env.WHATSAPP_TOKEN || "").trim();
+  if (!phoneNumberId) {
+    phoneNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || "").trim();
+  }
+  apiVersion = normalizeApiVersion(process.env.WHATSAPP_API_VERSION || apiVersion);
+
   return { token, phoneNumberId, apiVersion };
 }
 
-// Upload em memória (CSV pequeno/medio). Depois podemos evoluir.
+async function assertWhatsAppConfigured(tenantId) {
+  const { token, phoneNumberId, apiVersion } = await getWhatsAppEnvForTenant(tenantId);
+  if (!token || !phoneNumberId) {
+    throw new Error(
+      "WhatsApp não configurado. Cadastre token/phoneNumberId em ChannelConfig(channel=whatsapp) ou defina WHATSAPP_TOKEN + WHATSAPP_PHONE_NUMBER_ID."
+    );
+  }
+  return { token, phoneNumberId, apiVersion };
+}
+
+async function getFetch() {
+  if (globalThis.fetch) return globalThis.fetch;
+  const mod = await import("node-fetch");
+  return mod.default;
+}
+
+/**
+ * ============================================================
+ * UPLOAD CSV (memória)
+ * ============================================================
+ */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB
 });
 
-function loadDB() {
-  try {
-    if (!fs.existsSync(DB_FILE)) return {};
-    const raw = fs.readFileSync(DB_FILE, "utf-8");
-    return JSON.parse(raw);
-  } catch (err) {
-    logger.warn(
-      { err, DB_FILE },
-      "⚠️ Falha ao carregar DB em campaignsRouter, usando objeto vazio."
-    );
-    return {};
-  }
-}
-
-function saveDB(data) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-  } catch (err) {
-    logger.error({ err, DB_FILE }, "❌ Erro ao salvar DB em campaignsRouter");
-  }
-}
-
-function ensureCampaigns(db) {
-  if (!Array.isArray(db.outboundCampaigns)) db.outboundCampaigns = [];
-  return db.outboundCampaigns;
+/**
+ * ============================================================
+ * HELPERS GERAIS
+ * ============================================================
+ */
+function nowIso() {
+  return new Date().toISOString();
 }
 
 function newId(prefix = "cmp") {
@@ -88,13 +100,11 @@ function newId(prefix = "cmp") {
 }
 
 /**
- * Parse CSV simples:
+ * Parse CSV simples (MVP):
  * - separador: vírgula
  * - primeira linha: header
- * - aceita colunas: numero (ou number/phone/telefone/celular)
- * - e variáveis: body_var_1..N
- *
- * OBS: MVP. Depois melhoramos para RFC4180, separador ;, aspas, etc.
+ * - colunas: numero (ou number/phone/telefone/celular)
+ * - body_var_1..N
  */
 function parseCsvBasic(text) {
   const lines = text
@@ -133,7 +143,6 @@ function pickPhoneField(row) {
 }
 
 function pickBodyVars(row) {
-  // pega body_var_1..body_var_99 (se existir)
   const vars = [];
   for (let i = 1; i <= 99; i++) {
     const key = `body_var_${i}`;
@@ -141,6 +150,10 @@ function pickBodyVars(row) {
     vars.push(String(row[key] ?? ""));
   }
   return vars;
+}
+
+function safeLower(v) {
+  return String(v || "").toLowerCase();
 }
 
 function normalizeMetaError(err) {
@@ -160,10 +173,26 @@ function csvEscape(value) {
   return `"${s.replace(/"/g, '""')}"`;
 }
 
-function safeLower(v) {
-  return String(v || "").toLowerCase();
+function safeFileName(name) {
+  return String(name || "campaign")
+    .replace(/[^\w\-]+/g, "_")
+    .slice(0, 60);
 }
 
+function formatBR(iso) {
+  if (!iso) return "-";
+  try {
+    return new Date(iso).toLocaleString("pt-BR");
+  } catch {
+    return String(iso);
+  }
+}
+
+/**
+ * ============================================================
+ * REPORT BUILDERS
+ * ============================================================
+ */
 function buildCampaignReport(campaign) {
   const results = Array.isArray(campaign?.results) ? campaign.results : [];
 
@@ -244,15 +273,7 @@ function reportToCsv(report, req) {
   lines.push("");
 
   lines.push(
-    [
-      "phone",
-      "status",
-      "waMessageId",
-      "updatedAt",
-      "errorCode",
-      "errorMessage",
-      "metaErrorLink"
-    ].join(",")
+    ["phone", "status", "waMessageId", "updatedAt", "errorCode", "errorMessage", "metaErrorLink"].join(",")
   );
 
   for (const r of report.results || []) {
@@ -271,21 +292,6 @@ function reportToCsv(report, req) {
   }
 
   return lines.join("\n");
-}
-
-function safeFileName(name) {
-  return String(name || "campaign")
-    .replace(/[^\w\-]+/g, "_")
-    .slice(0, 60);
-}
-
-function formatBR(iso) {
-  if (!iso) return "-";
-  try {
-    return new Date(iso).toLocaleString("pt-BR");
-  } catch {
-    return String(iso);
-  }
 }
 
 function drawCard(doc, x, y, w, h, title, value, subtitle) {
@@ -379,7 +385,6 @@ function exportReportPdf(report, campaignName, req, res) {
 
   y += 24;
 
-  // Cards
   const cardW = (doc.page.width - 80 - 30) / 4;
   const cardH = 78;
   const gap = 10;
@@ -391,17 +396,15 @@ function exportReportPdf(report, campaignName, req, res) {
 
   y += cardH + 18;
 
-  // Section title
   doc.font("Helvetica-Bold").fontSize(12).fillColor("#0F172A").text("Destinatários", 40, y);
 
   y += 10;
 
-  // Table header
   const tableTop = y + 10;
-  const col1 = 40;  // Telefone
-  const col2 = 190; // Status
-  const col3 = 280; // Erro
-  const col4 = 520; // Atualizado
+  const col1 = 40;
+  const col2 = 190;
+  const col3 = 280;
+  const col4 = 520;
   const rowH = 18;
 
   doc
@@ -465,7 +468,6 @@ function exportReportPdf(report, campaignName, req, res) {
       );
   }
 
-  // Footer
   doc
     .font("Helvetica")
     .fontSize(8)
@@ -480,8 +482,13 @@ function exportReportPdf(report, campaignName, req, res) {
   doc.end();
 }
 
-async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = []) {
-  const { token, phoneNumberId, apiVersion } = assertWhatsAppConfigured();
+/**
+ * ============================================================
+ * WHATSAPP SEND TEMPLATE
+ * ============================================================
+ */
+async function sendWhatsAppTemplate(tenantId, to, templateName, languageCode, bodyVars = []) {
+  const { token, phoneNumberId, apiVersion } = await assertWhatsAppConfigured(tenantId);
 
   const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
 
@@ -504,7 +511,8 @@ async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = [
     }
   };
 
-  const res = await fetch(url, {
+  const fetchFn = await getFetch();
+  const resp = await fetchFn(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -513,10 +521,16 @@ async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = [
     body: JSON.stringify(payload)
   });
 
-  const data = await res.json().catch(() => ({}));
+  const raw = await resp.text().catch(() => "");
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = {};
+  }
 
-  if (!res.ok) {
-    const msg = data?.error?.message || data?.message || `Erro WhatsApp (${res.status})`;
+  if (!resp.ok) {
+    const msg = data?.error?.message || data?.message || `Erro WhatsApp (${resp.status})`;
     const err = new Error(msg);
     err.meta = data?.error || data || null;
     throw err;
@@ -525,12 +539,11 @@ async function sendWhatsAppTemplate(to, templateName, languageCode, bodyVars = [
   return data;
 }
 
-/* ============================================================
-   ANALYTICS EXPORT (CSV/PDF) – TODOS / FILTRADOS
-   - GET /outbound/campaigns/analytics/export.csv?from=YYYY-MM-DD&to=YYYY-MM-DD&campaignId=all|<id>&template=all|<name>
-   - GET /outbound/campaigns/analytics/export.pdf?from=YYYY-MM-DD&to=YYYY-MM-DD&campaignId=all|<id>&template=all|<name>
-   ============================================================ */
-
+/**
+ * ============================================================
+ * ANALYTICS EXPORT (CSV/PDF)
+ * ============================================================
+ */
 function toRangeTimestamps(from, to) {
   const fromTs = from ? new Date(`${from}T00:00:00`).getTime() : null;
   const toTs = to ? new Date(`${to}T23:59:59`).getTime() : null;
@@ -552,7 +565,6 @@ function filterCampaignsForAnalytics(campaigns, query) {
 
   return (campaigns || []).filter((c) => {
     const ts = campaignCreatedTs(c);
-
     if (fromTs && ts && ts < fromTs) return false;
     if (toTs && ts && ts > toTs) return false;
 
@@ -633,7 +645,7 @@ function analyticsToCsv(analytics, req) {
     `# Filters: from=${meta.from || ""} to=${meta.to || ""} campaignId=${meta.campaignId || "all"} template=${meta.template || "all"}`
   );
   lines.push(
-    `# Totals: total=${totals.total || 0} delivered=${totals.delivered || 0} read=${totals.read || 0} failed=${totals.failed || 0} | deliveryRate=${(totals.deliveryRate || 0).toFixed?.(1) ?? totals.deliveryRate} readRate=${(totals.readRate || 0).toFixed?.(1) ?? totals.readRate} failRate=${(totals.failRate || 0).toFixed?.(1) ?? totals.failRate}`
+    `# Totals: total=${totals.total || 0} delivered=${totals.delivered || 0} read=${totals.read || 0} failed=${totals.failed || 0} | deliveryRate=${(totals.deliveryRate || 0).toFixed(1)} readRate=${(totals.readRate || 0).toFixed(1)} failRate=${(totals.failRate || 0).toFixed(1)}`
   );
   lines.push("");
 
@@ -697,33 +709,20 @@ function exportAnalyticsPdf(analytics, req, res) {
 
   doc.pipe(res);
 
-  // Header
   doc.rect(0, 0, doc.page.width, 84).fill("#0B1220");
-
   doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(18).text("GP Labs", 40, 24);
+  doc.fillColor("#A7F3D0").font("Helvetica").fontSize(10).text("Analytics • Exportação PDF", 40, 50);
 
-  doc
-    .fillColor("#A7F3D0")
-    .font("Helvetica")
-    .fontSize(10)
-    .text("Analytics • Exportação PDF (filtros aplicados)", 40, 50);
-
-  // Body
   let y = 100;
 
   doc.fillColor("#0F172A").font("Helvetica-Bold").fontSize(14).text("Resumo", 40, y);
-
   y += 18;
 
-  doc
-    .font("Helvetica")
-    .fontSize(10)
-    .fillColor("#334155")
-    .text(
-      `Filtros: De ${meta.from || "-"} até ${meta.to || "-"}   •   Campanha: ${meta.campaignId || "all"}   •   Template: ${meta.template || "all"}`,
-      40,
-      y
-    );
+  doc.font("Helvetica").fontSize(10).fillColor("#334155").text(
+    `Filtros: De ${meta.from || "-"} até ${meta.to || "-"}   •   Campanha: ${meta.campaignId || "all"}   •   Template: ${meta.template || "all"}`,
+    40,
+    y
+  );
 
   y += 18;
 
@@ -739,18 +738,13 @@ function exportAnalyticsPdf(analytics, req, res) {
   y += cardH + 18;
 
   doc.font("Helvetica-Bold").fontSize(12).fillColor("#0F172A").text("Detalhes (amostra)", 40, y);
-
   y += 10;
 
   const tableTop = y + 10;
   const rowH = 18;
 
   doc.roundedRect(40, tableTop, doc.page.width - 80, 26, 8).fillAndStroke("#F1F5F9", "#E2E8F0");
-
-  doc
-    .fillColor("#0F172A")
-    .font("Helvetica-Bold")
-    .fontSize(9)
+  doc.fillColor("#0F172A").font("Helvetica-Bold").fontSize(9)
     .text("Campanha", 48, tableTop + 8, { width: 150 })
     .text("Telefone", 210, tableTop + 8, { width: 110 })
     .text("Status", 325, tableTop + 8, { width: 70 })
@@ -775,8 +769,7 @@ function exportAnalyticsPdf(analytics, req, res) {
       doc.rect(40, y - 2, doc.page.width - 80, rowH).fill("#FAFAFA");
     }
 
-    doc
-      .fillColor("#0F172A")
+    doc.fillColor("#0F172A")
       .text((r.campaignName || r.campaignId || "-").slice(0, 26), 48, y, { width: 150 })
       .text(r.phone || "-", 210, y, { width: 110 })
       .text(r.status || "-", 325, y, { width: 70 })
@@ -786,38 +779,57 @@ function exportAnalyticsPdf(analytics, req, res) {
     y += rowH;
   }
 
-  if (rows.length > maxRows) {
-    y += 10;
-    doc
-      .font("Helvetica")
-      .fontSize(9)
-      .fillColor("#334155")
-      .text(
-        `Mostrando ${maxRows} de ${rows.length} linhas. Para exportação completa use o CSV.`,
-        40,
-        y
-      );
-  }
-
-  doc
-    .font("Helvetica")
-    .fontSize(8)
-    .fillColor("#64748B")
-    .text(
-      `Gerado em ${new Date().toLocaleString("pt-BR")} • GP Labs Platform`,
-      40,
-      doc.page.height - 30,
-      { width: doc.page.width - 80, align: "right" }
-    );
+  doc.font("Helvetica").fontSize(8).fillColor("#64748B").text(
+    `Gerado em ${new Date().toLocaleString("pt-BR")} • GP Labs Platform`,
+    40,
+    doc.page.height - 30,
+    { width: doc.page.width - 80, align: "right" }
+  );
 
   doc.end();
 }
 
-// ⚠️ IMPORTANTE: essa rota precisa ficar ANTES de "/:id" se você usar "/analytics/..."
-router.get("/analytics/export.csv", (req, res) => {
+/**
+ * ============================================================
+ * DB (PRISMA) HELPERS
+ * ============================================================
+ */
+function normalizeCampaignRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    audience: row.audience && typeof row.audience === "object" ? row.audience : row.audience || {},
+    audienceRows: Array.isArray(row.audienceRows) ? row.audienceRows : row.audienceRows || [],
+    results: Array.isArray(row.results) ? row.results : row.results || [],
+    logs: Array.isArray(row.logs) ? row.logs : row.logs || [],
+    timeline: row.timeline && typeof row.timeline === "object" ? row.timeline : row.timeline || {}
+  };
+}
+
+async function getCampaignOr404(tenantId, id) {
+  const row = await prisma.outboundCampaign.findFirst({
+    where: { tenantId, id }
+  });
+  return row ? normalizeCampaignRow(row) : null;
+}
+
+/**
+ * ============================================================
+ * ANALYTICS EXPORT ROUTES (precisa ficar antes de "/:id")
+ * ============================================================
+ */
+
+router.get("/analytics/export.csv", async (req, res) => {
   try {
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const rows = await prisma.outboundCampaign.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" }
+    });
+
+    const campaigns = rows.map(normalizeCampaignRow);
 
     const filtered = filterCampaignsForAnalytics(campaigns, req.query);
 
@@ -843,10 +855,17 @@ router.get("/analytics/export.csv", (req, res) => {
   }
 });
 
-router.get("/analytics/export.pdf", (req, res) => {
+router.get("/analytics/export.pdf", async (req, res) => {
   try {
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const rows = await prisma.outboundCampaign.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" }
+    });
+
+    const campaigns = rows.map(normalizeCampaignRow);
 
     const filtered = filterCampaignsForAnalytics(campaigns, req.query);
 
@@ -865,29 +884,37 @@ router.get("/analytics/export.pdf", (req, res) => {
   }
 });
 
-/* ============================================================
-   ROTAS PRINCIPAIS
-   ============================================================ */
+/**
+ * ============================================================
+ * ROTAS PRINCIPAIS
+ * ============================================================
+ */
 
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
-    return res.json(campaigns);
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const rows = await prisma.outboundCampaign.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" }
+    });
+
+    return res.json(rows.map(normalizeCampaignRow));
   } catch (err) {
     logger.error({ err }, "❌ Erro ao listar campanhas");
     return res.status(500).json({ error: "Erro ao listar campanhas." });
   }
 });
 
-// ⚠️ mantenha "/:id" DEPOIS das rotas fixas (ex: "/analytics/...")
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const { id } = req.params;
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
-    const campaign = campaigns.find((c) => String(c.id) === String(id));
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const campaign = await getCampaignOr404(tenantId, String(req.params.id));
     if (!campaign) return res.status(404).json({ error: "Campanha não encontrada." });
+
     return res.json(campaign);
   } catch (err) {
     logger.error({ err }, "❌ Erro ao buscar campanha");
@@ -895,10 +922,12 @@ router.get("/:id", (req, res) => {
   }
 });
 
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    const { name, numberId, templateName, templateLanguage, excludeOptOut } =
-      req.body || {};
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const { name, numberId, templateName, templateLanguage, excludeOptOut } = req.body || {};
 
     if (!name || !numberId || !templateName) {
       return res.status(400).json({
@@ -906,47 +935,41 @@ router.post("/", (req, res) => {
       });
     }
 
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
+    const now = nowIso();
 
-    const now = new Date().toISOString();
+    const campaign = await prisma.outboundCampaign.create({
+      data: {
+        id: newId("cmp"),
+        tenantId,
+        name: String(name),
+        numberId: String(numberId),
+        templateName: String(templateName),
+        templateLanguage: String(templateLanguage || "pt_BR"),
+        excludeOptOut: !!excludeOptOut,
+        status: "draft",
+        audience: { fileName: null, totalRows: 0, validRows: 0, invalidRows: 0 },
+        audienceRows: [],
+        results: [],
+        logs: [{ at: now, type: "created", message: "Campanha criada" }],
+        timeline: {}
+      }
+    });
 
-    const campaign = {
-      id: newId("cmp"),
-      name: String(name),
-      numberId: String(numberId),
-      templateName: String(templateName),
-      templateLanguage: String(templateLanguage || "pt_BR"),
-      excludeOptOut: !!excludeOptOut,
-      status: "draft", // draft | ready | sending | done | failed
-      createdAt: now,
-      updatedAt: now,
-
-      audience: { fileName: null, totalRows: 0, validRows: 0, invalidRows: 0 },
-      audienceRows: [],
-      results: [],
-      logs: [{ at: now, type: "created", message: "Campanha criada" }],
-      timeline: {}
-    };
-
-    campaigns.unshift(campaign);
-    saveDB(db);
-
-    return res.json(campaign);
+    return res.json(normalizeCampaignRow(campaign));
   } catch (err) {
     logger.error({ err }, "❌ Erro ao criar campanha");
     return res.status(500).json({ error: "Erro ao criar campanha." });
   }
 });
 
-router.post("/:id/audience", upload.single("file"), (req, res) => {
+router.post("/:id/audience", upload.single("file"), async (req, res) => {
   try {
-    const { id } = req.params;
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
-    const campaign = campaigns.find((c) => String(c.id) === String(id));
+    const id = String(req.params.id);
 
+    const campaign = await getCampaignOr404(tenantId, id);
     if (!campaign) return res.status(404).json({ error: "Campanha não encontrada." });
     if (!req.file) return res.status(400).json({ error: "Arquivo CSV não enviado." });
 
@@ -966,33 +989,36 @@ router.post("/:id/audience", upload.single("file"), (req, res) => {
       validRows.push({ phone, vars: pickBodyVars(row) });
     }
 
-    const now = new Date().toISOString();
-
-    campaign.audienceRows = validRows;
-    campaign.audience = {
-      fileName: req.file.originalname,
-      totalRows: rows.length,
-      validRows: validRows.length,
-      invalidRows: invalid
-    };
-    campaign.status = "ready";
-    campaign.updatedAt = now;
-    campaign.logs = campaign.logs || [];
-    campaign.logs.push({
-      at: now,
-      type: "audience_uploaded",
-      message: `Audiência carregada (${validRows.length} válidos, ${invalid} inválidos)`
+    const now = nowIso();
+    const next = await prisma.outboundCampaign.update({
+      where: { id },
+      data: {
+        audienceRows: validRows,
+        audience: {
+          fileName: req.file.originalname,
+          totalRows: rows.length,
+          validRows: validRows.length,
+          invalidRows: invalid
+        },
+        status: "ready",
+        logs: [
+          ...(Array.isArray(campaign.logs) ? campaign.logs : []),
+          {
+            at: now,
+            type: "audience_uploaded",
+            message: `Audiência carregada (${validRows.length} válidos, ${invalid} inválidos)`
+          }
+        ]
+      }
     });
-
-    saveDB(db);
 
     return res.json({
       success: true,
-      campaignId: campaign.id,
-      fileName: campaign.audience.fileName,
-      totalRows: campaign.audience.totalRows,
-      validRows: campaign.audience.validRows,
-      invalidRows: campaign.audience.invalidRows
+      campaignId: next.id,
+      fileName: next?.audience?.fileName || req.file.originalname,
+      totalRows: next?.audience?.totalRows || rows.length,
+      validRows: next?.audience?.validRows || validRows.length,
+      invalidRows: next?.audience?.invalidRows || invalid
     });
   } catch (err) {
     logger.error({ err }, "❌ Erro ao enviar audiência");
@@ -1002,13 +1028,14 @@ router.post("/:id/audience", upload.single("file"), (req, res) => {
 
 router.post("/:id/start", async (req, res) => {
   try {
-    const { id } = req.params;
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
-    const campaign = campaigns.find((c) => String(c.id) === String(id));
+    const id = String(req.params.id);
 
+    const campaign = await getCampaignOr404(tenantId, id);
     if (!campaign) return res.status(404).json({ error: "Campanha não encontrada." });
+
     if (campaign.status !== "ready" && campaign.status !== "draft") {
       return res.status(400).json({
         error: `Campanha não pode iniciar com status "${campaign.status}".`
@@ -1022,35 +1049,45 @@ router.post("/:id/start", async (req, res) => {
       });
     }
 
-    // valida WhatsApp env (compat)
+    // valida WhatsApp config do tenant
     try {
-      assertWhatsAppConfigured();
+      await assertWhatsAppConfigured(tenantId);
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
 
-    const now = new Date().toISOString();
-    campaign.status = "sending";
-    campaign.updatedAt = now;
-    campaign.logs = campaign.logs || [];
-    campaign.logs.push({
-      at: now,
-      type: "start_requested",
-      message: `Início solicitado (${rows.length} destinatários)`
+    const now = nowIso();
+
+    // marca sending
+    const startLogs = [
+      ...(Array.isArray(campaign.logs) ? campaign.logs : []),
+      { at: now, type: "start_requested", message: `Início solicitado (${rows.length} destinatários)` }
+    ];
+
+    const timeline = { ...(campaign.timeline || {}) };
+    if (!timeline.startedAt) timeline.startedAt = now;
+
+    await prisma.outboundCampaign.update({
+      where: { id },
+      data: {
+        status: "sending",
+        logs: startLogs,
+        timeline,
+        results: [] // zera resultados ao iniciar
+      }
     });
 
-    if (!campaign.timeline) campaign.timeline = {};
-    if (!campaign.timeline.startedAt) campaign.timeline.startedAt = now;
-
-    campaign.results = [];
     let sent = 0;
     let failed = 0;
+    const results = [];
 
+    // envio síncrono (MVP). Depois a gente empurra pro campaignEngine/queue.
     for (const r of rows) {
       const to = r.phone;
 
       try {
         const waResp = await sendWhatsAppTemplate(
+          tenantId,
           to,
           campaign.templateName,
           campaign.templateLanguage || "pt_BR",
@@ -1059,11 +1096,11 @@ router.post("/:id/start", async (req, res) => {
 
         const waMessageId = waResp?.messages?.[0]?.id || null;
 
-        campaign.results.push({
+        results.push({
           phone: to,
           status: "sent",
           waMessageId,
-          updatedAt: new Date().toISOString()
+          updatedAt: nowIso()
         });
 
         sent++;
@@ -1071,10 +1108,10 @@ router.post("/:id/start", async (req, res) => {
         const metaErr = normalizeMetaError(err?.meta || null);
         const msg = metaErr?.message || err?.message || "Falha ao enviar";
 
-        campaign.results.push({
+        results.push({
           phone: to,
           status: "failed",
-          updatedAt: new Date().toISOString(),
+          updatedAt: nowIso(),
           error: msg,
           metaError: metaErr
         });
@@ -1083,23 +1120,30 @@ router.post("/:id/start", async (req, res) => {
       }
     }
 
-    campaign.status = failed > 0 && sent === 0 ? "failed" : "done";
-    campaign.updatedAt = new Date().toISOString();
-    campaign.logs.push({
-      at: campaign.updatedAt,
-      type: "finished",
-      message: `Finalizada: ${sent} enviados, ${failed} falhas`
+    const finishedAt = nowIso();
+    const finalStatus = failed > 0 && sent === 0 ? "failed" : "done";
+
+    const finishLogs = [
+      ...startLogs,
+      { at: finishedAt, type: "finished", message: `Finalizada: ${sent} enviados, ${failed} falhas` }
+    ];
+
+    const timeline2 = { ...(timeline || {}), finishedAt };
+
+    await prisma.outboundCampaign.update({
+      where: { id },
+      data: {
+        status: finalStatus,
+        results,
+        logs: finishLogs,
+        timeline: timeline2
+      }
     });
-
-    if (!campaign.timeline) campaign.timeline = {};
-    campaign.timeline.finishedAt = campaign.updatedAt;
-
-    saveDB(db);
 
     return res.json({
       success: true,
-      campaignId: campaign.id,
-      status: campaign.status,
+      campaignId: id,
+      status: finalStatus,
       sent,
       failed
     });
@@ -1109,13 +1153,14 @@ router.post("/:id/start", async (req, res) => {
   }
 });
 
-// JSON Report 2.0
-router.get("/:id/report", (req, res) => {
+router.get("/:id/report", async (req, res) => {
   try {
-    const { id } = req.params;
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
-    const campaign = campaigns.find((c) => String(c.id) === String(id));
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const id = String(req.params.id);
+
+    const campaign = await getCampaignOr404(tenantId, id);
     if (!campaign) return res.status(404).json({ error: "Campanha não encontrada." });
 
     const report = buildCampaignReport(campaign);
@@ -1126,13 +1171,14 @@ router.get("/:id/report", (req, res) => {
   }
 });
 
-// ✅ CSV Export (bate com o frontend: /outbound/campaigns/:id/export.csv)
-router.get("/:id/export.csv", (req, res) => {
+router.get("/:id/export.csv", async (req, res) => {
   try {
-    const { id } = req.params;
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
-    const campaign = campaigns.find((c) => String(c.id) === String(id));
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const id = String(req.params.id);
+
+    const campaign = await getCampaignOr404(tenantId, id);
     if (!campaign) return res.status(404).json({ error: "Campanha não encontrada." });
 
     const report = buildCampaignReport(campaign);
@@ -1150,13 +1196,14 @@ router.get("/:id/export.csv", (req, res) => {
   }
 });
 
-// ✅ PDF Export (bate com o frontend: /outbound/campaigns/:id/export.pdf)
-router.get("/:id/export.pdf", (req, res) => {
+router.get("/:id/export.pdf", async (req, res) => {
   try {
-    const { id } = req.params;
-    const db = loadDB();
-    const campaigns = ensureCampaigns(db);
-    const campaign = campaigns.find((c) => String(c.id) === String(id));
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const id = String(req.params.id);
+
+    const campaign = await getCampaignOr404(tenantId, id);
     if (!campaign) return res.status(404).json({ error: "Campanha não encontrada." });
 
     const report = buildCampaignReport(campaign);

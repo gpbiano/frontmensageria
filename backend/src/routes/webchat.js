@@ -2,10 +2,6 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import logger from "../logger.js";
-import { loadDB, saveDB } from "../utils/db.js";
-
-// ✅ Prisma (multi-tenant config)
-// (seu projeto usa export default no ../lib/prisma.js)
 import prisma from "../lib/prisma.js";
 
 const router = express.Router();
@@ -28,7 +24,6 @@ function getWebchatJwtSecret() {
   const secret = process.env.WEBCHAT_JWT_SECRET || process.env.JWT_SECRET;
 
   if (!secret || !String(secret).trim()) {
-    // Dev fallback (somente fora de produção)
     if ((process.env.NODE_ENV || "development") !== "production") {
       logger.warn(
         "⚠️ WEBCHAT_JWT_SECRET/JWT_SECRET ausente. Usando secret dev APENAS em development."
@@ -43,8 +38,6 @@ function getWebchatJwtSecret() {
 /**
  * =========================
  * ✅ Conversations CORE loader (compat)
- * - Resolve o erro: "does not provide an export named 'appendMessage'"
- * - Tenta achar appendMessage/getOrCreateChannelConversation em alguns caminhos
  * =========================
  */
 let __coreCache = null;
@@ -52,12 +45,9 @@ async function getConversationsCore() {
   if (__coreCache) return __coreCache;
 
   const attempts = [
-    // ✅ padrão: mesmo diretório (src/routes/conversations.js)
     () => import("./conversations.js"),
-    // ✅ fallback comum: core separado
     () => import("../core/conversationsCore.js"),
-    // ✅ outro fallback possível (se você criou pasta conversations)
-    () => import("../conversations/conversationsCore.js"),
+    () => import("../conversations/conversationsCore.js")
   ];
 
   let lastErr = null;
@@ -69,7 +59,10 @@ async function getConversationsCore() {
         mod?.getOrCreateChannelConversation || mod?.default?.getOrCreateChannelConversation;
       const appendMessage = mod?.appendMessage || mod?.default?.appendMessage;
 
-      if (typeof getOrCreateChannelConversation === "function" && typeof appendMessage === "function") {
+      if (
+        typeof getOrCreateChannelConversation === "function" &&
+        typeof appendMessage === "function"
+      ) {
         __coreCache = { getOrCreateChannelConversation, appendMessage };
         return __coreCache;
       }
@@ -79,7 +72,7 @@ async function getConversationsCore() {
   }
 
   const msg =
-    "Conversations core não encontrado. Garanta que exista export nomeado { getOrCreateChannelConversation, appendMessage } " +
+    "Conversations core não encontrado. Garanta exports { getOrCreateChannelConversation, appendMessage } " +
     "em src/routes/conversations.js (ou em ../core/conversationsCore.js).";
 
   logger.error({ err: lastErr }, msg);
@@ -88,29 +81,7 @@ async function getConversationsCore() {
 
 /**
  * =========================
- * DB SHAPE (legado/compat)
- * =========================
- */
-function ensureDbShape(db) {
-  if (!db.conversations) db.conversations = [];
-  if (!db.messagesByConversation) db.messagesByConversation = {};
-  if (!db.settings) db.settings = {};
-  if (!db.settings.channels) db.settings.channels = {};
-  if (!db.settings.channels.webchat) {
-    db.settings.channels.webchat = {
-      enabled: false,
-      widgetKey: "",
-      allowedOrigins: [],
-      config: {},
-    };
-  }
-  if (!db.chatbot) db.chatbot = {};
-  return db;
-}
-
-/**
- * =========================
- * MULTI-TENANT CONFIG (Prisma com fallback)
+ * ORIGIN + CORS
  * =========================
  */
 function normalizeOrigin(o) {
@@ -130,73 +101,6 @@ function getRequestOrigin(req) {
   return "";
 }
 
-/**
- * ChannelConfig no Prisma (schema atual):
- * - tenantId
- * - channel (ex: "webchat")
- * - enabled
- * - status
- * - widgetKey
- * - config (Json)  -> aqui vamos guardar allowedOrigins e config do widget
- *
- * Exemplo config JSON:
- * {
- *   "allowedOrigins": ["https://site.com"],
- *   "widget": { "color": "#34d399", ... }
- * }
- */
-async function getWebchatConfig(req) {
-  const tenantId = req.tenant?.id || null;
-
-  // Preferencial: por tenant no Postgres
-  if (tenantId) {
-    try {
-      const row = await prisma.channelConfig.findFirst({
-        where: { tenantId, channel: "webchat" },
-        select: { enabled: true, widgetKey: true, status: true, config: true },
-      });
-
-      if (!row) {
-        return { enabled: false, widgetKey: "", allowedOrigins: [], config: {} };
-      }
-
-      const cfg = row?.config && typeof row.config === "object" ? row.config : {};
-      const allowedOrigins = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
-
-      // widget config pode estar em cfg.widget ou direto no cfg
-      const widgetConfig =
-        (cfg.widget && typeof cfg.widget === "object" ? cfg.widget : null) || cfg || {};
-
-      return {
-        enabled: row.enabled !== false,
-        widgetKey: String(row.widgetKey || "").trim(),
-        allowedOrigins,
-        config: widgetConfig,
-      };
-    } catch (e) {
-      logger.warn({ e }, "webchat: prisma indisponível, usando fallback legacy");
-      // cai no legacy abaixo
-    }
-  }
-
-  // Fallback legacy (single-tenant JSON)
-  const db = ensureDbShape(loadDB());
-  const webchat = db?.settings?.channels?.webchat || {};
-
-  return {
-    enabled: webchat.enabled !== false,
-    widgetKey: String(webchat.widgetKey || "").trim(),
-    allowedOrigins: Array.isArray(webchat.allowedOrigins) ? webchat.allowedOrigins : [],
-    config: webchat.config || {},
-  };
-}
-
-function readWidgetKey(req) {
-  const h = String(req.headers["x-widget-key"] || "").trim();
-  if (h) return h;
-  return String(req.query.widgetKey || req.query.widget_key || "").trim();
-}
-
 function isOriginAllowed(origin, allowedOrigins) {
   // server-to-server (sem origin)
   if (!origin) return true;
@@ -207,6 +111,53 @@ function isOriginAllowed(origin, allowedOrigins) {
 
   if (!allowed.length) return false;
   return allowed.includes(normalizeOrigin(origin));
+}
+
+function readWidgetKey(req) {
+  const h = String(req.headers["x-widget-key"] || "").trim();
+  if (h) return h;
+  return String(req.query.widgetKey || req.query.widget_key || "").trim();
+}
+
+/**
+ * =========================
+ * WEBCHAT CONFIG (Prisma only)
+ * ChannelConfig:
+ * - tenantId
+ * - channel="webchat"
+ * - enabled
+ * - widgetKey
+ * - config: { allowedOrigins: [], botEnabled?: boolean, widget?: {...} }
+ * =========================
+ */
+async function getWebchatConfig(req) {
+  const tenantId = req.tenant?.id ? String(req.tenant.id) : null;
+  if (!tenantId) return { enabled: false, widgetKey: "", allowedOrigins: [], config: {}, botEnabled: false };
+
+  const row = await prisma.channelConfig.findFirst({
+    where: { tenantId, channel: "webchat" },
+    select: { enabled: true, widgetKey: true, status: true, config: true }
+  });
+
+  if (!row) {
+    return { enabled: false, widgetKey: "", allowedOrigins: [], config: {}, botEnabled: false };
+  }
+
+  const cfg = row?.config && typeof row.config === "object" ? row.config : {};
+  const allowedOrigins = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
+
+  const widgetConfig =
+    (cfg.widget && typeof cfg.widget === "object" ? cfg.widget : null) || cfg || {};
+
+  const botEnabled = cfg.botEnabled === true;
+
+  return {
+    enabled: row.enabled !== false,
+    widgetKey: String(row.widgetKey || "").trim(),
+    allowedOrigins,
+    config: widgetConfig,
+    botEnabled
+  };
 }
 
 async function assertWebchatAllowed(req, { requireWidgetKey = true } = {}) {
@@ -222,7 +173,7 @@ async function assertWebchatAllowed(req, { requireWidgetKey = true } = {}) {
       ok: false,
       status: 403,
       error: "Origin não permitido",
-      details: { origin, allowedOrigins: cfg.allowedOrigins },
+      details: { origin, allowedOrigins: cfg.allowedOrigins }
     };
   }
 
@@ -241,9 +192,26 @@ async function assertWebchatAllowed(req, { requireWidgetKey = true } = {}) {
   return { ok: true, cfg };
 }
 
+async function setCorsHeaders(req, res) {
+  const cfg = await getWebchatConfig(req);
+  const origin = normalizeOrigin(req.headers.origin || "");
+
+  if (origin && isOriginAllowed(origin, cfg.allowedOrigins)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Widget-Key, X-Webchat-Token, X-Tenant-Id"
+  );
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
 /**
  * =========================
- * AUTH HELPERS (token do widget)
+ * AUTH (token do widget)
  * =========================
  */
 function readAuthToken(req) {
@@ -267,40 +235,69 @@ function verifyWebchatToken(req) {
 
 /**
  * =========================
- * CORS (WEBCHAT) - redundância segura
+ * MULTI-TENANT GUARDA
  * =========================
  */
-async function setCorsHeaders(req, res) {
-  const cfg = await getWebchatConfig(req);
-  const origin = normalizeOrigin(req.headers.origin || "");
-
-  if (origin && isOriginAllowed(origin, cfg.allowedOrigins)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
+function requireTenant(req, res) {
+  if (!req.tenant?.id) {
+    res.status(400).json({ error: "missing_tenant_context" });
+    return false;
   }
+  return true;
+}
 
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Widget-Key, X-Webchat-Token, X-Tenant-Id"
-  );
-  res.setHeader("Access-Control-Max-Age", "86400");
+function asJson(v) {
+  return v && typeof v === "object" ? v : {};
+}
+
+function mergeMeta(oldMeta, patch) {
+  return { ...asJson(oldMeta), ...asJson(patch) };
 }
 
 /**
  * =========================
- * CHATBOT (WEBCHAT)
+ * BOT (opcional)
+ * - habilitado por ChannelConfig.config.botEnabled === true
  * =========================
  */
-function isWebchatBotEnabled(db) {
-  return db.chatbot?.webchatEnabled === true;
+async function getLastMessagesForBot({ tenantId, conversationId, take = 10 }) {
+  const rows = await prisma.message.findMany({
+    where: { tenantId, conversationId },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take
+  });
+
+  return rows.map((m) => ({
+    id: String(m.id),
+    type: String(m.type || "text"),
+    direction: String(m.direction || "in"),
+    text: m.text || "",
+    createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : null,
+    metadata: m.metadata || {}
+  }));
 }
 
-async function maybeReplyWithBot(db, conv, cleanText) {
-  if (!isWebchatBotEnabled(db)) return { ok: true, didBot: false };
-  if (String(conv.currentMode || "") === "human") return { ok: true, didBot: false };
-  if (String(conv.status || "") !== "open") return { ok: true, didBot: false };
+async function maybeReplyWithBot({ tenantId, convRow, cleanText }) {
+  const convMeta = asJson(convRow?.metadata);
+  if (String(convRow?.status || "") !== "open") return { ok: true, didBot: false };
+  if (String(convMeta.currentMode || "") === "human") return { ok: true, didBot: false };
 
+  // bot enabled per webchat config
+  let cfg;
+  try {
+    const row = await prisma.channelConfig.findFirst({
+      where: { tenantId, channel: "webchat" },
+      select: { config: true }
+    });
+    const c = row?.config && typeof row.config === "object" ? row.config : {};
+    cfg = { botEnabled: c.botEnabled === true };
+  } catch {
+    cfg = { botEnabled: false };
+  }
+
+  if (!cfg.botEnabled) return { ok: true, didBot: false };
+
+  // carrega bot engine
   let botEngine;
   try {
     const mod = await import("../chatbot/botEngine.js");
@@ -313,23 +310,27 @@ async function maybeReplyWithBot(db, conv, cleanText) {
     return { ok: true, didBot: false };
   }
 
-  const history = (db.messagesByConversation?.[String(conv.id)] || []).slice(-10);
+  const history = await getLastMessagesForBot({
+    tenantId,
+    conversationId: convRow.id,
+    take: 10
+  });
 
   let botText = "";
   try {
     if (typeof botEngine === "function") {
       botText = await botEngine({
         channel: "webchat",
-        conversation: conv,
+        conversation: convRow, // engine pode usar metadata
         userText: cleanText,
-        messages: history,
+        messages: history
       });
     } else {
       botText = await botEngine.run({
         channel: "webchat",
-        conversation: conv,
+        conversation: convRow,
         userText: cleanText,
-        messages: history,
+        messages: history
       });
     }
   } catch {
@@ -341,7 +342,7 @@ async function maybeReplyWithBot(db, conv, cleanText) {
 
   const { appendMessage } = await getConversationsCore();
 
-  const r = appendMessage(db, conv.id, {
+  const r = await appendMessage(String(convRow.id), {
     channel: "webchat",
     source: "webchat",
     type: "text",
@@ -349,34 +350,11 @@ async function maybeReplyWithBot(db, conv, cleanText) {
     direction: "out",
     text: botText,
     createdAt: nowIso(),
-    tenantId: conv.tenantId || null,
-    isBot: true,
+    tenantId,
+    isBot: true
   });
 
   return r?.ok ? { ok: true, didBot: true, botMessage: r.msg } : { ok: false, didBot: false };
-}
-
-/**
- * =========================
- * MULTI-TENANT GUARDA
- * =========================
- */
-function requireTenant(req, res) {
-  if (!req.tenant?.id) {
-    res.status(400).json({ error: "missing_tenant_context" });
-    return false;
-  }
-  return true;
-}
-
-function getConversationOr404(db, id, tenantId) {
-  const conv = db.conversations.find((c) => String(c.id) === String(id)) || null;
-  if (!conv) return null;
-
-  // multi-tenant guard (quando existir tenantId na conversa)
-  if (tenantId && conv.tenantId && String(conv.tenantId) !== String(tenantId)) return null;
-
-  return conv;
 }
 
 /**
@@ -401,6 +379,7 @@ router.options("*", async (req, res) => {
 router.post("/session", async (req, res) => {
   if (!requireTenant(req, res)) return;
 
+  const tenantId = String(req.tenant.id);
   const { visitorId } = req.body || {};
   if (!visitorId) return res.status(400).json({ error: "visitorId obrigatório" });
 
@@ -411,40 +390,35 @@ router.post("/session", async (req, res) => {
     return res.status(allow.status).json({ error: allow.error, details: allow.details });
   }
 
-  const db = ensureDbShape(loadDB());
-  const initialMode = isWebchatBotEnabled(db) ? "bot" : "human";
-
-  // ✅ separação por tenant no peerId + salva tenantId na conversa
-  const peerId = `wc:${req.tenant.id}:${visitorId}`;
-
   const { getOrCreateChannelConversation } = await getConversationsCore();
 
-  const r = getOrCreateChannelConversation(db, {
+  // separação por tenant no peerId
+  const peerId = `wc:${tenantId}:${visitorId}`;
+
+  const initialMode = allow?.cfg?.botEnabled === true ? "bot" : "human";
+
+  const r = await getOrCreateChannelConversation({
+    tenantId,
     source: "webchat",
     peerId,
     visitorId,
     title: `WebChat ${String(visitorId).slice(0, 6)}`,
-    currentMode: initialMode,
+    currentMode: initialMode
   });
 
   if (!r?.ok) return res.status(400).json({ error: r.error || "Falha ao criar sessão" });
 
-  // ✅ marca tenant na conversa
-  r.conversation.tenantId = req.tenant.id;
-
   const token = jwt.sign(
     {
-      tenantId: req.tenant.id,
+      tenantId,
       conversationId: r.conversation.id,
       visitorId,
       source: "webchat",
       iat: nowUnix(),
-      exp: nowUnix() + TOKEN_TTL_SECONDS,
+      exp: nowUnix() + TOKEN_TTL_SECONDS
     },
     getWebchatJwtSecret()
   );
-
-  saveDB(db);
 
   return res.json({
     conversationId: r.conversation.id,
@@ -452,6 +426,7 @@ router.post("/session", async (req, res) => {
     status: r.conversation.status,
     currentMode: r.conversation.currentMode,
     expiresInSeconds: TOKEN_TTL_SECONDS,
+    widgetConfig: allow?.cfg?.config || {}
   });
 });
 
@@ -469,7 +444,9 @@ router.get("/conversations/:id/messages", async (req, res) => {
     return res.status(401).json({ error: e.message || "Token inválido" });
   }
 
-  if (String(decoded?.tenantId || "") !== String(req.tenant.id)) {
+  const tenantId = String(req.tenant.id);
+
+  if (String(decoded?.tenantId || "") !== tenantId) {
     return res.status(403).json({ error: "Token não pertence ao tenant" });
   }
 
@@ -489,33 +466,53 @@ router.get("/conversations/:id/messages", async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 50) || 50, 100);
   const after = req.query.after ? String(req.query.after) : null;
 
-  const db = ensureDbShape(loadDB());
+  const convRow = await prisma.conversation.findFirst({
+    where: { id: String(id), tenantId }
+  });
 
-  const conv = getConversationOr404(db, id, req.tenant.id);
-  if (!conv) return res.status(404).json({ error: "Conversa não encontrada" });
+  if (!convRow) return res.status(404).json({ error: "Conversa não encontrada" });
 
-  if (String(conv.source || "") !== "webchat") {
+  const convMeta = asJson(convRow.metadata);
+  const source = String(convMeta.source || convRow.channel || "").toLowerCase();
+  if (source !== "webchat") {
     return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
   }
 
-  const all = Array.isArray(db.messagesByConversation?.[String(id)])
-    ? db.messagesByConversation[String(id)]
-    : [];
+  const query = {
+    where: { tenantId, conversationId: convRow.id },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit
+  };
 
-  const allTenant = all.filter((m) => !m?.tenantId || String(m.tenantId) === String(req.tenant.id));
-
-  let items = allTenant;
-
+  let rows = [];
   if (after) {
-    const idx = allTenant.findIndex((m) => String(m.id) === String(after));
-    if (idx >= 0) items = allTenant.slice(idx + 1);
-    else items = allTenant.filter((m) => String(m.createdAt || "") > after);
+    // usa cursor por id quando possível
+    try {
+      rows = await prisma.message.findMany({
+        ...query,
+        cursor: { id: after },
+        skip: 1
+      });
+    } catch {
+      // fallback: se cursor inválido, retorna do começo (ou você pode filtrar por createdAt)
+      rows = await prisma.message.findMany(query);
+    }
+  } else {
+    rows = await prisma.message.findMany(query);
   }
 
-  items = items.slice(0, limit);
+  const items = rows.map((m) => ({
+    id: String(m.id),
+    conversationId: String(m.conversationId),
+    type: String(m.type || "text"),
+    direction: String(m.direction || "in"),
+    text: m.text || "",
+    createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : null,
+    metadata: m.metadata || {}
+  }));
 
   const last = items.length ? items[items.length - 1] : null;
-  const nextCursor = last ? last.id || last.createdAt : after || null;
+  const nextCursor = last ? last.id : after || null;
 
   return res.json({ items, nextCursor });
 });
@@ -535,7 +532,9 @@ router.post("/messages", async (req, res) => {
     return res.status(401).json({ error: e.message || "Token inválido" });
   }
 
-  if (String(decoded?.tenantId || "") !== String(req.tenant.id)) {
+  const tenantId = String(req.tenant.id);
+
+  if (String(decoded?.tenantId || "") !== tenantId) {
     return res.status(403).json({ error: "Token não pertence ao tenant" });
   }
 
@@ -549,21 +548,25 @@ router.post("/messages", async (req, res) => {
     return res.status(allow.status).json({ error: allow.error, details: allow.details });
   }
 
-  const db = ensureDbShape(loadDB());
+  const conversationId = String(decoded.conversationId || "");
+  if (!conversationId) return res.status(400).json({ error: "conversationId ausente no token" });
 
-  const conv = getConversationOr404(db, decoded.conversationId, req.tenant.id);
-  if (!conv) return res.status(404).json({ error: "Conversa não encontrada" });
+  const convRow = await prisma.conversation.findFirst({
+    where: { id: conversationId, tenantId }
+  });
 
-  if (String(conv.source || "") !== "webchat") {
+  if (!convRow) return res.status(404).json({ error: "Conversa não encontrada" });
+
+  const convMeta = asJson(convRow.metadata);
+  const source = String(convMeta.source || convRow.channel || "").toLowerCase();
+  if (source !== "webchat") {
     return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
   }
-  if (String(conv.status) !== "open") return res.status(410).json({ error: "Conversa encerrada" });
-
-  conv.tenantId = conv.tenantId || req.tenant.id;
+  if (String(convRow.status) !== "open") return res.status(410).json({ error: "Conversa encerrada" });
 
   const { appendMessage } = await getConversationsCore();
 
-  const r = appendMessage(db, conv.id, {
+  const r = await appendMessage(conversationId, {
     channel: "webchat",
     source: "webchat",
     type: "text",
@@ -571,20 +574,19 @@ router.post("/messages", async (req, res) => {
     direction: "in",
     text: cleanText,
     createdAt: nowIso(),
-    tenantId: req.tenant.id,
+    tenantId
   });
 
   if (!r?.ok) return res.status(400).json({ error: r.error || "Falha ao salvar mensagem" });
 
-  const bot = await maybeReplyWithBot(db, conv, cleanText);
-
-  saveDB(db);
+  // bot opcional
+  const bot = await maybeReplyWithBot({ tenantId, convRow, cleanText });
 
   return res.json({
     ok: true,
     message: r.msg,
     nextCursor: r.msg?.id,
-    bot: bot?.didBot ? { message: bot.botMessage } : null,
+    bot: bot?.didBot ? { message: bot.botMessage } : null
   });
 });
 
@@ -602,7 +604,9 @@ router.post("/conversations/:id/close", async (req, res) => {
     return res.status(401).json({ error: e.message || "Token inválido" });
   }
 
-  if (String(decoded?.tenantId || "") !== String(req.tenant.id)) {
+  const tenantId = String(req.tenant.id);
+
+  if (String(decoded?.tenantId || "") !== tenantId) {
     return res.status(403).json({ error: "Token não pertence ao tenant" });
   }
 
@@ -619,30 +623,37 @@ router.post("/conversations/:id/close", async (req, res) => {
     return res.status(allow.status).json({ error: allow.error, details: allow.details });
   }
 
-  const db = ensureDbShape(loadDB());
+  const convRow = await prisma.conversation.findFirst({
+    where: { id: String(id), tenantId }
+  });
 
-  const conv = getConversationOr404(db, id, req.tenant.id);
-  if (!conv) return res.status(404).json({ error: "Conversa não encontrada" });
+  if (!convRow) return res.status(404).json({ error: "Conversa não encontrada" });
 
-  if (String(conv.source || "") !== "webchat") {
+  const convMeta = asJson(convRow.metadata);
+  const source = String(convMeta.source || convRow.channel || "").toLowerCase();
+  if (source !== "webchat") {
     return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
   }
 
-  conv.tenantId = conv.tenantId || req.tenant.id;
-
-  if (String(conv.status) === "closed") {
-    saveDB(db);
+  if (String(convRow.status) === "closed") {
     return res.json({ ok: true, status: "closed" });
   }
 
-  conv.status = "closed";
-  conv.updatedAt = nowIso();
-  conv.closedAt = nowIso();
-  conv.closedReason = "webchat_widget_close";
+  await prisma.conversation.update({
+    where: { id: convRow.id },
+    data: {
+      status: "closed",
+      updatedAt: new Date(),
+      metadata: mergeMeta(convRow.metadata, {
+        closedAt: nowIso(),
+        closedReason: "webchat_widget_close"
+      })
+    }
+  });
 
   const { appendMessage } = await getConversationsCore();
 
-  appendMessage(db, conv.id, {
+  await appendMessage(String(convRow.id), {
     channel: "webchat",
     source: "webchat",
     type: "system",
@@ -650,11 +661,10 @@ router.post("/conversations/:id/close", async (req, res) => {
     direction: "out",
     text: "Conversa encerrada.",
     createdAt: nowIso(),
-    tenantId: req.tenant.id,
-    isSystem: true,
+    tenantId,
+    isSystem: true
   });
 
-  saveDB(db);
   return res.json({ ok: true, status: "closed" });
 });
 

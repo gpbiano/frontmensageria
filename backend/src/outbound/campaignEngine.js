@@ -1,184 +1,345 @@
 // backend/src/outbound/campaignEngine.js
-import fetch from "node-fetch";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import logger from "../logger.js";
+import prisma from "../lib/prisma.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-
-const DB_FILE = path.join(process.cwd(), "data.json");
-
-function loadDB() {
-  try {
-    const raw = fs.readFileSync(DB_FILE, "utf-8");
-    return JSON.parse(raw);
-  } catch (err) {
-    logger.warn(
-      { err },
-      "⚠️ data.json não encontrado ao carregar no campaignEngine, usando objeto vazio."
-    );
-    return {};
-  }
-}
-
-function saveDB(data) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-  } catch (err) {
-    logger.error({ err }, "❌ Erro ao salvar data.json no campaignEngine");
-  }
+/**
+ * ============================================================
+ * FETCH (Node18+ tem global fetch; fallback node-fetch)
+ * ============================================================
+ */
+async function getFetch() {
+  if (globalThis.fetch) return globalThis.fetch;
+  const mod = await import("node-fetch");
+  return mod.default;
 }
 
 /**
- * Envia uma campanha de TEMPLATE para uma lista de alvos.
+ * ============================================================
+ * WhatsApp ENV por tenant (ChannelConfig) + fallback ENV
+ * channel: "whatsapp"
+ * config JSON esperado:
+ *  { "token":"...", "phoneNumberId":"...", "apiVersion":"v22.0" }
+ * ============================================================
+ */
+function normalizeApiVersion(v) {
+  const s = String(v || "").trim();
+  if (!s) return "v22.0";
+  return s.startsWith("v") ? s : `v${s}`;
+}
+
+async function getWhatsAppEnvForTenant(tenantId) {
+  let token = "";
+  let phoneNumberId = "";
+  let apiVersion = "v22.0";
+
+  // Preferencial: ChannelConfig por tenant
+  try {
+    if (tenantId) {
+      const row = await prisma.channelConfig.findFirst({
+        where: { tenantId, channel: "whatsapp" },
+        select: { config: true }
+      });
+
+      const cfg = row?.config && typeof row.config === "object" ? row.config : {};
+
+      token = String(cfg.token || cfg.WHATSAPP_TOKEN || "").trim();
+      phoneNumberId = String(
+        cfg.phoneNumberId || cfg.PHONE_NUMBER_ID || cfg.WHATSAPP_PHONE_NUMBER_ID || ""
+      ).trim();
+      apiVersion = normalizeApiVersion(cfg.apiVersion || cfg.WHATSAPP_API_VERSION || apiVersion);
+    }
+  } catch (e) {
+    logger.warn({ e }, "campaignEngine: falha ao ler ChannelConfig, usando ENV");
+  }
+
+  // Fallback ENV (não trava const no topo!)
+  if (!token) token = String(process.env.WHATSAPP_TOKEN || "").trim();
+  if (!phoneNumberId) {
+    phoneNumberId = String(
+      process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || ""
+    ).trim();
+  }
+  apiVersion = normalizeApiVersion(process.env.WHATSAPP_API_VERSION || apiVersion);
+
+  return { token, phoneNumberId, apiVersion };
+}
+
+async function assertWhatsAppConfigured(tenantId) {
+  const { token, phoneNumberId, apiVersion } = await getWhatsAppEnvForTenant(tenantId);
+  if (!token || !phoneNumberId) {
+    throw new Error(
+      "WhatsApp não configurado. Cadastre token/phoneNumberId em ChannelConfig(channel=whatsapp) ou defina WHATSAPP_TOKEN + WHATSAPP_PHONE_NUMBER_ID."
+    );
+  }
+  return { token, phoneNumberId, apiVersion };
+}
+
+/**
+ * ============================================================
+ * HELPERS
+ * ============================================================
+ */
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function safeLower(v) {
+  return String(v || "").toLowerCase();
+}
+
+function normalizeMetaError(err) {
+  if (!err) return null;
+  const e = err?.error ? err.error : err;
+  return {
+    code: e?.code ?? e?.error_code ?? e?.errorCode ?? null,
+    message: e?.message ?? e?.error_user_msg ?? e?.errorMessage ?? null,
+    type: e?.type ?? null,
+    subcode: e?.error_subcode ?? e?.subcode ?? null,
+    trace: e?.fbtrace_id ?? null
+  };
+}
+
+function coerceTargets(targets) {
+  if (!targets) return [];
+  if (Array.isArray(targets)) return targets.map((t) => String(t || "").trim()).filter(Boolean);
+  return [];
+}
+
+/**
+ * ============================================================
+ * WHATSAPP SEND
+ * ============================================================
+ */
+async function sendTemplateMessage({
+  tenantId,
+  to,
+  templateName,
+  languageCode = "pt_BR",
+  bodyVars = []
+}) {
+  const { token, phoneNumberId, apiVersion } = await assertWhatsAppConfigured(tenantId);
+
+  const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+
+  const components = [];
+  if (Array.isArray(bodyVars) && bodyVars.length > 0) {
+    components.push({
+      type: "body",
+      parameters: bodyVars.map((v) => ({ type: "text", text: String(v) }))
+    });
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      ...(components.length ? { components } : {})
+    }
+  };
+
+  const fetchFn = await getFetch();
+  const resp = await fetchFn(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const raw = await resp.text().catch(() => "");
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = {};
+  }
+
+  if (!resp.ok) {
+    const msg = data?.error?.message || data?.message || `Erro WhatsApp (${resp.status})`;
+    const err = new Error(msg);
+    err.meta = data?.error || data || null;
+    err.httpStatus = resp.status;
+    throw err;
+  }
+
+  return data;
+}
+
+/**
+ * ============================================================
+ * ✅ API PRINCIPAL (PRISMA-FIRST, SEM data.json)
  *
- * Parâmetros:
- * - name: nome interno da campanha
- * - template: nome do template HSM aprovado na Meta
- * - parameters: array de strings para o body
- * - targets: array de telefones (E.164)
- * - description: descrição interna
+ * Mantém compatibilidade com chamada antiga:
+ * sendTemplateCampaign({
+ *   name,
+ *   template,
+ *   parameters,
+ *   targets,
+ *   description
+ * })
  *
- * Retorno:
+ * Mas AGORA exige tenantId (multi-tenant) ou vai tentar inferir de forma insegura.
+ * Recomendo sempre passar tenantId.
+ *
+ * Retorno (compat):
  * {
  *   campaignId,
  *   totalTargets,
  *   results,
  *   campaign
  * }
+ * ============================================================
  */
 export async function sendTemplateCampaign({
+  // ✅ NOVO (recomendado)
+  tenantId,
+  numberId = null, // opcional (informativo)
+  templateLanguage = "pt_BR",
+
+  // ✅ COMPAT LEGACY
   name,
-  template,
-  parameters,
-  targets,
+  template, // templateName
+  parameters, // body vars iguais para todos
+  targets, // array phones
+
+  // ✅ extras
   description
 }) {
-  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-    throw new Error(
-      "WHATSAPP_TOKEN ou PHONE_NUMBER_ID não configurados nas variáveis de ambiente."
-    );
+  const tid = tenantId ? String(tenantId) : null;
+  if (!tid) {
+    throw new Error("tenantId é obrigatório no campaignEngine (multi-tenant).");
   }
 
-  if (
-    !template ||
-    !targets ||
-    !Array.isArray(targets) ||
-    targets.length === 0
-  ) {
+  const templateName = String(template || "").trim();
+  const targetPhones = coerceTargets(targets);
+
+  if (!templateName || targetPhones.length === 0) {
     throw new Error("Dados insuficientes para campanha (template/targets).");
   }
 
-  const db = loadDB();
-  if (!db.campaigns) db.campaigns = [];
+  // valida WhatsApp config ANTES de criar campanha
+  await assertWhatsAppConfigured(tid);
 
-  const campaignId = db.campaigns.length + 1;
+  const createdAt = nowIso();
 
-  const results = [];
+  // cria campanha no prisma (OutboundCampaign)
+  const campaignRow = await prisma.outboundCampaign.create({
+    data: {
+      id: `cmp_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+      tenantId: tid,
+      name: String(name || `Campanha ${createdAt}`),
+      numberId: String(numberId || "whatsapp"),
+      templateName,
+      templateLanguage: String(templateLanguage || "pt_BR"),
+      excludeOptOut: false,
+      status: "sending",
+      audience: {
+        description: description ? String(description) : "",
+        totalTargets: targetPhones.length
+      },
+      audienceRows: targetPhones.map((phone) => ({
+        phone,
+        vars: Array.isArray(parameters) ? parameters.map((p) => String(p ?? "")) : []
+      })),
+      results: [],
+      logs: [
+        { at: createdAt, type: "created", message: "Campanha criada (engine)" },
+        {
+          at: createdAt,
+          type: "start_requested",
+          message: `Início solicitado (${targetPhones.length} destinatários)`
+        }
+      ],
+      timeline: { startedAt: createdAt }
+    }
+  });
 
   logger.info(
-    {
-      campaignId,
-      name,
-      template,
-      totalTargets: targets.length
-    },
-    "📣 Iniciando envio de campanha de template"
+    { campaignId: campaignRow.id, name: campaignRow.name, templateName, totalTargets: targetPhones.length },
+    "📣 Iniciando envio de campanha (Prisma)"
   );
 
-  for (const phone of targets) {
-    const payload = {
-      messaging_product: "whatsapp",
-      to: phone,
-      type: "template",
-      template: {
-        name: template,
-        language: { code: "pt_BR" },
-        components:
-          parameters && parameters.length > 0
-            ? [
-                {
-                  type: "body",
-                  parameters: parameters.map((p) => ({
-                    type: "text",
-                    text: p
-                  }))
-                }
-              ]
-            : []
-      }
-    };
+  const results = [];
+  let sent = 0;
+  let failed = 0;
 
+  for (const phone of targetPhones) {
     try {
-      const response = await fetch(
-        `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
-        }
-      );
+      const data = await sendTemplateMessage({
+        tenantId: tid,
+        to: phone,
+        templateName,
+        languageCode: String(templateLanguage || "pt_BR"),
+        bodyVars: Array.isArray(parameters) ? parameters : []
+      });
 
-      const result = await response.json();
+      const waMessageId = data?.messages?.[0]?.id || null;
 
-      results.push({ phone, result, ok: response.ok });
-
-      if (!response.ok) {
-        logger.error(
-          { phone, status: response.status, result },
-          "❌ Erro ao enviar mensagem de template na campanha"
-        );
-      } else {
-        logger.info(
-          { phone, messageId: result?.messages?.[0]?.id },
-          "📤 Template enviado com sucesso na campanha"
-        );
-      }
-    } catch (err) {
-      logger.error({ phone, err }, "❌ Erro inesperado ao enviar template");
       results.push({
         phone,
-        result: { error: err.message },
-        ok: false
+        status: "sent",
+        waMessageId,
+        updatedAt: nowIso()
       });
+
+      sent++;
+      logger.info({ phone, waMessageId, campaignId: campaignRow.id }, "📤 Template enviado (engine)");
+    } catch (err) {
+      const metaErr = normalizeMetaError(err?.meta || null);
+      const msg = metaErr?.message || err?.message || "Falha ao enviar";
+
+      results.push({
+        phone,
+        status: "failed",
+        updatedAt: nowIso(),
+        error: msg,
+        metaError: metaErr
+      });
+
+      failed++;
+      logger.error(
+        { phone, campaignId: campaignRow.id, err: err?.message, metaErr },
+        "❌ Falha ao enviar template (engine)"
+      );
     }
   }
 
-  const campaign = {
-    id: campaignId,
-    name,
-    template,
-    parameters,
-    targets,
-    description,
-    results,
-    totalTargets: targets.length,
-    createdAt: new Date().toISOString()
-  };
+  const finishedAt = nowIso();
+  const finalStatus = failed > 0 && sent === 0 ? "failed" : "done";
 
-  db.campaigns.push(campaign);
-  saveDB(db);
+  const finalLogs = [
+    ...(Array.isArray(campaignRow.logs) ? campaignRow.logs : []),
+    { at: finishedAt, type: "finished", message: `Finalizada: ${sent} enviados, ${failed} falhas` }
+  ];
+
+  const updated = await prisma.outboundCampaign.update({
+    where: { id: campaignRow.id },
+    data: {
+      status: finalStatus,
+      results,
+      logs: finalLogs,
+      timeline: { ...(campaignRow.timeline || {}), finishedAt }
+    }
+  });
 
   logger.info(
-    {
-      campaignId,
-      totalTargets: targets.length
-    },
-    "✅ Campanha concluída e salva em data.json"
+    { campaignId: updated.id, totalTargets: targetPhones.length, sent, failed, status: finalStatus },
+    "✅ Campanha concluída (Prisma)"
   );
 
+  // retorno compat com versão antiga
   return {
-    campaignId,
-    totalTargets: targets.length,
-    results,
-    campaign
+    campaignId: updated.id,
+    totalTargets: targetPhones.length,
+    results: results.map((r) => ({
+      phone: r.phone,
+      result: r.status === "sent" ? { messages: [{ id: r.waMessageId }] } : { error: r.error, metaError: r.metaError },
+      ok: safeLower(r.status) !== "failed"
+    })),
+    campaign: updated
   };
 }
