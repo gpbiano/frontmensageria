@@ -290,9 +290,7 @@ router.post("/", async (req, res, next) => {
         String(conv?.currentMode || "").toLowerCase() === "human" ||
         conv?.inboxVisible === true;
 
-      if (isAlreadyHandoff) {
-        continue; // só salva histórico, painel já cuida do resto
-      }
+      if (isAlreadyHandoff) continue;
 
       // ==================================================
       // BOT DECISION
@@ -311,11 +309,8 @@ router.post("/", async (req, res, next) => {
 
       // ==================================================
       // ✅ HANDOFF (vira humano -> aparece no painel)
-      // - envia msg tradicional
-      // - marca handoff:true para promover inbox no conversations.js
       // ==================================================
       if (!shouldBotReply) {
-        // manda mensagem tradicional pro cliente
         const sent = await sendWhatsAppText({ to: waId, body: HANDOFF_MESSAGE });
 
         const waBotId =
@@ -324,7 +319,6 @@ router.post("/", async (req, res, next) => {
           sent?.data?.id ||
           null;
 
-        // persiste outbound + PROMOVE pro painel (handoff:true)
         appendMessage(db, conv.id, {
           type: "text",
           from: "bot",
@@ -332,7 +326,7 @@ router.post("/", async (req, res, next) => {
           text: HANDOFF_MESSAGE,
           createdAt: nowIso(),
           isBot: true,
-          handoff: true, // 🔥 isso faz a conversa aparecer na inbox do painel
+          handoff: true,
           waMessageId: waBotId || undefined,
           delivery: sent?.ok
             ? { status: "sent", at: nowIso() }
@@ -348,7 +342,6 @@ router.post("/", async (req, res, next) => {
           source: "whatsapp"
         });
 
-        // reforça modo local também
         conv.currentMode = "human";
         conv.handoffActive = true;
         conv.handoffSince = conv.handoffSince || nowIso();

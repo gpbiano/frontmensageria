@@ -1,6 +1,6 @@
 // backend/src/settings/groupsRouter.js
 import express from "express";
-import prisma from "../lib/prisma.js";
+import { prisma } from "../lib/prisma.js";
 import { requireAuth, enforceTokenTenant, requireRole } from "../middleware/requireAuth.js";
 import logger from "../logger.js";
 
@@ -19,15 +19,25 @@ function parseBoolean(v) {
   return undefined;
 }
 
+function parseIntSafe(v) {
+  if (v === null || v === undefined || v === "") return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.trunc(n);
+}
+
 function shapeGroup(g) {
   return {
     id: g.id,
     tenantId: g.tenantId,
     name: g.name,
     isActive: g.isActive !== false,
+    // ✅ NOVO: limite de chats simultâneos por atendente (fila)
+    maxChatsPerAgent:
+      typeof g.maxChatsPerAgent === "number" ? g.maxChatsPerAgent : undefined,
     createdAt: g.createdAt,
     updatedAt: g.updatedAt,
-    membersCount: typeof g._count?.members === "number" ? g._count.members : undefined,
+    membersCount: typeof g._count?.members === "number" ? g._count.members : undefined
   };
 }
 
@@ -46,9 +56,9 @@ function shapeMember(m) {
           id: m.user.id,
           email: m.user.email,
           name: m.user.name || null,
-          isActive: m.user.isActive !== false,
+          isActive: m.user.isActive !== false
         }
-      : undefined,
+      : undefined
   };
 }
 
@@ -69,7 +79,7 @@ router.get(
       const groups = await prisma.group.findMany({
         where: { tenantId },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
-        include: { _count: { select: { members: true } } },
+        include: { _count: { select: { members: true } } }
       });
 
       return res.json({ data: groups.map(shapeGroup), total: groups.length });
@@ -99,7 +109,7 @@ router.get(
 
       const group = await prisma.group.findFirst({
         where: { id, tenantId },
-        include: { _count: { select: { members: true } } },
+        include: { _count: { select: { members: true } } }
       });
 
       if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
@@ -115,7 +125,7 @@ router.get(
 /**
  * POST /settings/groups
  * (admin/manager) - cria grupo no tenant
- * body: { name }
+ * body: { name, maxChatsPerAgent? }
  */
 router.post(
   "/",
@@ -130,13 +140,20 @@ router.post(
       const name = String(req.body?.name || "").trim();
       if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
 
+      const maxChatsPerAgent = parseIntSafe(req.body?.maxChatsPerAgent);
+      if (maxChatsPerAgent !== undefined && maxChatsPerAgent < 1) {
+        return res.status(400).json({ error: "maxChatsPerAgent inválido (>= 1)." });
+      }
+
       const created = await prisma.group.create({
         data: {
           tenantId,
           name,
           isActive: true,
+          // ✅ só grava se existir no schema
+          ...(maxChatsPerAgent !== undefined ? { maxChatsPerAgent } : {})
         },
-        include: { _count: { select: { members: true } } },
+        include: { _count: { select: { members: true } } }
       });
 
       return res.status(201).json({ success: true, group: shapeGroup(created) });
@@ -144,6 +161,10 @@ router.post(
       // unique([tenantId, name]) -> P2002
       if (String(e?.code || "") === "P2002") {
         return res.status(409).json({ error: "Já existe um grupo com esse nome neste tenant." });
+      }
+      // se o schema ainda não tem maxChatsPerAgent
+      if (String(e?.code || "") === "P2021" || String(e?.code || "") === "P2003") {
+        logger.error({ err: e?.message || e }, "❌ prisma schema mismatch (group.create)");
       }
       logger.error({ err: e?.message || e }, "❌ group create error");
       return res.status(500).json({ error: "internal_error" });
@@ -153,8 +174,8 @@ router.post(
 
 /**
  * PATCH /settings/groups/:id
- * (admin/manager) - edita nome e/ou isActive
- * body: { name?, isActive? }
+ * (admin/manager) - edita name/isActive/maxChatsPerAgent
+ * body: { name?, isActive?, maxChatsPerAgent? }
  */
 router.patch(
   "/:id",
@@ -173,21 +194,33 @@ router.patch(
       if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
 
       const data = {};
+
       if (Object.prototype.hasOwnProperty.call(req.body || {}, "name")) {
         const name = String(req.body?.name || "").trim();
         if (!name) return res.status(400).json({ error: "Nome inválido." });
         data.name = name;
       }
+
       if (Object.prototype.hasOwnProperty.call(req.body || {}, "isActive")) {
         const parsed = parseBoolean(req.body?.isActive);
-        if (parsed === undefined) return res.status(400).json({ error: "isActive inválido (use true/false)." });
+        if (parsed === undefined) {
+          return res.status(400).json({ error: "isActive inválido (use true/false)." });
+        }
         data.isActive = parsed;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "maxChatsPerAgent")) {
+        const v = parseIntSafe(req.body?.maxChatsPerAgent);
+        if (v === undefined || v < 1) {
+          return res.status(400).json({ error: "maxChatsPerAgent inválido (>= 1)." });
+        }
+        data.maxChatsPerAgent = v;
       }
 
       const updated = await prisma.group.update({
         where: { id: group.id },
         data,
-        include: { _count: { select: { members: true } } },
+        include: { _count: { select: { members: true } } }
       });
 
       return res.json({ success: true, group: shapeGroup(updated) });
@@ -224,7 +257,7 @@ router.patch(
       const updated = await prisma.group.update({
         where: { id: group.id },
         data: { isActive: false },
-        include: { _count: { select: { members: true } } },
+        include: { _count: { select: { members: true } } }
       });
 
       return res.json({ success: true, group: shapeGroup(updated) });
@@ -258,7 +291,7 @@ router.patch(
       const updated = await prisma.group.update({
         where: { id: group.id },
         data: { isActive: true },
-        include: { _count: { select: { members: true } } },
+        include: { _count: { select: { members: true } } }
       });
 
       return res.json({ success: true, group: shapeGroup(updated) });
@@ -292,7 +325,7 @@ router.get(
       const members = await prisma.groupMember.findMany({
         where: { tenantId, groupId },
         include: { user: true },
-        orderBy: [{ isActive: "desc" }, { createdAt: "asc" }],
+        orderBy: [{ isActive: "desc" }, { createdAt: "asc" }]
       });
 
       return res.json({ data: members.map(shapeMember), total: members.length });
@@ -324,16 +357,16 @@ router.post(
       const userId = String(req.body?.userId || "").trim();
       const role = String(req.body?.role || "member").trim().toLowerCase(); // member | admin
       if (!userId) return res.status(400).json({ error: "userId é obrigatório." });
-      if (!["member", "admin"].includes(role)) return res.status(400).json({ error: "role inválida (member|admin)." });
+      if (!["member", "admin"].includes(role)) {
+        return res.status(400).json({ error: "role inválida (member|admin)." });
+      }
 
-      // grupo do tenant
       const group = await prisma.group.findFirst({ where: { id: groupId, tenantId } });
       if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
 
-      // usuário precisa existir e estar no tenant
       const membership = await prisma.userTenant.findUnique({
         where: { userId_tenantId: { userId, tenantId } },
-        select: { isActive: true },
+        select: { isActive: true }
       });
       if (!membership || membership.isActive === false) {
         return res.status(400).json({ error: "Usuário não pertence ao tenant ou está inativo." });
@@ -341,7 +374,7 @@ router.post(
 
       const created = await prisma.groupMember.create({
         data: { tenantId, groupId, userId, role, isActive: true },
-        include: { user: true },
+        include: { user: true }
       });
 
       return res.status(201).json({ success: true, member: shapeMember(created) });
@@ -357,7 +390,7 @@ router.post(
 
 /**
  * PATCH /settings/groups/:id/members/:memberId
- * (admin/manager) - edita role/isActive do membro
+ * (admin/manager) - edita role/isActive
  * body: { role?, isActive? }
  */
 router.patch(
@@ -376,7 +409,7 @@ router.patch(
 
       const member = await prisma.groupMember.findFirst({
         where: { id: memberId, tenantId, groupId },
-        include: { user: true },
+        include: { user: true }
       });
       if (!member) return res.status(404).json({ error: "Membro não encontrado." });
 
@@ -384,20 +417,24 @@ router.patch(
 
       if (Object.prototype.hasOwnProperty.call(req.body || {}, "role")) {
         const role = String(req.body?.role || "").trim().toLowerCase();
-        if (!["member", "admin"].includes(role)) return res.status(400).json({ error: "role inválida (member|admin)." });
+        if (!["member", "admin"].includes(role)) {
+          return res.status(400).json({ error: "role inválida (member|admin)." });
+        }
         data.role = role;
       }
 
       if (Object.prototype.hasOwnProperty.call(req.body || {}, "isActive")) {
         const parsed = parseBoolean(req.body?.isActive);
-        if (parsed === undefined) return res.status(400).json({ error: "isActive inválido (use true/false)." });
+        if (parsed === undefined) {
+          return res.status(400).json({ error: "isActive inválido (use true/false)." });
+        }
         data.isActive = parsed;
       }
 
       const updated = await prisma.groupMember.update({
         where: { id: member.id },
         data,
-        include: { user: true },
+        include: { user: true }
       });
 
       return res.json({ success: true, member: shapeMember(updated) });
@@ -427,7 +464,7 @@ router.delete(
       if (!groupId || !memberId) return res.status(400).json({ error: "ID inválido." });
 
       const member = await prisma.groupMember.findFirst({
-        where: { id: memberId, tenantId, groupId },
+        where: { id: memberId, tenantId, groupId }
       });
       if (!member) return res.status(404).json({ error: "Membro não encontrado." });
 

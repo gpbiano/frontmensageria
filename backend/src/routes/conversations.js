@@ -1,3 +1,4 @@
+// backend/src/routes/conversations.js
 import express from "express";
 import crypto from "crypto";
 import { loadDB, saveDB, ensureArray } from "../utils/db.js";
@@ -35,7 +36,7 @@ function ensureConversationMessages(db, conversationId) {
 }
 
 // ======================================================
-// NORMALIZA CONVERSA (handoff tradicional)
+// NORMALIZA CONVERSA (modo tradicional)
 // ======================================================
 function normalizeConversation(conv) {
   if (!conv) return conv;
@@ -63,7 +64,7 @@ function normalizeConversation(conv) {
   conv.lastMessagePreview = String(conv.lastMessagePreview || "");
   conv.lastMessageAt = conv.lastMessageAt || null;
 
-  // 🔑 REGRA DE OURO DO PAINEL
+  // 🔑 regra do painel
   if (typeof conv.inboxVisible !== "boolean") {
     conv.inboxVisible =
       conv.currentMode === "human" ||
@@ -131,7 +132,7 @@ function normalizeMsg(conv, raw) {
 }
 
 // ======================================================
-// ATUALIZA METADADOS DA CONVERSA
+// METADADOS
 // ======================================================
 function touchConversation(conv, msg) {
   const at = nowIso();
@@ -141,7 +142,7 @@ function touchConversation(conv, msg) {
 }
 
 // ======================================================
-// PROMOVE PARA INBOX (handoff real)
+// PROMOÇÃO PARA FILA HUMANA
 // ======================================================
 function promoteToInbox(conv, reason = "handoff") {
   conv.currentMode = "human";
@@ -156,7 +157,7 @@ function promoteToInbox(conv, reason = "handoff") {
 }
 
 // ======================================================
-// CORE EXPORTS (usados por WhatsApp / Webchat)
+// CORE EXPORTS
 // ======================================================
 export function getOrCreateChannelConversation(db, payload) {
   db = ensureDbShape(db);
@@ -225,7 +226,6 @@ export function appendMessage(db, conversationId, rawMsg) {
   const list = ensureConversationMessages(db, conv.id);
   const msg = normalizeMsg(conv, rawMsg);
 
-  // dedupe WhatsApp
   if (
     msg.waMessageId &&
     list.some((m) => m.waMessageId === msg.waMessageId)
@@ -251,9 +251,6 @@ export function appendMessage(db, conversationId, rawMsg) {
 // ======================================================
 // ROTAS DO PAINEL
 // ======================================================
-
-// GET /conversations
-// padrão: só inbox humano
 router.get("/", (req, res) => {
   const db = ensureDbShape(loadDB());
   let items = ensureArray(db.conversations);
@@ -272,17 +269,14 @@ router.get("/", (req, res) => {
   res.json(items);
 });
 
-// GET /conversations/:id/messages
 router.get("/:id/messages", (req, res) => {
   const db = ensureDbShape(loadDB());
   const conv = db.conversations.find((c) => c.id === req.params.id);
   if (!conv) return res.status(404).json({ error: "Conversa não encontrada" });
 
-  const list = ensureConversationMessages(db, conv.id);
-  res.json(list);
+  res.json(ensureConversationMessages(db, conv.id));
 });
 
-// POST /conversations/:id/messages (humano)
 router.post("/:id/messages", (req, res) => {
   const db = ensureDbShape(loadDB());
   const r = appendMessage(db, req.params.id, {
