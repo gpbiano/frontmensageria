@@ -1,4 +1,6 @@
 // backend/src/index.js
+// ✅ PRISMA-FIRST (sem data.json)
+// Index consolidado: tenant resolve -> rotas públicas -> auth global -> tenant guard -> prisma guard -> rotas protegidas
 
 // ===============================
 // IMPORTS (core/libs)
@@ -27,6 +29,7 @@ const ENV = process.env.NODE_ENV || "development";
 const envProdPath = path.join(__dirname, "..", ".env.production");
 const envDevPath = path.join(__dirname, "..", ".env");
 
+// Carrega env de forma previsível
 if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath });
 } else if (fs.existsSync(envDevPath)) {
@@ -58,7 +61,15 @@ try {
   const mod = await import("./lib/prisma.js");
   prisma = mod?.prisma || mod?.default || mod;
 
-  prismaReady = !!(prisma?.user && prisma?.tenant && prisma?.userTenant);
+  // checagem mínima de readiness
+  prismaReady = !!(
+    prisma?.user &&
+    prisma?.tenant &&
+    prisma?.userTenant &&
+    prisma?.conversation &&
+    prisma?.message
+  );
+
   logger.info(
     {
       prismaReady,
@@ -76,7 +87,7 @@ try {
 // ROUTERS
 // ===============================
 
-// ✅ AUTH (LOGIN OFICIAL) — evita duplicidade /login
+// ✅ AUTH (LOGIN OFICIAL)
 const { default: authRouter } = await import("./auth/authRouter.js");
 
 // 🔐 Password / convite / reset (rotas públicas em /auth/password/*)
@@ -118,6 +129,7 @@ const PORT = Number(process.env.PORT || 3010);
 // ===============================
 const app = express();
 app.set("etag", false);
+app.disable("x-powered-by");
 
 // ===============================
 // LOGGER HTTP
@@ -153,7 +165,7 @@ app.use(
   })
 );
 
-// ⚠️ JSON parser global
+// JSON parser global
 app.use(express.json({ limit: "5mb" }));
 
 // ===============================
@@ -197,10 +209,10 @@ app.use(
 // 🌍 ROTAS PÚBLICAS
 // ===============================
 
-// ❤️ Root
+// Root
 app.get("/", (_req, res) => res.json({ status: "ok" }));
 
-// ❤️ Health
+// Health
 app.get("/health", async (_req, res) => {
   let users = 0;
   let tenants = 0;
@@ -210,7 +222,6 @@ app.get("/health", async (_req, res) => {
     if (prismaReady) {
       users = await prisma.user.count();
       tenants = await prisma.tenant.count();
-
       whatsappEnabledTenants = await prisma.channelConfig.count({
         where: { channel: "whatsapp", enabled: true }
       });
@@ -232,16 +243,16 @@ app.get("/health", async (_req, res) => {
   });
 });
 
-// 🔐 AUTH (rotas públicas de login)
+// AUTH (rotas públicas de login)
 app.use("/", authRouter);
 
-// 🔐 Password / convite / reset (rotas públicas em /auth/password/*)
+// Password / convite / reset (rotas públicas)
 app.use("/auth", passwordRouter);
 
-// 🌐 WebChat (widget) — público, mas depende do DB
+// WebChat (widget) — público, mas depende do DB
 app.use("/webchat", requirePrisma, webchatRouter);
 
-// 🌐 WhatsApp Webhook — público, mas depende do DB
+// WhatsApp Webhook — público, mas depende do DB
 app.use("/webhook/whatsapp", requirePrisma, whatsappRouter);
 
 // ===============================
@@ -286,7 +297,7 @@ app.use("/outbound", outboundRouter);
 // 404
 // ===============================
 app.use((req, res) => {
-  res.status(404).json({ error: "Not Found", path: req.path });
+  res.status(404).json({ error: "not_found", path: req.path });
 });
 
 // ===============================
@@ -294,9 +305,16 @@ app.use((req, res) => {
 // ===============================
 app.use((err, req, res, _next) => {
   logger.error(
-    { err, url: req.url, method: req.method },
+    {
+      err,
+      url: req.url,
+      method: req.method,
+      tenantId: req.tenant?.id || req.tenantId || req.user?.tenantId || null,
+      userId: req.user?.id || null
+    },
     "❌ Erro não tratado"
   );
+
   res.status(500).json({ error: "internal_server_error" });
 });
 
