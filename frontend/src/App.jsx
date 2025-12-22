@@ -1,4 +1,3 @@
-// frontend/src/App.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import LoginPage from "./pages/LoginPage.jsx";
 
@@ -75,12 +74,10 @@ const SIDEBAR_LS_COLLAPSED = "gp.sidebar.collapsed";
 const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
 
 // ✅ Help Portal
-const HELP_PORTAL_URL =
-  "https://gplabs.atlassian.net/servicedesk/customer/portals";
+const HELP_PORTAL_URL = "https://gplabs.atlassian.net/servicedesk/customer/portals";
 
 /* ==========================================================
    AUTH HELPERS (localStorage OU sessionStorage)
-   ✅ FIX: SEMPRE buscar em ambos (compatível com qualquer tela)
 ========================================================== */
 function getStoredAuthToken() {
   if (typeof window === "undefined") return "";
@@ -124,26 +121,22 @@ export default function App() {
   // ✅ Página pública (sem login): /criar-senha?token=...
   const isCreatePasswordRoute = useMemo(() => {
     if (typeof window === "undefined") return false;
-    const p = window.location.pathname || "/";
-    return p === "/criar-senha";
+    const path = window.location.pathname || "/";
+    return path === "/criar-senha";
   }, []);
 
-  // ✅ FIX: sempre que o storage mudar (login em outra aba / refresh / etc.)
+  // ✅ Boot: autentica somente se token existir DE VERDADE
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    function syncAuthFromStorage() {
-      const token = getStoredAuthToken();
-      setIsAuthenticated(Boolean(token));
-    }
+    const token = getStoredAuthToken();
+    setIsAuthenticated(Boolean(token && String(token).trim()));
 
-    // 1) na montagem
-    syncAuthFromStorage();
-
-    // 2) se trocar em outra aba/janela
+    // ✅ Se token sumir (ou trocar) em outra aba, reflete aqui
     function onStorage(e) {
       if (e.key === AUTH_TOKEN_KEY || e.key === AUTH_USER_KEY) {
-        syncAuthFromStorage();
+        const t = getStoredAuthToken();
+        setIsAuthenticated(Boolean(t && String(t).trim()));
       }
     }
 
@@ -152,23 +145,18 @@ export default function App() {
   }, []);
 
   function handleLogin(data) {
-    // ✅ LoginPage salva token/user.
-    // Aqui só reflete o estado.
     if (typeof window === "undefined") return;
 
-    const token = data?.token || getStoredAuthToken();
-    setIsAuthenticated(Boolean(token));
+    // LoginPage já persiste token. Aqui só valida e “liga” a sessão.
+    const token = (data?.token || getStoredAuthToken() || "").trim();
+    if (token) setIsAuthenticated(true);
+    else setIsAuthenticated(false);
   }
 
   function handleLogout() {
     if (typeof window === "undefined") return;
     clearStoredAuth();
     setIsAuthenticated(false);
-
-    // ✅ opcional: volta pro root (evita ficar preso em rota interna)
-    try {
-      window.history.replaceState({}, "", "/");
-    } catch {}
   }
 
   if (isCreatePasswordRoute) return <CreatePasswordPage />;
@@ -278,26 +266,22 @@ function PlatformShell({ onLogout }) {
   // ✅ Empresa (mock por enquanto)
   const companyName = "Grupo GP Participações";
 
-  // ✅ Usuário logado (real)
+  // ✅ Usuário logado
   const [authUser, setAuthUser] = useState(() => getStoredAuthUser());
 
-  // ✅ FIX: se token/user mudar em outra aba, atualiza header também
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    function syncUser() {
-      setAuthUser(getStoredAuthUser());
-    }
-
     function onStorage(e) {
       if (e.key === AUTH_USER_KEY || e.key === AUTH_TOKEN_KEY) {
-        syncUser();
+        setAuthUser(getStoredAuthUser());
+
+        // ✅ Se o token sumir, faz logout (evita UI “meio logada”)
+        const t = getStoredAuthToken();
+        if (!t) onLogout?.();
       }
     }
-
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, []);
+  }, [onLogout]);
 
   const userDisplayName =
     (authUser?.name && String(authUser.name).trim()) ||
@@ -324,7 +308,6 @@ function PlatformShell({ onLogout }) {
   }, []);
 
   function handleHeaderClick(sectionId) {
-    // Em modo colapsado: clicar no header leva direto pro primeiro item
     if (collapsed) {
       const sec = MENU.find((s) => s.id === sectionId);
       const first = sec?.items?.[0]?.id || "conversas";
@@ -396,7 +379,7 @@ function PlatformShell({ onLogout }) {
             )}
           </div>
 
-          {/* ✅ Ajuda (Portal / Knowledge Base) */}
+          {/* Ajuda */}
           <a
             className="gp-help-btn"
             href={HELP_PORTAL_URL}
@@ -408,7 +391,7 @@ function PlatformShell({ onLogout }) {
             {!collapsed && <span className="gp-help-text">Ajuda</span>}
           </a>
 
-          {/* Perfil do usuário (dropdown com sair) */}
+          {/* Perfil */}
           <div className="gp-dd">
             <button
               type="button"
@@ -461,7 +444,6 @@ function PlatformShell({ onLogout }) {
           </div>
         </div>
 
-        {/* Linha de destaque */}
         <div className="gp-header-accent" />
       </header>
 
@@ -469,12 +451,9 @@ function PlatformShell({ onLogout }) {
       <div className="app-body">
         {/* SIDEBAR */}
         <nav
-          className={
-            "app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")
-          }
+          className={"app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")}
           style={{ width: collapsed ? 76 : 320 }}
         >
-          {/* ✅ Toggle SEMPRE visível */}
           <button
             type="button"
             className="sidebar-toggle-fab"
@@ -494,8 +473,7 @@ function PlatformShell({ onLogout }) {
                 <button
                   type="button"
                   className={
-                    "sidebar-item-header" +
-                    (isActive ? " sidebar-item-header-active" : "")
+                    "sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")
                   }
                   onClick={() => handleHeaderClick(section.id)}
                   title={collapsed ? section.label : undefined}
@@ -505,17 +483,11 @@ function PlatformShell({ onLogout }) {
                       <SectionIcon size={18} />
                     </span>
 
-                    {!collapsed && (
-                      <span className="sb-label">{section.label}</span>
-                    )}
+                    {!collapsed && <span className="sb-label">{section.label}</span>}
                   </span>
 
                   {!collapsed && (
-                    <span
-                      className={
-                        "sidebar-item-chevron" + (isOpen ? " open" : "")
-                      }
-                    >
+                    <span className={"sidebar-item-chevron" + (isOpen ? " open" : "")}>
                       <ChevronDown size={16} />
                     </span>
                   )}
@@ -532,10 +504,7 @@ function PlatformShell({ onLogout }) {
                         <button
                           type="button"
                           key={item.id}
-                          className={
-                            "sidebar-link" +
-                            (isItemActive ? " sidebar-link-active" : "")
-                          }
+                          className={"sidebar-link" + (isItemActive ? " sidebar-link-active" : "")}
                           onClick={() => handleItemClick(section.id, item.id)}
                         >
                           <span className="sb-sub-ic">
@@ -606,30 +575,9 @@ function SectionRenderer({ main, sub, goTo }) {
   }
 
   if (main === "campanhas") {
-    if (sub === "reportes") {
-      return (
-        <div className="page-full">
-          <CampaignsAnalyticsPage />
-        </div>
-      );
-    }
-
-    if (sub === "campanhas") {
-      return (
-        <div className="page-full">
-          <CampaignsLegacyPage />
-        </div>
-      );
-    }
-
-    if (sub === "sms") {
-      return (
-        <div className="page-full">
-          <SmsCampaignsPage />
-        </div>
-      );
-    }
-
+    if (sub === "reportes") return <div className="page-full"><CampaignsAnalyticsPage /></div>;
+    if (sub === "campanhas") return <div className="page-full"><CampaignsLegacyPage /></div>;
+    if (sub === "sms") return <div className="page-full"><SmsCampaignsPage /></div>;
     if (sub === "nova") {
       return (
         <div className="page-full">
@@ -647,63 +595,17 @@ function SectionRenderer({ main, sub, goTo }) {
         </div>
       );
     }
+    if (sub === "templates") return <div className="page-full"><TemplatesPage /></div>;
+    if (sub === "numeros") return <div className="page-full"><NumbersPage /></div>;
+    if (sub === "arquivos") return <div className="page-full"><AssetsPage /></div>;
+    if (sub === "optout") return <div className="page-full"><OptOutPage /></div>;
 
-    if (sub === "templates") {
-      return (
-        <div className="page-full">
-          <TemplatesPage />
-        </div>
-      );
-    }
-
-    if (sub === "numeros") {
-      return (
-        <div className="page-full">
-          <NumbersPage />
-        </div>
-      );
-    }
-
-    if (sub === "arquivos") {
-      return (
-        <div className="page-full">
-          <AssetsPage />
-        </div>
-      );
-    }
-
-    if (sub === "optout") {
-      return (
-        <div className="page-full">
-          <OptOutPage />
-        </div>
-      );
-    }
-
-    return (
-      <Placeholder
-        title={`Campanhas · ${subSectionLabel(sub)}`}
-        text="Seção em construção."
-      />
-    );
+    return <Placeholder title={`Campanhas · ${subSectionLabel(sub)}`} text="Seção em construção." />;
   }
 
   if (main === "configuracoes") {
-    if (sub === "canais") {
-      return (
-        <div className="page-full">
-          <SettingsChannelsPage />
-        </div>
-      );
-    }
-
-    if (sub === "usuarios") {
-      return (
-        <div className="page-full">
-          <SettingsUsersPage />
-        </div>
-      );
-    }
+    if (sub === "canais") return <div className="page-full"><SettingsChannelsPage /></div>;
+    if (sub === "usuarios") return <div className="page-full"><SettingsUsersPage /></div>;
 
     return (
       <Placeholder
