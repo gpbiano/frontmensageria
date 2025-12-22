@@ -1,275 +1,442 @@
 // backend/src/settings/groupsRouter.js
 import express from "express";
 import prisma from "../lib/prisma.js";
-import { requireAuth, enforceTokenTenant } from "../middleware/requireAuth.js";
+import { requireAuth, enforceTokenTenant, requireRole } from "../middleware/requireAuth.js";
+import logger from "../logger.js";
 
 const router = express.Router();
 
-/**
- * Roles permitidas:
- * - admin: tudo
- * - manager: listar + editar (sem criar? aqui deixei criar/editar também, ajuste se quiser)
- * - agent/viewer: somente leitura (se você preferir, dá pra bloquear total)
- */
-function requireRole(allowed = []) {
-  return (req, res, next) => {
-    const role = req.user?.role;
-    if (!role) return res.status(401).json({ error: "not_authenticated" });
-    if (!allowed.includes(role)) {
-      return res.status(403).json({ error: "forbidden", message: "Sem permissão." });
-    }
-    next();
-  };
-}
-
 function getTenantId(req) {
-  // resolveTenant costuma preencher req.tenant
   const tenantId = req.tenant?.id || req.tenantId;
   return tenantId ? String(tenantId) : null;
 }
 
-function normalizeColor(v) {
-  if (!v) return null;
-  const s = String(v).trim();
-  // aceita #RGB/#RRGGBB simples
-  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s)) return null;
-  return s.toLowerCase();
+function parseBoolean(v) {
+  if (typeof v === "boolean") return v;
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "true" || s === "1" || s === "yes") return true;
+  if (s === "false" || s === "0" || s === "no") return false;
+  return undefined;
 }
 
-function parseSlaMinutes(v) {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.floor(n);
+function shapeGroup(g) {
+  return {
+    id: g.id,
+    tenantId: g.tenantId,
+    name: g.name,
+    isActive: g.isActive !== false,
+    createdAt: g.createdAt,
+    updatedAt: g.updatedAt,
+    membersCount: typeof g._count?.members === "number" ? g._count.members : undefined,
+  };
 }
 
-// ✅ LISTAR GRUPOS
-// GET /settings/groups?active=true|false|all
+function shapeMember(m) {
+  return {
+    id: m.id,
+    tenantId: m.tenantId,
+    groupId: m.groupId,
+    userId: m.userId,
+    role: m.role,
+    isActive: m.isActive !== false,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+    user: m.user
+      ? {
+          id: m.user.id,
+          email: m.user.email,
+          name: m.user.name || null,
+          isActive: m.user.isActive !== false,
+        }
+      : undefined,
+  };
+}
+
+/**
+ * GET /settings/groups
+ * (admin/manager/agent/viewer) - lista grupos do tenant
+ */
 router.get(
   "/",
   requireAuth,
   enforceTokenTenant,
-  requireRole(["admin", "manager", "agent", "viewer"]),
+  requireRole("admin", "manager", "agent", "viewer"),
   async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-      const active = String(req.query.active || "true").toLowerCase();
-      const where = { tenantId };
-
-      if (active === "true") where.isActive = true;
-      else if (active === "false") where.isActive = false;
-      // active=all -> sem filtro
-
       const groups = await prisma.group.findMany({
-        where,
+        where: { tenantId },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
+        include: { _count: { select: { members: true } } },
       });
 
-      res.json({ items: groups, total: groups.length });
-    } catch (err) {
-      console.error("[groups] list error:", err);
-      res.status(500).json({ error: "internal_error" });
+      return res.json({ data: groups.map(shapeGroup), total: groups.length });
+    } catch (e) {
+      logger.error({ err: e?.message || e }, "❌ groups list error");
+      return res.status(500).json({ error: "internal_error" });
     }
   }
 );
 
-// ✅ CRIAR GRUPO
-// POST /settings/groups
-// body: { name, color?, slaMinutes? }
+/**
+ * GET /settings/groups/:id
+ * (admin/manager/agent/viewer) - detalhes de 1 grupo (com count)
+ */
+router.get(
+  "/:id",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager", "agent", "viewer"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ error: "ID inválido." });
+
+      const group = await prisma.group.findFirst({
+        where: { id, tenantId },
+        include: { _count: { select: { members: true } } },
+      });
+
+      if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
+
+      return res.json({ group: shapeGroup(group) });
+    } catch (e) {
+      logger.error({ err: e?.message || e }, "❌ group get error");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+/**
+ * POST /settings/groups
+ * (admin/manager) - cria grupo no tenant
+ * body: { name }
+ */
 router.post(
   "/",
   requireAuth,
   enforceTokenTenant,
-  requireRole(["admin", "manager"]),
+  requireRole("admin", "manager"),
   async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
       const name = String(req.body?.name || "").trim();
-      const color = normalizeColor(req.body?.color) || "#22c55e";
-      const slaMinutes = parseSlaMinutes(req.body?.slaMinutes) ?? 10;
+      if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
 
-      if (!name) {
-        return res.status(400).json({ error: "validation_error", message: "name é obrigatório." });
-      }
-
-      // Evitar duplicado por tenant (case-insensitive)
-      const existing = await prisma.group.findFirst({
-        where: {
-          tenantId,
-          name: { equals: name, mode: "insensitive" },
-        },
-        select: { id: true },
-      });
-
-      if (existing) {
-        return res.status(409).json({
-          error: "already_exists",
-          message: "Já existe um grupo com esse nome.",
-        });
-      }
-
-      const group = await prisma.group.create({
+      const created = await prisma.group.create({
         data: {
-          name,
-          color,
-          slaMinutes,
-          isActive: true,
           tenantId,
+          name,
+          isActive: true,
         },
+        include: { _count: { select: { members: true } } },
       });
 
-      res.status(201).json(group);
-    } catch (err) {
-      console.error("[groups] create error:", err);
-      res.status(500).json({ error: "internal_error" });
+      return res.status(201).json({ success: true, group: shapeGroup(created) });
+    } catch (e) {
+      // unique([tenantId, name]) -> P2002
+      if (String(e?.code || "") === "P2002") {
+        return res.status(409).json({ error: "Já existe um grupo com esse nome neste tenant." });
+      }
+      logger.error({ err: e?.message || e }, "❌ group create error");
+      return res.status(500).json({ error: "internal_error" });
     }
   }
 );
 
-// ✅ EDITAR GRUPO
-// PATCH /settings/groups/:id
-// body: { name?, color?, slaMinutes? }
+/**
+ * PATCH /settings/groups/:id
+ * (admin/manager) - edita nome e/ou isActive
+ * body: { name?, isActive? }
+ */
 router.patch(
   "/:id",
   requireAuth,
   enforceTokenTenant,
-  requireRole(["admin", "manager"]),
+  requireRole("admin", "manager"),
   async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
       const id = String(req.params.id || "").trim();
-      if (!id) return res.status(400).json({ error: "validation_error", message: "id inválido." });
+      if (!id) return res.status(400).json({ error: "ID inválido." });
 
-      const patch = {};
-      if (req.body?.name !== undefined) {
-        const name = String(req.body.name || "").trim();
-        if (!name) {
-          return res
-            .status(400)
-            .json({ error: "validation_error", message: "name não pode ser vazio." });
-        }
-        patch.name = name;
-      }
-      if (req.body?.color !== undefined) {
-        const c = normalizeColor(req.body.color);
-        if (!c) {
-          return res
-            .status(400)
-            .json({ error: "validation_error", message: "color inválida. Use #RGB ou #RRGGBB." });
-        }
-        patch.color = c;
-      }
-      if (req.body?.slaMinutes !== undefined) {
-        const sla = parseSlaMinutes(req.body.slaMinutes);
-        if (sla === null) {
-          return res
-            .status(400)
-            .json({ error: "validation_error", message: "slaMinutes inválido." });
-        }
-        patch.slaMinutes = sla;
-      }
+      const group = await prisma.group.findFirst({ where: { id, tenantId } });
+      if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
 
-      if (Object.keys(patch).length === 0) {
-        return res.status(400).json({ error: "validation_error", message: "Nada para atualizar." });
+      const data = {};
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "name")) {
+        const name = String(req.body?.name || "").trim();
+        if (!name) return res.status(400).json({ error: "Nome inválido." });
+        data.name = name;
       }
-
-      // Confere se existe no tenant
-      const current = await prisma.group.findFirst({
-        where: { id, tenantId },
-      });
-      if (!current) return res.status(404).json({ error: "not_found" });
-
-      // Se mudou nome, checa duplicado no tenant
-      if (patch.name) {
-        const dup = await prisma.group.findFirst({
-          where: {
-            tenantId,
-            id: { not: id },
-            name: { equals: patch.name, mode: "insensitive" },
-          },
-          select: { id: true },
-        });
-        if (dup) {
-          return res.status(409).json({
-            error: "already_exists",
-            message: "Já existe um grupo com esse nome.",
-          });
-        }
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "isActive")) {
+        const parsed = parseBoolean(req.body?.isActive);
+        if (parsed === undefined) return res.status(400).json({ error: "isActive inválido (use true/false)." });
+        data.isActive = parsed;
       }
 
       const updated = await prisma.group.update({
-        where: { id },
-        data: patch,
+        where: { id: group.id },
+        data,
+        include: { _count: { select: { members: true } } },
       });
 
-      res.json(updated);
-    } catch (err) {
-      console.error("[groups] patch error:", err);
-      res.status(500).json({ error: "internal_error" });
+      return res.json({ success: true, group: shapeGroup(updated) });
+    } catch (e) {
+      if (String(e?.code || "") === "P2002") {
+        return res.status(409).json({ error: "Já existe um grupo com esse nome neste tenant." });
+      }
+      logger.error({ err: e?.message || e }, "❌ group patch error");
+      return res.status(500).json({ error: "internal_error" });
     }
   }
 );
 
-// ✅ DESATIVAR
-// PATCH /settings/groups/:id/deactivate
+/**
+ * PATCH /settings/groups/:id/deactivate
+ * (admin/manager) - desativa grupo
+ */
 router.patch(
   "/:id/deactivate",
   requireAuth,
   enforceTokenTenant,
-  requireRole(["admin"]),
+  requireRole("admin", "manager"),
   async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
       const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ error: "ID inválido." });
+
       const group = await prisma.group.findFirst({ where: { id, tenantId } });
-      if (!group) return res.status(404).json({ error: "not_found" });
+      if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
 
       const updated = await prisma.group.update({
-        where: { id },
+        where: { id: group.id },
         data: { isActive: false },
+        include: { _count: { select: { members: true } } },
       });
 
-      res.json(updated);
-    } catch (err) {
-      console.error("[groups] deactivate error:", err);
-      res.status(500).json({ error: "internal_error" });
+      return res.json({ success: true, group: shapeGroup(updated) });
+    } catch (e) {
+      logger.error({ err: e?.message || e }, "❌ group deactivate error");
+      return res.status(500).json({ error: "internal_error" });
     }
   }
 );
 
-// ✅ ATIVAR
-// PATCH /settings/groups/:id/activate
+/**
+ * PATCH /settings/groups/:id/activate
+ * (admin/manager) - reativa grupo
+ */
 router.patch(
   "/:id/activate",
   requireAuth,
   enforceTokenTenant,
-  requireRole(["admin"]),
+  requireRole("admin", "manager"),
   async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
       const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ error: "ID inválido." });
+
       const group = await prisma.group.findFirst({ where: { id, tenantId } });
-      if (!group) return res.status(404).json({ error: "not_found" });
+      if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
 
       const updated = await prisma.group.update({
-        where: { id },
+        where: { id: group.id },
         data: { isActive: true },
+        include: { _count: { select: { members: true } } },
       });
 
-      res.json(updated);
-    } catch (err) {
-      console.error("[groups] activate error:", err);
-      res.status(500).json({ error: "internal_error" });
+      return res.json({ success: true, group: shapeGroup(updated) });
+    } catch (e) {
+      logger.error({ err: e?.message || e }, "❌ group activate error");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+/**
+ * GET /settings/groups/:id/members
+ * (admin/manager/agent/viewer) - lista membros do grupo
+ */
+router.get(
+  "/:id/members",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager", "agent", "viewer"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const groupId = String(req.params.id || "").trim();
+      if (!groupId) return res.status(400).json({ error: "ID inválido." });
+
+      const group = await prisma.group.findFirst({ where: { id: groupId, tenantId } });
+      if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
+
+      const members = await prisma.groupMember.findMany({
+        where: { tenantId, groupId },
+        include: { user: true },
+        orderBy: [{ isActive: "desc" }, { createdAt: "asc" }],
+      });
+
+      return res.json({ data: members.map(shapeMember), total: members.length });
+    } catch (e) {
+      logger.error({ err: e?.message || e }, "❌ group members list error");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+/**
+ * POST /settings/groups/:id/members
+ * (admin/manager) - adiciona membro ao grupo
+ * body: { userId, role? }
+ */
+router.post(
+  "/:id/members",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const groupId = String(req.params.id || "").trim();
+      if (!groupId) return res.status(400).json({ error: "ID inválido." });
+
+      const userId = String(req.body?.userId || "").trim();
+      const role = String(req.body?.role || "member").trim().toLowerCase(); // member | admin
+      if (!userId) return res.status(400).json({ error: "userId é obrigatório." });
+      if (!["member", "admin"].includes(role)) return res.status(400).json({ error: "role inválida (member|admin)." });
+
+      // grupo do tenant
+      const group = await prisma.group.findFirst({ where: { id: groupId, tenantId } });
+      if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
+
+      // usuário precisa existir e estar no tenant
+      const membership = await prisma.userTenant.findUnique({
+        where: { userId_tenantId: { userId, tenantId } },
+        select: { isActive: true },
+      });
+      if (!membership || membership.isActive === false) {
+        return res.status(400).json({ error: "Usuário não pertence ao tenant ou está inativo." });
+      }
+
+      const created = await prisma.groupMember.create({
+        data: { tenantId, groupId, userId, role, isActive: true },
+        include: { user: true },
+      });
+
+      return res.status(201).json({ success: true, member: shapeMember(created) });
+    } catch (e) {
+      if (String(e?.code || "") === "P2002") {
+        return res.status(409).json({ error: "Usuário já está neste grupo." });
+      }
+      logger.error({ err: e?.message || e }, "❌ group member create error");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+/**
+ * PATCH /settings/groups/:id/members/:memberId
+ * (admin/manager) - edita role/isActive do membro
+ * body: { role?, isActive? }
+ */
+router.patch(
+  "/:id/members/:memberId",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const groupId = String(req.params.id || "").trim();
+      const memberId = String(req.params.memberId || "").trim();
+      if (!groupId || !memberId) return res.status(400).json({ error: "ID inválido." });
+
+      const member = await prisma.groupMember.findFirst({
+        where: { id: memberId, tenantId, groupId },
+        include: { user: true },
+      });
+      if (!member) return res.status(404).json({ error: "Membro não encontrado." });
+
+      const data = {};
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "role")) {
+        const role = String(req.body?.role || "").trim().toLowerCase();
+        if (!["member", "admin"].includes(role)) return res.status(400).json({ error: "role inválida (member|admin)." });
+        data.role = role;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "isActive")) {
+        const parsed = parseBoolean(req.body?.isActive);
+        if (parsed === undefined) return res.status(400).json({ error: "isActive inválido (use true/false)." });
+        data.isActive = parsed;
+      }
+
+      const updated = await prisma.groupMember.update({
+        where: { id: member.id },
+        data,
+        include: { user: true },
+      });
+
+      return res.json({ success: true, member: shapeMember(updated) });
+    } catch (e) {
+      logger.error({ err: e?.message || e }, "❌ group member patch error");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+/**
+ * DELETE /settings/groups/:id/members/:memberId
+ * (admin/manager) - remove membro do grupo (delete físico)
+ */
+router.delete(
+  "/:id/members/:memberId",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const groupId = String(req.params.id || "").trim();
+      const memberId = String(req.params.memberId || "").trim();
+      if (!groupId || !memberId) return res.status(400).json({ error: "ID inválido." });
+
+      const member = await prisma.groupMember.findFirst({
+        where: { id: memberId, tenantId, groupId },
+      });
+      if (!member) return res.status(404).json({ error: "Membro não encontrado." });
+
+      await prisma.groupMember.delete({ where: { id: member.id } });
+
+      return res.json({ success: true });
+    } catch (e) {
+      logger.error({ err: e?.message || e }, "❌ group member delete error");
+      return res.status(500).json({ error: "internal_error" });
     }
   }
 );

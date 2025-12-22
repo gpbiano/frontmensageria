@@ -1,156 +1,209 @@
-// backend/src/routes/channels.js
 import express from "express";
-import { loadDB, saveDB } from "../utils/db.js";
-import { requireAuth, requireRole } from "../middleware/requireAuth.js";
-import {
-  getChannels,
-  updateWebchatChannel,
-  rotateWebchatKey,
-  buildWebchatSnippet
-} from "../settings/channelsStorage.js";
+import crypto from "crypto";
+import prisma from "../lib/prisma.js";
+import { requireAuth, enforceTokenTenant, requireRole } from "../middleware/requireAuth.js";
 
 const router = express.Router();
 
-function envInfo() {
-  const env = process.env.NODE_ENV || "development";
-  return { env };
+/**
+ * helpers
+ */
+function now() {
+  return new Date();
 }
 
-function ensureChannelsAndReturn(db) {
-  // getChannels garante defaults e agora retorna LISTA (array)
-  const channelsList = getChannels(db);
-  const channelsMap = db?.settings?.channels || {};
-  return { channelsList, channelsMap };
+function newWidgetKey() {
+  return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
-// ======================================================
-// GET /settings/channels
-// Retorna lista (array) para o front
-// ======================================================
+/**
+ * Defaults por canal (compatível com front atual)
+ */
+function defaultChannel(channel) {
+  if (channel === "webchat") {
+    return {
+      enabled: false,
+      status: "disabled",
+      widgetKey: newWidgetKey(),
+      config: {
+        primaryColor: "#34d399",
+        color: "#34d399",
+        position: "right",
+        buttonText: "Ajuda",
+        headerTitle: "Atendimento",
+        title: "Atendimento",
+        greeting: "Olá! Como posso ajudar?"
+      }
+    };
+  }
+
+  if (channel === "whatsapp") {
+    return {
+      enabled: true,
+      status: "connected",
+      config: {}
+    };
+  }
+
+  return {
+    enabled: false,
+    status: "soon",
+    config: {}
+  };
+}
+
+/**
+ * GET /settings/channels
+ * Lista todos os canais do tenant
+ */
 router.get(
   "/",
   requireAuth,
-  requireRole("admin", "manager"),
+  enforceTokenTenant,
   async (req, res) => {
-    const db = loadDB();
-    const { channelsList, channelsMap } = ensureChannelsAndReturn(db);
-    saveDB(db);
+    const tenantId = req.tenant?.id;
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    return res.json({
-      ...envInfo(),
-      channels: channelsList, // ✅ formato pro front
-      channelsMap // ✅ retrocompatibilidade (se algo antigo usava objeto)
+    const existing = await prisma.channelConfig.findMany({
+      where: { tenantId }
     });
+
+    const byChannel = Object.fromEntries(
+      existing.map((c) => [c.channel, c])
+    );
+
+    const channels = ["whatsapp", "webchat", "messenger", "instagram"].map(
+      async (ch) => {
+        let row = byChannel[ch];
+
+        if (!row) {
+          const def = defaultChannel(ch);
+          row = await prisma.channelConfig.create({
+            data: {
+              tenantId,
+              channel: ch,
+              enabled: def.enabled,
+              status: def.status,
+              widgetKey: def.widgetKey,
+              config: def.config
+            }
+          });
+        }
+
+        return {
+          id: row.channel,
+          name:
+            row.channel === "whatsapp"
+              ? "WhatsApp Cloud API"
+              : row.channel === "webchat"
+              ? "Web Chat (Widget)"
+              : row.channel === "messenger"
+              ? "Facebook Messenger"
+              : "Instagram Direct",
+          description:
+            row.channel === "whatsapp"
+              ? "Canal oficial do WhatsApp via Meta Cloud API."
+              : row.channel === "webchat"
+              ? "Widget de atendimento para seu site."
+              : "Em breve.",
+          enabled: row.enabled,
+          status: row.status,
+          widgetKey: row.widgetKey,
+          config: row.config || {},
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt
+        };
+      }
+    );
+
+    res.json(await Promise.all(channels));
   }
 );
 
-// ======================================================
-// GET /settings/channels/webchat
-// ======================================================
-router.get(
-  "/webchat",
-  requireAuth,
-  requireRole("admin", "manager"),
-  async (req, res) => {
-    const db = loadDB();
-    ensureChannelsAndReturn(db);
-    saveDB(db);
-
-    return res.json({
-      ...envInfo(),
-      webchat: db?.settings?.channels?.webchat || null
-    });
-  }
-);
-
-// ======================================================
-// PATCH /settings/channels/webchat
-// ======================================================
+/**
+ * PATCH /settings/channels/webchat
+ * Atualiza config do widget
+ */
 router.patch(
   "/webchat",
   requireAuth,
+  enforceTokenTenant,
   requireRole("admin", "manager"),
   async (req, res) => {
-    const db = loadDB();
-    ensureChannelsAndReturn(db); // garante defaults
+    const tenantId = req.tenant?.id;
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const current =
+      (await prisma.channelConfig.findUnique({
+        where: {
+          tenantId_channel: { tenantId, channel: "webchat" }
+        }
+      })) ||
+      (await prisma.channelConfig.create({
+        data: {
+          tenantId,
+          channel: "webchat",
+          ...defaultChannel("webchat")
+        }
+      }));
 
     const patch = req.body || {};
-    const webchat = updateWebchatChannel(db, patch);
+    const nextConfig = {
+      ...(current.config || {}),
+      ...(patch.config || {})
+    };
 
-    saveDB(db);
+    // compat frontend
+    if (nextConfig.primaryColor && !nextConfig.color)
+      nextConfig.color = nextConfig.primaryColor;
+    if (nextConfig.color && !nextConfig.primaryColor)
+      nextConfig.primaryColor = nextConfig.color;
 
-    return res.json({
-      ok: true,
-      ...envInfo(),
-      webchat
+    const updated = await prisma.channelConfig.update({
+      where: { id: current.id },
+      data: {
+        enabled:
+          typeof patch.enabled === "boolean"
+            ? patch.enabled
+            : current.enabled,
+        status:
+          typeof patch.enabled === "boolean"
+            ? patch.enabled
+              ? "connected"
+              : "disabled"
+            : current.status,
+        config: nextConfig,
+        updatedAt: now()
+      }
     });
+
+    res.json(updated);
   }
 );
 
-// ======================================================
-// POST /settings/channels/webchat/rotate-key
-// ======================================================
+/**
+ * POST /settings/channels/webchat/rotate-key
+ */
 router.post(
   "/webchat/rotate-key",
   requireAuth,
-  requireRole("admin", "manager"),
+  enforceTokenTenant,
+  requireRole("admin"),
   async (req, res) => {
-    const db = loadDB();
-    ensureChannelsAndReturn(db); // garante defaults
+    const tenantId = req.tenant?.id;
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    const out = rotateWebchatKey(db);
-    saveDB(db);
-
-    return res.json({
-      ok: true,
-      ...envInfo(),
-      ...out
-    });
-  }
-);
-
-// ======================================================
-// GET /settings/channels/webchat/snippet
-// ======================================================
-router.get(
-  "/webchat/snippet",
-  requireAuth,
-  requireRole("admin", "manager"),
-  async (req, res) => {
-    const db = loadDB();
-    ensureChannelsAndReturn(db);
-    saveDB(db);
-
-    const webchat = db?.settings?.channels?.webchat || {};
-
-    // URL pública do widget.js (você pode setar no .env)
-    const widgetJsUrl =
-      process.env.WIDGET_PUBLIC_URL ||
-      "https://widget.gplabs.com.br/widget.js";
-
-    // API base opcional
-    // - prioriza query ?apiBase=
-    // - depois env PUBLIC_API_BASE
-    // - fallback: api.gplabs.com.br (sua API)
-    const apiBase =
-      (req.query.apiBase ? String(req.query.apiBase) : "") ||
-      process.env.PUBLIC_API_BASE ||
-      "https://api.gplabs.com.br";
-
-    const scriptTag = buildWebchatSnippet({
-      widgetJsUrl,
-      widgetKey: webchat.widgetKey,
-      apiBase
+    const updated = await prisma.channelConfig.update({
+      where: {
+        tenantId_channel: { tenantId, channel: "webchat" }
+      },
+      data: {
+        widgetKey: newWidgetKey(),
+        updatedAt: now()
+      }
     });
 
-    return res.json({
-      ok: true,
-      ...envInfo(),
-      widgetJsUrl,
-      widgetKey: webchat.widgetKey,
-      allowedOrigins: webchat.allowedOrigins || [],
-      scriptTag
-    });
+    res.json({ widgetKey: updated.widgetKey });
   }
 );
 
