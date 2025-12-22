@@ -1,3 +1,4 @@
+// backend/src/routes/channels/whatsappRouter.js
 import express from "express";
 import logger from "../../logger.js";
 import { loadDB, saveDB, ensureArray } from "../../utils/db.js";
@@ -7,12 +8,6 @@ import {
   decideRoute
 } from "../../chatbot/rulesEngine.js";
 import { callGenAIBot } from "../../chatbot/botEngine.js";
-
-// ✅ CORE OFICIAL (conversas + persistência)
-import {
-  getOrCreateChannelConversation,
-  appendMessage
-} from "../conversations.js";
 
 const router = express.Router();
 
@@ -39,6 +34,54 @@ function ensureDbShape(db) {
 }
 
 // ======================================================
+// ✅ Conversations CORE loader (compatível ESM)
+// - evita crash "does not provide an export named ..."
+// ======================================================
+let __convCore = null;
+
+async function getConversationsCore() {
+  if (__convCore) return __convCore;
+
+  const candidates = [
+    // caminho mais comum quando o router está em src/routes/channels/*
+    () => import("../conversations.js"),
+    // fallback (caso você tenha movido conversations para routes raiz)
+    () => import("../conversations/index.js"),
+    // fallback mais amplo
+    () => import("../../routes/conversations.js")
+  ];
+
+  let lastError = null;
+
+  for (const load of candidates) {
+    try {
+      const mod = await load();
+
+      const getOrCreateChannelConversation =
+        mod?.getOrCreateChannelConversation || mod?.default?.getOrCreateChannelConversation;
+
+      const appendMessage = mod?.appendMessage || mod?.default?.appendMessage;
+
+      if (
+        typeof getOrCreateChannelConversation === "function" &&
+        typeof appendMessage === "function"
+      ) {
+        __convCore = { getOrCreateChannelConversation, appendMessage };
+        return __convCore;
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  logger.error(
+    { err: lastError },
+    "❌ Conversations core não encontrado ou exports incompatíveis"
+  );
+  throw new Error("Conversations core não encontrado ou exports incompatíveis");
+}
+
+// ======================================================
 // WhatsApp ENV (runtime safe)
 // ======================================================
 function getWaConfig() {
@@ -57,7 +100,7 @@ function getPublicApiBaseUrl(req) {
   if (envBase) return envBase;
 
   const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http");
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host);
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "");
   return `${proto}://${host}`;
 }
 
@@ -92,6 +135,10 @@ router.post("/", async (req, res, next) => {
     const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
 
     if (!messages.length) return res.sendStatus(200);
+
+    // ✅ carrega core uma única vez por request
+    const { getOrCreateChannelConversation, appendMessage } =
+      await getConversationsCore();
 
     let db = ensureDbShape(loadDB());
     const publicBase = getPublicApiBaseUrl(req);
@@ -137,7 +184,7 @@ router.post("/", async (req, res, next) => {
       }
 
       // =====================
-      // MEDIA
+      // MEDIA (image/video/audio/document/sticker)
       // =====================
       if (["image", "video", "audio", "document", "sticker"].includes(type)) {
         const media = msg[type] || {};
@@ -177,7 +224,9 @@ router.post("/", async (req, res, next) => {
         text =
           loc.name ||
           loc.address ||
-          `Localização: ${loc.latitude}, ${loc.longitude}`;
+          (loc.latitude != null && loc.longitude != null
+            ? `Localização: ${loc.latitude}, ${loc.longitude}`
+            : "[localização]");
       }
 
       // =====================
