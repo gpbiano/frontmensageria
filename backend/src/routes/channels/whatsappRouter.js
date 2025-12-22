@@ -65,6 +65,11 @@ function onlyDigits(v) {
   return String(v || "").replace(/\D/g, "");
 }
 
+// ✅ Meta manda outros eventos (statuses, etc). Só queremos messages.
+function hasInboundMessages(value) {
+  return Array.isArray(value?.messages) && value.messages.length > 0;
+}
+
 function getPublicApiBaseUrl(req) {
   const envBase = String(process.env.PUBLIC_API_BASE_URL || "")
     .trim()
@@ -171,10 +176,12 @@ router.post("/", async (req, res, next) => {
     }
 
     const value = body.entry?.[0]?.changes?.[0]?.value;
-    const messages = Array.isArray(value?.messages) ? value.messages : [];
-    const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
 
-    if (!messages.length) return res.sendStatus(200);
+    // ✅ Ignora callbacks que não são mensagens (ex: statuses)
+    if (!hasInboundMessages(value)) return res.sendStatus(200);
+
+    const messages = value.messages;
+    const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
 
     if (!hasWaConfigured()) {
       logger.warn(
@@ -188,6 +195,12 @@ router.post("/", async (req, res, next) => {
     for (const msg of messages) {
       const waId = msg.from;
       if (!waId) continue;
+
+      // ✅ Anti-loop: se por algum motivo vier mensagem enviada por nós mesmos (raro),
+      // não respondemos de novo.
+      if (msg.from === value?.metadata?.display_phone_number) {
+        continue;
+      }
 
       const contactMatch =
         contacts.find((c) => String(c?.wa_id) === String(waId)) || contacts[0] || null;
@@ -293,8 +306,10 @@ router.post("/", async (req, res, next) => {
       if (isAlreadyHandoff) continue;
 
       // ==================================================
-      // BOT DECISION
+      // BOT DECISION (só decide com texto; outros tipos ficam só no histórico)
       // ==================================================
+      if (type !== "text") continue;
+
       const accountId = conv.accountId || "default";
       const accountSettings = getChatbotSettingsForAccount(accountId);
 
@@ -342,6 +357,7 @@ router.post("/", async (req, res, next) => {
           source: "whatsapp"
         });
 
+        // reforça modo local também
         conv.currentMode = "human";
         conv.handoffActive = true;
         conv.handoffSince = conv.handoffSince || nowIso();
@@ -350,52 +366,47 @@ router.post("/", async (req, res, next) => {
       }
 
       // ==================================================
-      // ✅ BOT REPLY (somente texto)
+      // ✅ BOT REPLY (texto)
       // ==================================================
-      if (shouldBotReply && type === "text") {
-        const botResult = await callGenAIBot({
-          accountSettings,
-          conversation: conv,
-          messageText: text,
-          history: []
-        });
+      const botResult = await callGenAIBot({
+        accountSettings,
+        conversation: conv,
+        messageText: text,
+        history: []
+      });
 
-        const reply = String(botResult?.replyText || "").trim();
-        if (reply) {
-          const sent = await sendWhatsAppText({ to: waId, body: reply });
+      const reply = String(botResult?.replyText || "").trim();
+      if (!reply) continue;
 
-          const waBotId =
-            sent?.data?.messages?.[0]?.id ||
-            sent?.data?.message_id ||
-            sent?.data?.id ||
-            null;
+      const sent = await sendWhatsAppText({ to: waId, body: reply });
 
-          appendMessage(db, conv.id, {
-            type: "text",
-            from: "bot",
-            direction: "out",
-            text: reply,
-            createdAt: nowIso(),
-            isBot: true,
-            waMessageId: waBotId || undefined,
-            delivery: sent?.ok
-              ? { status: "sent", at: nowIso() }
-              : {
-                  status: "failed",
-                  error:
-                    sent?.raw ||
-                    sent?.error ||
-                    (sent?.data ? JSON.stringify(sent.data) : "send_failed"),
-                  at: nowIso()
-                },
-            channel: "whatsapp",
-            source: "whatsapp"
-          });
+      const waBotId =
+        sent?.data?.messages?.[0]?.id ||
+        sent?.data?.message_id ||
+        sent?.data?.id ||
+        null;
 
-          conv.currentMode = "bot";
-          conv.botAttempts = (conv.botAttempts || 0) + 1;
-        }
-      }
+      appendMessage(db, conv.id, {
+        type: "text",
+        from: "bot",
+        direction: "out",
+        text: reply,
+        createdAt: nowIso(),
+        isBot: true,
+        waMessageId: waBotId || undefined,
+        delivery: sent?.ok
+          ? { status: "sent", at: nowIso() }
+          : {
+              status: "failed",
+              error: sent?.raw || sent?.error || (sent?.data ? JSON.stringify(sent.data) : "send_failed"),
+              at: nowIso()
+            },
+        channel: "whatsapp",
+        source: "whatsapp"
+      });
+
+      conv.currentMode = "bot";
+      conv.botAttempts = (conv.botAttempts || 0) + 1;
     }
 
     saveDB(db);
