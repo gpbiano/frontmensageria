@@ -49,12 +49,13 @@ function isUnauthorized(res: Response) {
 /**
  * ✅ Regra:
  * - Não deixar "extra headers" sobrescrever Authorization.
- * - Também não sobrescrever Content-Type automaticamente se for FormData.
+ * - Não sobrescrever Content-Type automaticamente se for FormData.
+ * - Merge previsível (HeadersInit pode ser várias formas).
  */
 function buildHeaders(extra?: HeadersInit): HeadersInit {
   const token = getToken();
 
-  // Normaliza HeadersInit -> objeto simples (pra merge previsível)
+  // Normaliza extra -> objeto simples
   const normalized: Record<string, string> = {};
   if (extra) {
     const h = new Headers(extra);
@@ -63,7 +64,11 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
     });
   }
 
-  // ⚠️ Authorization por último (não pode ser sobrescrito por extra)
+  // Remove Authorization vindo de fora (case-insensitive), pra não sobrescrever o token
+  Object.keys(normalized).forEach((k) => {
+    if (k.toLowerCase() === "authorization") delete normalized[k];
+  });
+
   return {
     ...normalized,
     ...(token ? { Authorization: `Bearer ${token}` } : {})
@@ -182,12 +187,15 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
     body
   });
 
-  // ✅ 401: limpa token
+  // ✅ 401: limpa token (sessão inválida)
   if (isUnauthorized(res)) {
-    clearAuth();
-    const payload = await safeReadJson(res);
+    const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
+
     console.error("🔒 API 401:", path, payload || text);
+
+    clearAuth();
+
     throw new Error(
       payload?.message ||
         payload?.error ||
@@ -230,11 +238,17 @@ async function requestForm<T = any>(
   });
 
   if (isUnauthorized(res)) {
-    clearAuth();
-    const payload = await safeReadJson(res);
+    const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
     console.error("🔒 API FORM 401:", path, payload || text);
-    throw new Error("Sessão expirada ou token inválido. Faça login novamente.");
+
+    clearAuth();
+
+    throw new Error(
+      payload?.message ||
+        payload?.error ||
+        "Sessão expirada ou token inválido. Faça login novamente."
+    );
   }
 
   if (!res.ok) {
@@ -268,11 +282,17 @@ async function downloadBlob(path: string, filename: string) {
   });
 
   if (isUnauthorized(res)) {
-    clearAuth();
-    const payload = await safeReadJson(res);
+    const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
     console.error("🔒 DOWNLOAD 401:", path, payload || text);
-    throw new Error("Sessão expirada ou token inválido. Faça login novamente.");
+
+    clearAuth();
+
+    throw new Error(
+      payload?.message ||
+        payload?.error ||
+        "Sessão expirada ou token inválido. Faça login novamente."
+    );
   }
 
   if (!res.ok) {
@@ -305,7 +325,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
     body: { email, password }
   });
 
-  // ✅ FIX DEFINITIVO: grava em ambos para evitar mismatch
+  // ✅ FIX DEFINITIVO: grava em ambos (evita mismatch com rememberMe)
   if (data?.token && typeof window !== "undefined") {
     localStorage.setItem(AUTH_KEY, data.token);
     sessionStorage.setItem(AUTH_KEY, data.token);
@@ -315,9 +335,23 @@ export async function login(email: string, password: string): Promise<LoginRespo
 }
 
 export function logout(): void {
+  clearAuth();
+}
+
+/**
+ * ✅ útil caso teu LoginPage use persistSession fora do api.ts
+ * (não quebra nada existente, só ajuda)
+ */
+export function setAuthToken(token: string, mode: "local" | "session" | "both" = "both") {
   if (typeof window === "undefined") return;
-  localStorage.removeItem(AUTH_KEY);
-  sessionStorage.removeItem(AUTH_KEY);
+  if (!token) return;
+
+  if (mode === "local" || mode === "both") localStorage.setItem(AUTH_KEY, token);
+  if (mode === "session" || mode === "both") sessionStorage.setItem(AUTH_KEY, token);
+}
+
+export function getAuthToken() {
+  return getToken();
 }
 
 // (PÚBLICO) Criar senha por token (invite/reset)
@@ -601,7 +635,7 @@ export async function fetchConversations(
   statusOrOpts: ConversationStatus | "all" | FetchConversationsOptions = "open"
 ): Promise<Conversation[]> {
   const opts: FetchConversationsOptions =
-    typeof statusOrOpts === "string" ? { status: statusOrOpts } : (statusOrOpts || {});
+    typeof statusOrOpts === "string" ? { status: statusOrOpts } : statusOrOpts || {};
 
   const qs = buildQuery({
     status: opts.status ?? "open",
@@ -1018,7 +1052,8 @@ export async function startSmsCampaign(id: string) {
 
 export async function fetchSmsCampaignReport(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, {
-    method: "GET" });
+    method: "GET"
+  });
 }
 
 // ======================================================
