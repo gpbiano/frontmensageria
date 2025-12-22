@@ -2,12 +2,12 @@ import express from "express";
 import crypto from "crypto";
 import prisma from "../lib/prisma.js";
 import { requireAuth, enforceTokenTenant, requireRole } from "../middleware/requireAuth.js";
+import logger from "../logger.js";
 
 const router = express.Router();
 
-/**
- * helpers
- */
+const CHANNELS = ["whatsapp", "webchat", "messenger", "instagram"];
+
 function now() {
   return new Date();
 }
@@ -16,194 +16,161 @@ function newWidgetKey() {
   return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
+function getTenantId(req) {
+  return req.tenant?.id || req.tenantId || null;
+}
+
 /**
- * Defaults por canal (compatível com front atual)
+ * Normaliza saída pro frontend
  */
-function defaultChannel(channel) {
-  if (channel === "webchat") {
-    return {
-      enabled: false,
-      status: "disabled",
-      widgetKey: newWidgetKey(),
-      config: {
-        primaryColor: "#34d399",
-        color: "#34d399",
-        position: "right",
-        buttonText: "Ajuda",
-        headerTitle: "Atendimento",
-        title: "Atendimento",
-        greeting: "Olá! Como posso ajudar?"
-      }
-    };
-  }
-
-  if (channel === "whatsapp") {
-    return {
-      enabled: true,
-      status: "connected",
-      config: {}
-    };
-  }
-
+function shapeChannel(c) {
   return {
-    enabled: false,
-    status: "soon",
-    config: {}
+    id: c.channel,
+    channel: c.channel,
+    enabled: c.enabled,
+    status: c.status,
+    widgetKey: c.widgetKey || null,
+    config: c.config || {},
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt
   };
 }
 
 /**
  * GET /settings/channels
- * Lista todos os canais do tenant
+ * Lista todos os canais do tenant (cria defaults se não existirem)
  */
 router.get(
   "/",
   requireAuth,
   enforceTokenTenant,
-  async (req, res) => {
-    const tenantId = req.tenant?.id;
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
-
-    const existing = await prisma.channelConfig.findMany({
-      where: { tenantId }
-    });
-
-    const byChannel = Object.fromEntries(
-      existing.map((c) => [c.channel, c])
-    );
-
-    const channels = ["whatsapp", "webchat", "messenger", "instagram"].map(
-      async (ch) => {
-        let row = byChannel[ch];
-
-        if (!row) {
-          const def = defaultChannel(ch);
-          row = await prisma.channelConfig.create({
-            data: {
-              tenantId,
-              channel: ch,
-              enabled: def.enabled,
-              status: def.status,
-              widgetKey: def.widgetKey,
-              config: def.config
-            }
-          });
-        }
-
-        return {
-          id: row.channel,
-          name:
-            row.channel === "whatsapp"
-              ? "WhatsApp Cloud API"
-              : row.channel === "webchat"
-              ? "Web Chat (Widget)"
-              : row.channel === "messenger"
-              ? "Facebook Messenger"
-              : "Instagram Direct",
-          description:
-            row.channel === "whatsapp"
-              ? "Canal oficial do WhatsApp via Meta Cloud API."
-              : row.channel === "webchat"
-              ? "Widget de atendimento para seu site."
-              : "Em breve.",
-          enabled: row.enabled,
-          status: row.status,
-          widgetKey: row.widgetKey,
-          config: row.config || {},
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt
-        };
-      }
-    );
-
-    res.json(await Promise.all(channels));
-  }
-);
-
-/**
- * PATCH /settings/channels/webchat
- * Atualiza config do widget
- */
-router.patch(
-  "/webchat",
-  requireAuth,
-  enforceTokenTenant,
   requireRole("admin", "manager"),
   async (req, res) => {
-    const tenantId = req.tenant?.id;
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    const current =
-      (await prisma.channelConfig.findUnique({
-        where: {
-          tenantId_channel: { tenantId, channel: "webchat" }
-        }
-      })) ||
-      (await prisma.channelConfig.create({
-        data: {
-          tenantId,
-          channel: "webchat",
-          ...defaultChannel("webchat")
-        }
-      }));
-
-    const patch = req.body || {};
-    const nextConfig = {
-      ...(current.config || {}),
-      ...(patch.config || {})
-    };
-
-    // compat frontend
-    if (nextConfig.primaryColor && !nextConfig.color)
-      nextConfig.color = nextConfig.primaryColor;
-    if (nextConfig.color && !nextConfig.primaryColor)
-      nextConfig.primaryColor = nextConfig.color;
-
-    const updated = await prisma.channelConfig.update({
-      where: { id: current.id },
-      data: {
-        enabled:
-          typeof patch.enabled === "boolean"
-            ? patch.enabled
-            : current.enabled,
-        status:
-          typeof patch.enabled === "boolean"
-            ? patch.enabled
-              ? "connected"
-              : "disabled"
-            : current.status,
-        config: nextConfig,
-        updatedAt: now()
+      // garante todos os canais base
+      for (const ch of CHANNELS) {
+        await prisma.channelConfig.upsert({
+          where: {
+            tenantId_channel: { tenantId, channel: ch }
+          },
+          update: {},
+          create: {
+            tenantId,
+            channel: ch,
+            enabled: ch === "whatsapp",
+            status: ch === "whatsapp" ? "connected" : "disabled",
+            widgetKey: ch === "webchat" ? newWidgetKey() : null,
+            config:
+              ch === "webchat"
+                ? {
+                    primaryColor: "#34d399",
+                    position: "right",
+                    buttonText: "Ajuda",
+                    headerTitle: "Atendimento",
+                    greeting: "Olá! Como posso ajudar?"
+                  }
+                : {}
+          }
+        });
       }
-    });
 
-    res.json(updated);
+      const channels = await prisma.channelConfig.findMany({
+        where: { tenantId },
+        orderBy: { channel: "asc" }
+      });
+
+      return res.json(channels.map(shapeChannel));
+    } catch (e) {
+      logger.error({ err: e }, "❌ channels list error");
+      return res.status(500).json({ error: "internal_error" });
+    }
   }
 );
 
 /**
- * POST /settings/channels/webchat/rotate-key
+ * PATCH /settings/channels/:channel
+ * Atualiza enabled / config
  */
-router.post(
-  "/webchat/rotate-key",
+router.patch(
+  "/:channel",
   requireAuth,
   enforceTokenTenant,
   requireRole("admin"),
   async (req, res) => {
-    const tenantId = req.tenant?.id;
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    try {
+      const tenantId = getTenantId(req);
+      const channel = String(req.params.channel || "").toLowerCase();
 
-    const updated = await prisma.channelConfig.update({
-      where: {
-        tenantId_channel: { tenantId, channel: "webchat" }
-      },
-      data: {
-        widgetKey: newWidgetKey(),
-        updatedAt: now()
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+      if (!CHANNELS.includes(channel))
+        return res.status(400).json({ error: "channel_invalid" });
+
+      const patch = {};
+      if (typeof req.body?.enabled === "boolean") {
+        patch.enabled = req.body.enabled;
+        patch.status = req.body.enabled ? "connected" : "disabled";
       }
-    });
 
-    res.json({ widgetKey: updated.widgetKey });
+      if (req.body?.config && typeof req.body.config === "object") {
+        patch.config = req.body.config;
+      }
+
+      const updated = await prisma.channelConfig.update({
+        where: {
+          tenantId_channel: { tenantId, channel }
+        },
+        data: {
+          ...patch,
+          updatedAt: now()
+        }
+      });
+
+      return res.json(shapeChannel(updated));
+    } catch (e) {
+      logger.error({ err: e }, "❌ channels update error");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+/**
+ * POST /settings/channels/:channel/rotate-key
+ * Rotaciona widgetKey (webchat)
+ */
+router.post(
+  "/:channel/rotate-key",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const channel = String(req.params.channel || "").toLowerCase();
+
+      if (channel !== "webchat") {
+        return res.status(400).json({ error: "only_webchat" });
+      }
+
+      const updated = await prisma.channelConfig.update({
+        where: {
+          tenantId_channel: { tenantId, channel }
+        },
+        data: {
+          widgetKey: newWidgetKey(),
+          updatedAt: now()
+        }
+      });
+
+      return res.json({
+        widgetKey: updated.widgetKey
+      });
+    } catch (e) {
+      logger.error({ err: e }, "❌ rotate widgetKey error");
+      return res.status(500).json({ error: "internal_error" });
+    }
   }
 );
 
