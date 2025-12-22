@@ -1,307 +1,126 @@
 // backend/src/outbound/numbersRouter.js
+// ✅ PRISMA-FIRST (SEM data.json)
+// Base: /outbound/numbers
+
 import express from "express";
-import logger from "../logger.js";
 import prisma from "../lib/prisma.js";
+import logger from "../logger.js";
+import { requireAuth, requireRole } from "../middleware/requireAuth.js";
 
 const router = express.Router();
 
-/* ============================================================
-   HELPERS
-============================================================ */
-
 function getTenantId(req) {
-  const tenantId = req.tenant?.id || req.tenantId || req.user?.tenantId;
-  return tenantId ? String(tenantId) : null;
+  const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
+  return tid ? String(tid) : null;
 }
 
-function onlyDigits(v) {
-  return String(v || "").replace(/\D/g, "");
+function normalizeE164(raw) {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (!digits) return "";
+  // se já veio com 55 etc, mantemos só dígitos; armazenamos com "+"
+  return digits.startsWith("55") ? `+${digits}` : `+${digits}`;
 }
 
-function toE164Maybe(phoneDisplay) {
-  // Meta geralmente já manda com + e DDI. Se vier sem +, a gente normaliza pra dígitos.
-  // Melhor guardar no DB como E164 quando possível.
-  const s = String(phoneDisplay || "").trim();
-  if (!s) return "";
-  if (s.startsWith("+")) return s;
-  const d = onlyDigits(s);
-  return d ? `+${d}` : "";
-}
-
-async function getFetch() {
-  if (globalThis.fetch) return globalThis.fetch;
-  const mod = await import("node-fetch");
-  return mod.default;
-}
-
-/* ============================================================
-   GET /outbound/numbers
-============================================================ */
-
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    const rows = await prisma.outboundNumber.findMany({
-      where: { tenantId, isActive: true },
-      orderBy: { updatedAt: "desc" }
+    const items = await prisma.outboundNumber.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" }
     });
 
-    // formato compat com o front atual
-    const numbers = rows.map((r) => ({
-      id: r.id, // no legado era o phone_number_id da Meta; agora é id interno
-      metaPhoneNumberId: r.metadata?.phoneNumberId || null, // compat extra
-      name: r.label || r.metadata?.verified_name || r.metadata?.display_phone_number || r.phoneE164,
-      channel: "WhatsApp",
-      number: r.metadata?.display_phone_number || r.phoneE164,
-      displayNumber: r.metadata?.display_phone_number || r.phoneE164,
-      quality: r.metadata?.quality_rating || "UNKNOWN",
-      limitPerDay: r.metadata?.limitPerDay ?? null,
-      status: r.metadata?.status || "UNKNOWN",
-      connected: Boolean(r.metadata?.connected),
-      raw: r.metadata?.raw || null,
-      updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : null
-    }));
-
-    return res.json(numbers);
+    return res.json({ ok: true, items });
   } catch (err) {
-    logger.error({ err }, "❌ Erro ao carregar números (Prisma)");
-    return res.status(500).json({ error: "Erro ao carregar números." });
+    logger.error({ err: err?.message || err }, "❌ numbersRouter GET / failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
-/* ============================================================
-   SYNC (GET/POST) /outbound/numbers/sync
-============================================================ */
-
-async function handleSync(req, res) {
-  const tenantId = getTenantId(req);
-  if (!tenantId) {
-    return res.status(400).json({
-      success: false,
-      error: "tenant_not_resolved",
-      numbers: []
-    });
-  }
-
-  // Lê as variáveis de ambiente na hora da requisição
-  const WABA_ID = process.env.WABA_ID || process.env.WHATSAPP_WABA_ID;
-  const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-
-  if (!WABA_ID || !WHATSAPP_TOKEN) {
-    logger.warn(
-      { WABA_ID: !!WABA_ID, WHATSAPP_TOKEN: !!WHATSAPP_TOKEN },
-      "⚠️ Sync chamado sem WABA_ID ou WHATSAPP_TOKEN configurados."
-    );
-
-    const rows = await prisma.outboundNumber.findMany({
-      where: { tenantId, isActive: true },
-      orderBy: { updatedAt: "desc" }
-    });
-
-    return res.status(200).json({
-      success: false,
-      error: "WABA_ID ou WHATSAPP_TOKEN não configurados.",
-      numbers: rows
-    });
-  }
-
+router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
-    const url = new URL(`https://graph.facebook.com/v22.0/${WABA_ID}/phone_numbers`);
-    url.searchParams.set(
-      "fields",
-      [
-        "id",
-        "display_phone_number",
-        "verified_name",
-        "quality_rating",
-        "code_verification_status",
-        "messaging_limit_tier",
-        "name_status"
-      ].join(",")
-    );
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    logger.info({ url: url.toString(), tenantId }, "🔄 Consultando Meta phone_numbers");
+    const { phoneE164, label, provider, isActive, metadata } = req.body || {};
+    const normalized = normalizeE164(phoneE164);
 
-    // 1) chamada Meta
-    const fetchFn = await getFetch();
-
-    let graphRes;
-    let rawText;
-
-    try {
-      graphRes = await fetchFn(url.toString(), {
-        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
-      });
-      rawText = await graphRes.text();
-    } catch (err) {
-      logger.error({ err }, "❌ Falha de rede ao consultar Meta");
-      const rows = await prisma.outboundNumber.findMany({
-        where: { tenantId, isActive: true },
-        orderBy: { updatedAt: "desc" }
-      });
-
-      return res.status(200).json({
-        success: false,
-        error: "Falha de comunicação com o servidor da Meta.",
-        details: err?.message,
-        numbers: rows
-      });
+    if (!normalized || normalized.length < 8) {
+      return res.status(400).json({ ok: false, error: "phoneE164_invalid" });
     }
 
-    // 2) parse JSON
-    let graphJson = {};
-    try {
-      graphJson = rawText ? JSON.parse(rawText) : {};
-    } catch (err) {
-      logger.error({ err, rawText }, "❌ JSON inválido retornado pela Meta");
-      const rows = await prisma.outboundNumber.findMany({
-        where: { tenantId, isActive: true },
-        orderBy: { updatedAt: "desc" }
-      });
-
-      return res.status(200).json({
-        success: false,
-        error: "Meta retornou conteúdo inválido.",
-        details: err?.message,
-        numbers: rows
-      });
-    }
-
-    // 3) erro HTTP
-    if (!graphRes.ok) {
-      logger.error({ status: graphRes.status, graphJson }, "❌ Meta retornou erro 4xx/5xx");
-      const rows = await prisma.outboundNumber.findMany({
-        where: { tenantId, isActive: true },
-        orderBy: { updatedAt: "desc" }
-      });
-
-      return res.status(200).json({
-        success: false,
-        error: "Erro ao consultar API da Meta.",
-        details: graphJson,
-        numbers: rows
-      });
-    }
-
-    // 4) transformar e persistir no Prisma
-    const now = new Date().toISOString();
-
-    const mapped = (graphJson.data || []).map((n) => {
-      const tier = n.messaging_limit_tier || null;
-
-      let limitPerDay = null;
-      if (tier === "TIER_1") limitPerDay = 1000;
-      if (tier === "TIER_2") limitPerDay = 10000;
-      if (tier === "TIER_3") limitPerDay = 100000;
-      if (tier === "TIER_4") limitPerDay = 250000;
-
-      const status = n.code_verification_status || n.name_status || "UNKNOWN";
-
-      const connected =
-        status === "VERIFIED" || status === "APPROVED" || status === "CONNECTED";
-
-      const display = String(n.display_phone_number || "").trim();
-      const phoneE164 = toE164Maybe(display) || `+${onlyDigits(display)}`;
-
-      return {
-        phoneNumberId: n.id,
-        display_phone_number: display,
-        verified_name: n.verified_name || null,
-        quality_rating: n.quality_rating || "UNKNOWN",
-        status,
-        connected,
-        tier,
-        limitPerDay,
-        raw: n,
-        updatedAt: now,
-        phoneE164
-      };
+    const item = await prisma.outboundNumber.create({
+      data: {
+        tenantId,
+        phoneE164: normalized,
+        label: label ? String(label) : null,
+        provider: provider ? String(provider) : "meta",
+        isActive: isActive !== undefined ? !!isActive : true,
+        metadata: metadata ?? undefined
+      }
     });
 
-    // upsert por tenantId + phoneE164 (unique)
-    // guarda metaPhoneNumberId no metadata para relacionar com a Meta
-    for (const n of mapped) {
-      if (!n.phoneE164) continue;
-
-      await prisma.outboundNumber.upsert({
-        where: {
-          tenantId_phoneE164: {
-            tenantId,
-            phoneE164: n.phoneE164
-          }
-        },
-        update: {
-          label: n.verified_name || n.display_phone_number || undefined,
-          provider: "meta",
-          isActive: true,
-          metadata: {
-            phoneNumberId: n.phoneNumberId,
-            display_phone_number: n.display_phone_number,
-            verified_name: n.verified_name,
-            quality_rating: n.quality_rating,
-            status: n.status,
-            connected: n.connected,
-            tier: n.tier,
-            limitPerDay: n.limitPerDay,
-            raw: n.raw,
-            updatedAt: n.updatedAt
-          }
-        },
-        create: {
-          tenantId,
-          phoneE164: n.phoneE164,
-          label: n.verified_name || n.display_phone_number || null,
-          provider: "meta",
-          isActive: true,
-          metadata: {
-            phoneNumberId: n.phoneNumberId,
-            display_phone_number: n.display_phone_number,
-            verified_name: n.verified_name,
-            quality_rating: n.quality_rating,
-            status: n.status,
-            connected: n.connected,
-            tier: n.tier,
-            limitPerDay: n.limitPerDay,
-            raw: n.raw,
-            updatedAt: n.updatedAt
-          }
-        }
-      });
-    }
-
-    // retorna lista atual do DB
-    const rows = await prisma.outboundNumber.findMany({
-      where: { tenantId, isActive: true },
-      orderBy: { updatedAt: "desc" }
-    });
-
-    logger.info({ count: rows.length, tenantId }, "✅ Sync de números concluído com sucesso");
-
-    return res.json({
-      success: true,
-      count: rows.length,
-      numbers: rows
-    });
+    return res.status(201).json({ ok: true, item });
   } catch (err) {
-    logger.error({ err, message: err?.message, stack: err?.stack }, "❌ Erro inesperado no sync");
+    const msg = String(err?.message || err);
+    if (msg.includes("Unique constraint") || msg.includes("Unique") || msg.includes("P2002")) {
+      return res.status(409).json({ ok: false, error: "number_already_exists" });
+    }
 
-    const rows = await prisma.outboundNumber.findMany({
-      where: { tenantId, isActive: true },
-      orderBy: { updatedAt: "desc" }
-    });
-
-    return res.status(200).json({
-      success: false,
-      error: "Erro interno inesperado.",
-      details: err?.message,
-      numbers: rows
-    });
+    logger.error({ err: err?.message || err }, "❌ numbersRouter POST / failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
-}
+});
 
-router.get("/sync", handleSync);
-router.post("/sync", handleSync);
+router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const id = String(req.params.id || "");
+    if (!id) return res.status(400).json({ ok: false, error: "id_required" });
+
+    const existing = await prisma.outboundNumber.findFirst({
+      where: { id, tenantId },
+      select: { id: true }
+    });
+    if (!existing) return res.status(404).json({ ok: false, error: "not_found" });
+
+    const data = {};
+    if (req.body?.label !== undefined) data.label = req.body.label ? String(req.body.label) : null;
+    if (req.body?.provider !== undefined) data.provider = req.body.provider ? String(req.body.provider) : null;
+    if (req.body?.isActive !== undefined) data.isActive = !!req.body.isActive;
+    if (req.body?.metadata !== undefined) data.metadata = req.body.metadata;
+
+    const item = await prisma.outboundNumber.update({ where: { id }, data });
+    return res.json({ ok: true, item });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ numbersRouter PATCH /:id failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const id = String(req.params.id || "");
+    if (!id) return res.status(400).json({ ok: false, error: "id_required" });
+
+    const existing = await prisma.outboundNumber.findFirst({
+      where: { id, tenantId },
+      select: { id: true }
+    });
+    if (!existing) return res.status(404).json({ ok: false, error: "not_found" });
+
+    await prisma.outboundNumber.delete({ where: { id } });
+    return res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ numbersRouter DELETE /:id failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
 
 export default router;
