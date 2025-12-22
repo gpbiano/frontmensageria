@@ -8,7 +8,6 @@ import cors from "cors";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
-import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 
@@ -64,39 +63,47 @@ try {
 // ===============================
 // ROUTERS
 // ===============================
+
+// ✅ AUTH (LOGIN OFICIAL) — evita duplicidade /login
+const { default: authRouter } = await import("./auth/authRouter.js");
+
+// 🔐 Password / convite / reset
 const { default: passwordRouter } = await import("./auth/passwordRouter.js");
 
+// Settings
 const { default: usersRouter } = await import("./settings/usersRouter.js");
 const { default: groupsRouter } = await import("./settings/groupsRouter.js");
 const { default: channelsRouter } = await import("./routes/channels.js");
 
+// Chatbot + Humano
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
 const { default: humanRouter } = await import("./human/humanRouter.js");
 const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
 
+// Webchat + Conversas
 const { default: webchatRouter } = await import("./routes/webchat.js");
 const { default: conversationsRouter } = await import("./routes/conversations.js");
 
+// Outbound
 const { default: outboundRouter } = await import("./outbound/outboundRouter.js");
 const { default: numbersRouter } = await import("./outbound/numbersRouter.js");
 const { default: templatesRouter } = await import("./outbound/templatesRouter.js");
 const { default: assetsRouter } = await import("./outbound/assetsRouter.js");
 const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js");
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
-const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
+const { default: smsCampaignsRouter } = await import(
+  "./outbound/smsCampaignsRouter.js"
+);
 
-const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
-const { verifyPassword } = await import("./security/passwords.js");
+// WhatsApp webhook (público)
+const { default: whatsappRouter } = await import(
+  "./routes/channels/whatsappRouter.js"
+);
 
 // ===============================
 // VARS
 // ===============================
 const PORT = process.env.PORT || 3010;
-
-const JWT_SECRET = String(process.env.JWT_SECRET || "").trim();
-if (!JWT_SECRET) throw new Error("JWT_SECRET não definido");
-
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 
 // ===============================
 // APP
@@ -135,9 +142,14 @@ app.use(
     allowNoTenantPaths: [
       "/",
       "/health",
-      "/login",
-      "/auth/password",
+
+      // ✅ AUTH
+      "/login", // compat (authRouter expõe /login)
+      "/auth/login",
       "/auth/select-tenant",
+      "/auth/password",
+
+      // ✅ Canais públicos
       "/webhook/whatsapp",
       "/webchat",
     ],
@@ -156,15 +168,6 @@ function requirePrisma(req, res, next) {
 // 🌍 ROTAS PÚBLICAS
 // ===============================
 
-// 🔐 Password / convite / reset
-app.use("/auth", passwordRouter);
-
-// 🌐 WebChat (widget)
-app.use("/webchat", webchatRouter);
-
-// 🌐 WhatsApp Webhook (PRECISA ser público)
-app.use("/webhook/whatsapp", whatsappRouter);
-
 // ❤️ Health
 app.get("/", (req, res) => res.json({ status: "ok" }));
 app.get("/health", async (req, res) => {
@@ -176,7 +179,9 @@ app.get("/health", async (req, res) => {
       users = await prisma.user.count();
       tenants = await prisma.tenant.count();
     }
-  } catch {}
+  } catch {
+    // ignore
+  }
 
   res.json({
     ok: true,
@@ -188,72 +193,25 @@ app.get("/health", async (req, res) => {
   });
 });
 
-// ===============================
-// 🔐 LOGIN
-// ===============================
-app.post("/login", requirePrisma, async (req, res) => {
-  const { email, password } = req.body || {};
+// 🔐 AUTH (LOGIN OFICIAL)
+// - Mantém compatibilidade com /login (porque authRouter tem /login)
+// - Evita duplicidade de handlers no index.js
+app.use("/", authRouter);
 
-  if (!email || !password) {
-    return res.status(400).json({ error: "Informe e-mail e senha." });
-  }
+// 🔐 Password / convite / reset
+// (mantém como estava: /auth/...)
+app.use("/auth", passwordRouter);
 
-  const user = await prisma.user.findFirst({
-    where: { email, isActive: true },
-    include: {
-      tenants: {
-        include: { tenant: true },
-      },
-    },
-  });
+// 🌐 WebChat (widget)
+app.use("/webchat", webchatRouter);
 
-  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
-    return res.status(401).json({ error: "Credenciais inválidas." });
-  }
-
-  const token = jwt.sign(
-    { id: user.id, email: user.email, role: user.role },
-    JWT_SECRET,
-    { expiresIn: JWT_EXPIRES_IN }
-  );
-
-  res.json({ token, user });
-});
-
-// ===============================
-// 🔐 SELEÇÃO DE TENANT
-// ===============================
-app.post("/auth/select-tenant", requireAuth, requirePrisma, async (req, res) => {
-  const { organizationId } = req.body || {};
-
-  if (!organizationId) {
-    return res.status(400).json({ error: "organizationId obrigatório" });
-  }
-
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: organizationId },
-  });
-
-  if (!tenant || !tenant.isActive) {
-    return res.status(404).json({ error: "Tenant inválido." });
-  }
-
-  const token = jwt.sign(
-    {
-      id: req.user.id,
-      email: req.user.email,
-      tenantId: tenant.id,
-    },
-    JWT_SECRET,
-    { expiresIn: JWT_EXPIRES_IN }
-  );
-
-  res.json({ token, tenant });
-});
+// 🌐 WhatsApp Webhook (PRECISA ser público)
+app.use("/webhook/whatsapp", whatsappRouter);
 
 // ===============================
 // 🔒 MIDDLEWARE GLOBAL (PROTEGIDO)
 // ===============================
+// ⚠️ Daqui pra baixo: tudo exige token
 app.use(requireAuth);
 app.use(enforceTokenTenant);
 app.use(requireTenant);
