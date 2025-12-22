@@ -80,6 +80,7 @@ const HELP_PORTAL_URL =
 
 /* ==========================================================
    AUTH HELPERS (localStorage OU sessionStorage)
+   ✅ FIX: SEMPRE buscar em ambos (compatível com qualquer tela)
 ========================================================== */
 function getStoredAuthToken() {
   if (typeof window === "undefined") return "";
@@ -123,29 +124,51 @@ export default function App() {
   // ✅ Página pública (sem login): /criar-senha?token=...
   const isCreatePasswordRoute = useMemo(() => {
     if (typeof window === "undefined") return false;
-    const path = window.location.pathname || "/";
-    return path === "/criar-senha";
+    const p = window.location.pathname || "/";
+    return p === "/criar-senha";
   }, []);
 
+  // ✅ FIX: sempre que o storage mudar (login em outra aba / refresh / etc.)
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getStoredAuthToken();
-    if (token) setIsAuthenticated(true);
+
+    function syncAuthFromStorage() {
+      const token = getStoredAuthToken();
+      setIsAuthenticated(Boolean(token));
+    }
+
+    // 1) na montagem
+    syncAuthFromStorage();
+
+    // 2) se trocar em outra aba/janela
+    function onStorage(e) {
+      if (e.key === AUTH_TOKEN_KEY || e.key === AUTH_USER_KEY) {
+        syncAuthFromStorage();
+      }
+    }
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
   function handleLogin(data) {
-    // ✅ LoginPage já salva token/user.
-    // Aqui só marca como autenticado.
+    // ✅ LoginPage salva token/user.
+    // Aqui só reflete o estado.
     if (typeof window === "undefined") return;
 
     const token = data?.token || getStoredAuthToken();
-    if (token) setIsAuthenticated(true);
+    setIsAuthenticated(Boolean(token));
   }
 
   function handleLogout() {
     if (typeof window === "undefined") return;
     clearStoredAuth();
     setIsAuthenticated(false);
+
+    // ✅ opcional: volta pro root (evita ficar preso em rota interna)
+    try {
+      window.history.replaceState({}, "", "/");
+    } catch {}
   }
 
   if (isCreatePasswordRoute) return <CreatePasswordPage />;
@@ -258,13 +281,20 @@ function PlatformShell({ onLogout }) {
   // ✅ Usuário logado (real)
   const [authUser, setAuthUser] = useState(() => getStoredAuthUser());
 
+  // ✅ FIX: se token/user mudar em outra aba, atualiza header também
   useEffect(() => {
-    // Atualiza se o usuário trocar em outra aba/janela
+    if (typeof window === "undefined") return;
+
+    function syncUser() {
+      setAuthUser(getStoredAuthUser());
+    }
+
     function onStorage(e) {
       if (e.key === AUTH_USER_KEY || e.key === AUTH_TOKEN_KEY) {
-        setAuthUser(getStoredAuthUser());
+        syncUser();
       }
     }
+
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
