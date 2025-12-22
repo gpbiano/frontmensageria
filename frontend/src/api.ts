@@ -33,18 +33,42 @@ function getToken(): string | null {
   if (typeof window === "undefined") return null;
 
   // 🔐 prioridade: localStorage → sessionStorage
-  return (
-    localStorage.getItem("gpLabsAuthToken") ||
-    sessionStorage.getItem("gpLabsAuthToken")
-  );
+  return localStorage.getItem(AUTH_KEY) || sessionStorage.getItem(AUTH_KEY);
 }
 
 function clearAuth() {
   if (typeof window === "undefined") return;
-  localStorage.removeItem("gpLabsAuthToken");
-  sessionStorage.removeItem("gpLabsAuthToken");
+  localStorage.removeItem(AUTH_KEY);
+  sessionStorage.removeItem(AUTH_KEY);
 }
 
+function isUnauthorized(res: Response) {
+  return res.status === 401;
+}
+
+/**
+ * ✅ Regra:
+ * - Não deixar "extra headers" sobrescrever Authorization.
+ * - Também não sobrescrever Content-Type automaticamente se for FormData.
+ */
+function buildHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getToken();
+
+  // Normaliza HeadersInit -> objeto simples (pra merge previsível)
+  const normalized: Record<string, string> = {};
+  if (extra) {
+    const h = new Headers(extra);
+    h.forEach((v, k) => {
+      normalized[k] = v;
+    });
+  }
+
+  // ⚠️ Authorization por último (não pode ser sobrescrito por extra)
+  return {
+    ...normalized,
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  };
+}
 
 // ======================================================
 // HELPERS INTERNOS
@@ -158,7 +182,7 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
     body
   });
 
-  // ✅ 401: mantém padrão do requestForm/downloadBlob (limpa token)
+  // ✅ 401: limpa token
   if (isUnauthorized(res)) {
     clearAuth();
     const payload = await safeReadJson(res);
@@ -179,14 +203,14 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
   }
 
   // ✅ suporte a 204 No Content
-  if (res.status === 204) return (null as T);
+  if (res.status === 204) return null as T;
 
   // ✅ tenta JSON, se não der, devolve texto
   const json = await safeReadJson<T>(res);
   if (json !== null) return json;
 
   const text = await safeReadText(res);
-  return (text as unknown as T);
+  return text as unknown as T;
 }
 
 // ======================================================
@@ -220,13 +244,13 @@ async function requestForm<T = any>(
     throw buildApiError(res.status, path, payload, text);
   }
 
-  if (res.status === 204) return (null as T);
+  if (res.status === 204) return null as T;
 
   const json = await safeReadJson<T>(res);
   if (json !== null) return json;
 
   const text = await safeReadText(res);
-  return (text as unknown as T);
+  return text as unknown as T;
 }
 
 // ======================================================
@@ -994,8 +1018,7 @@ export async function startSmsCampaign(id: string) {
 
 export async function fetchSmsCampaignReport(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, {
-    method: "GET"
-  });
+    method: "GET" });
 }
 
 // ======================================================
