@@ -1,8 +1,12 @@
 // backend/src/outbound/smsCampaignsRouter.js
+// ✅ PRISMA-FIRST (SEM data.json)
+// SMS Campaigns via iAgenteSMS
+// Rotas: /outbound/sms-campaigns (ajuste o mount no index.js conforme seu projeto)
+
 import express from "express";
 import fetch from "node-fetch";
 import logger from "../logger.js";
-import { loadDB, saveDB, ensureArray } from "../utils/db.js";
+import prisma from "../lib/prisma.js";
 import { requireAuth, requireRole } from "../middleware/requireAuth.js";
 
 const router = express.Router();
@@ -12,11 +16,7 @@ const IAGENTE_BASE_URL =
   "https://api.iagentesms.com.br/webservices/http.php";
 
 // ⚠️ NÃO congele USER/PASS em const no topo.
-// Em dev (nodemon/pm2), isso pode ficar “stale” se o env não estiver carregado no momento do import.
-// Vamos ler sempre de process.env no momento do envio.
-const IAGENTE_HTTP_TIMEOUT_MS = Number(
-  process.env.IAGENTE_HTTP_TIMEOUT_MS || 15000
-);
+const IAGENTE_HTTP_TIMEOUT_MS = Number(process.env.IAGENTE_HTTP_TIMEOUT_MS || 15000);
 
 // ======================
 // FILA / THROTTLE / RETRY
@@ -26,13 +26,13 @@ const SMS_MAX_RETRIES = Number(process.env.SMS_MAX_RETRIES || 3);
 const SMS_RETRY_BASE_MS = Number(process.env.SMS_RETRY_BASE_MS || 800);
 const SMS_RETRY_MAX_MS = Number(process.env.SMS_RETRY_MAX_MS || 8000);
 const SMS_JITTER_MS = Number(process.env.SMS_JITTER_MS || 250);
-const SMS_QUEUE_ENABLED =
-  String(process.env.SMS_QUEUE_ENABLED || "true") !== "false";
+const SMS_QUEUE_ENABLED = String(process.env.SMS_QUEUE_ENABLED || "true") !== "false";
 
-const MIN_DELAY_MS =
-  SMS_RATE_PER_SEC > 0 ? Math.ceil(1000 / SMS_RATE_PER_SEC) : 250;
+const MIN_DELAY_MS = SMS_RATE_PER_SEC > 0 ? Math.ceil(1000 / SMS_RATE_PER_SEC) : 250;
 
-// Fila em memória
+// ======================
+// FILA EM MEMÓRIA (por processo)
+// ======================
 const smsQueue = {
   running: false,
   timer: null,
@@ -104,9 +104,7 @@ function parseCsvToRows(csvText) {
     .map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
 
   const idxNumero =
-    header.indexOf("numero") >= 0
-      ? header.indexOf("numero")
-      : header.indexOf("phone");
+    header.indexOf("numero") >= 0 ? header.indexOf("numero") : header.indexOf("phone");
 
   if (idxNumero < 0) {
     throw new Error("CSV precisa conter coluna 'numero' (ou 'phone').");
@@ -152,19 +150,24 @@ function applyVars(message, vars) {
   return out;
 }
 
-function getCampaign(db, id) {
-  db.outboundSmsCampaigns = ensureArray(db.outboundSmsCampaigns);
-  return db.outboundSmsCampaigns.find((c) => c.id === id);
+// ======================
+// TENANT HELPERS
+// ======================
+function getTenantId(req) {
+  const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
+  return tid ? String(tid) : null;
 }
 
-function buildResultsIndex(camp) {
-  const idx = new Map();
-  for (const r of ensureArray(camp.results)) {
-    if (r?.codeSms) idx.set(r.codeSms, r);
-  }
-  return idx;
+async function getCampaignOr404({ tenantId, id }) {
+  const camp = await prisma.outboundCampaign.findFirst({
+    where: { id: String(id), tenantId, channel: "sms" }
+  });
+  return camp || null;
 }
 
+// ======================
+// PROVIDER
+// ======================
 function shouldRetry({ ok, raw, error }) {
   if (ok) return false;
   if (error) return true;
@@ -186,10 +189,7 @@ async function iagenteSendSms({ to, text, codeSms }) {
   const pass = process.env.IAGENTE_SMS_PASS;
 
   if (!user || !pass) {
-    // mensagem clara pro front/relatório
-    throw new Error(
-      "IAGENTE_SMS_USER/IAGENTE_SMS_PASS não configurados no backend (env não carregou)."
-    );
+    throw new Error("IAGENTE_SMS_USER/IAGENTE_SMS_PASS não configurados no backend.");
   }
 
   const params = new URLSearchParams();
@@ -211,10 +211,7 @@ async function iagenteSendSms({ to, text, codeSms }) {
     const raw = (bodyText || "").trim();
 
     if (!res.ok) {
-      return {
-        ok: false,
-        raw: raw ? `HTTP_${res.status} ${raw}` : `HTTP_${res.status}`
-      };
+      return { ok: false, raw: raw ? `HTTP_${res.status} ${raw}` : `HTTP_${res.status}` };
     }
 
     const ok = /^OK/i.test(raw);
@@ -235,9 +232,7 @@ async function sendWithRetry({ phone, vars, codeSms, message }) {
       if (r.ok) return { ok: true, raw: r.raw, attempt };
 
       const retry = shouldRetry({ ok: false, raw: r.raw, error: null });
-      if (!retry || attempt === maxAttempts) {
-        return { ok: false, raw: r.raw, attempt };
-      }
+      if (!retry || attempt === maxAttempts) return { ok: false, raw: r.raw, attempt };
 
       await sleep(jitter(backoffMs(attempt)));
     } catch (err) {
@@ -247,10 +242,7 @@ async function sendWithRetry({ phone, vars, codeSms, message }) {
           : err?.message || String(err);
 
       const retry = shouldRetry({ ok: false, raw: "", error: msg });
-
-      if (!retry || attempt === maxAttempts) {
-        return { ok: false, raw: "", error: msg, attempt };
-      }
+      if (!retry || attempt === maxAttempts) return { ok: false, raw: "", error: msg, attempt };
 
       await sleep(jitter(backoffMs(attempt)));
     }
@@ -259,30 +251,66 @@ async function sendWithRetry({ phone, vars, codeSms, message }) {
   return { ok: false, raw: "", attempt: maxAttempts };
 }
 
-function enqueueCampaign(camp) {
+// ======================
+// QUEUE (usa OutboundRun no banco)
+// ======================
+async function enqueueCampaignRuns({ tenantId, campaignId }) {
   if (!SMS_QUEUE_ENABLED) return { queued: false, added: 0 };
 
-  const resultsIdx = buildResultsIndex(camp);
+  // audienceRows fica em metadata/audience do OutboundCampaign (Json)
+  // Vamos ler do campaign.metadata.audienceRows (compat com seu legado)
+  const camp = await prisma.outboundCampaign.findFirst({
+    where: { id: campaignId, tenantId, channel: "sms" },
+    select: { id: true, metadata: true }
+  });
+  if (!camp) return { queued: false, added: 0 };
+
+  const md = camp.metadata && typeof camp.metadata === "object" ? camp.metadata : {};
+  const audienceRows = Array.isArray(md.audienceRows) ? md.audienceRows : [];
+
   let added = 0;
 
-  for (const row of ensureArray(camp.audienceRows)) {
-    const code = row.codeSms;
-    if (!code) continue;
+  for (const row of audienceRows) {
+    const codeSms = String(row?.codeSms || "").trim();
+    const phone = String(row?.phone || "").trim();
+    const vars = row?.vars && typeof row.vars === "object" ? row.vars : {};
 
-    const existing = resultsIdx.get(code);
-    if (existing && (existing.status === "sent" || existing.status === "failed"))
-      continue;
+    if (!codeSms || !phone) continue;
+    if (smsQueue.enqueuedCodes.has(codeSms)) continue;
 
-    if (smsQueue.enqueuedCodes.has(code)) continue;
+    // cria run se não existe
+    // usamos externalId = codeSms pra idempotência por campanha
+    const existing = await prisma.outboundRun.findFirst({
+      where: { tenantId, campaignId, externalId: codeSms }
+    });
+    if (existing && (existing.status === "sent" || existing.status === "failed")) continue;
+
+    if (!existing) {
+      await prisma.outboundRun.create({
+        data: {
+          tenantId,
+          campaignId,
+          status: "queued",
+          to: phone,
+          payload: { vars, codeSms }
+        }
+      });
+    } else if (existing.status !== "queued") {
+      await prisma.outboundRun.update({
+        where: { id: existing.id },
+        data: { status: "queued", payload: { vars, codeSms }, error: null }
+      });
+    }
 
     smsQueue.items.push({
-      campaignId: camp.id,
-      phone: row.phone,
-      vars: row.vars || {},
-      codeSms: code
+      tenantId,
+      campaignId,
+      phone,
+      vars,
+      codeSms
     });
 
-    smsQueue.enqueuedCodes.add(code);
+    smsQueue.enqueuedCodes.add(codeSms);
     added++;
   }
 
@@ -297,66 +325,89 @@ async function workerTick() {
     const job = smsQueue.items.shift();
     if (!job) return;
 
-    const { campaignId, phone, vars, codeSms } = job;
-
+    const { tenantId, campaignId, phone, vars, codeSms } = job;
     smsQueue.enqueuedCodes.delete(codeSms);
 
-    const db = loadDB();
-    const camp = getCampaign(db, campaignId);
+    const camp = await prisma.outboundCampaign.findFirst({
+      where: { id: campaignId, tenantId, channel: "sms" }
+    });
     if (!camp) return;
 
     if (camp.status === "paused" || camp.status === "canceled") return;
 
-    camp.results = ensureArray(camp.results);
-    const idx = buildResultsIndex(camp);
-
-    const existing = idx.get(codeSms);
-    if (existing && (existing.status === "sent" || existing.status === "failed"))
-      return;
-
-    camp.status = "running";
-    camp.updatedAt = nowIso();
-    saveDB(db);
-
-    const r = await sendWithRetry({
-      phone,
-      vars,
-      codeSms,
-      message: camp.message
-    });
-
-    const resultRow = {
-      phone,
-      codeSms,
-      status: r.ok ? "sent" : "failed",
-      providerRaw: String(r.raw || ""),
-      error: String(r.error || ""),
-      attempts: r.attempt,
-      updatedAt: nowIso()
-    };
-
-    const pos = camp.results.findIndex((x) => x.codeSms === codeSms);
-    if (pos >= 0) camp.results[pos] = { ...camp.results[pos], ...resultRow };
-    else camp.results.push(resultRow);
-
-    camp.updatedAt = nowIso();
-
-    const total =
-      camp.audienceCount || ensureArray(camp.audienceRows).length || 0;
-    const sent = camp.results.filter((x) => x.status === "sent").length;
-    const failed = camp.results.filter((x) => x.status === "failed").length;
-
-    if (total > 0 && sent + failed >= total) {
-      camp.status = failed ? (sent ? "finished" : "failed") : "finished";
-    } else {
-      camp.status = "running";
+    // marca como running
+    if (camp.status !== "running") {
+      await prisma.outboundCampaign.update({
+        where: { id: camp.id },
+        data: { status: "running" }
+      });
     }
 
-    saveDB(db);
+    const run = await prisma.outboundRun.findFirst({
+      where: { tenantId, campaignId, externalId: codeSms }
+    });
+    if (run && (run.status === "sent" || run.status === "failed")) return;
+
+    const r = await sendWithRetry({ phone, vars, codeSms, message: camp.name /* placeholder */ });
+
+    // ⚠️ mensagem do SMS vem do metadata.message (compat)
+    const md = camp.metadata && typeof camp.metadata === "object" ? camp.metadata : {};
+    const message = String(md.message || "");
+    const rr = await sendWithRetry({ phone, vars, codeSms, message });
+
+    const status = rr.ok ? "sent" : "failed";
+    const providerRaw = String(rr.raw || "");
+    const error = String(rr.error || "");
+
+    if (run) {
+      await prisma.outboundRun.update({
+        where: { id: run.id },
+        data: {
+          status,
+          error: error || null,
+          payload: { ...(run.payload || {}), vars, codeSms, providerRaw, attempts: rr.attempt }
+        }
+      });
+    } else {
+      await prisma.outboundRun.create({
+        data: {
+          tenantId,
+          campaignId,
+          status,
+          to: phone,
+          externalId: codeSms,
+          error: error || null,
+          payload: { vars, codeSms, providerRaw, attempts: rr.attempt }
+        }
+      });
+    }
+
+    // atualiza stats agregadas (simples)
+    const total = await prisma.outboundRun.count({ where: { tenantId, campaignId } });
+    const sent = await prisma.outboundRun.count({ where: { tenantId, campaignId, status: "sent" } });
+    const failed = await prisma.outboundRun.count({
+      where: { tenantId, campaignId, status: "failed" }
+    });
+
+    const finished = total > 0 && sent + failed >= total;
+
+    await prisma.outboundCampaign.update({
+      where: { id: camp.id },
+      data: {
+        status: finished ? (failed ? (sent ? "finished" : "failed") : "finished") : "running",
+        stats: {
+          total,
+          sent,
+          failed,
+          pending: Math.max(0, total - (sent + failed)),
+          updatedAt: nowIso()
+        }
+      }
+    });
 
     await sleep(MIN_DELAY_MS);
   } catch (e) {
-    logger.error({ err: e }, "❌ SMS workerTick erro");
+    logger.error({ err: e?.message || e }, "❌ SMS workerTick erro");
   } finally {
     smsQueue.running = false;
   }
@@ -380,20 +431,37 @@ ensureWorker();
 // ======================
 
 // LISTAR
-router.get("/", requireAuth, async (_req, res) => {
-  const db = loadDB();
-  db.outboundSmsCampaigns = ensureArray(db.outboundSmsCampaigns);
+router.get("/", requireAuth, async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-  const list = [...db.outboundSmsCampaigns].sort((a, b) =>
-    String(b.createdAt).localeCompare(String(a.createdAt))
-  );
+    const items = await prisma.outboundCampaign.findMany({
+      where: { tenantId, channel: "sms" },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        tenantId: true,
+        channel: true,
+        name: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        stats: true,
+        metadata: true
+      }
+    });
 
-  res.json({ ok: true, items: list });
+    return res.json({ ok: true, items });
+  } catch (e) {
+    logger.error({ err: e?.message || e }, "❌ Erro ao listar SMS Campaigns");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
 });
 
-// (opcional) DEBUG ENV - útil pra você validar em prod/dev (remova depois)
+// (opcional) DEBUG ENV
 router.get("/_debug/env", requireAuth, requireRole(["admin"]), async (_req, res) => {
-  res.json({
+  return res.json({
     ok: true,
     hasUser: !!process.env.IAGENTE_SMS_USER,
     hasPass: !!process.env.IAGENTE_SMS_PASS,
@@ -404,235 +472,277 @@ router.get("/_debug/env", requireAuth, requireRole(["admin"]), async (_req, res)
 // CRIAR
 router.post("/", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
   try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
     const { name, message } = req.body || {};
     if (!name) return res.status(400).json({ ok: false, error: "Informe name." });
     if (!message) return res.status(400).json({ ok: false, error: "Informe message." });
 
-    const db = loadDB();
-    db.outboundSmsCampaigns = ensureArray(db.outboundSmsCampaigns);
+    const item = await prisma.outboundCampaign.create({
+      data: {
+        tenantId,
+        channel: "sms",
+        name: String(name).trim(),
+        status: "draft",
+        stats: { total: 0, sent: 0, failed: 0, pending: 0, updatedAt: nowIso() },
+        metadata: {
+          message: String(message),
+          audienceCount: 0,
+          audienceRows: []
+        }
+      }
+    });
 
-    const item = {
-      id: newId(),
-      name: String(name).trim(),
-      message: String(message),
-      status: "draft",
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-      audienceCount: 0,
-      audienceRows: [],
-      results: []
-    };
-
-    db.outboundSmsCampaigns.push(item);
-    saveDB(db);
-
-    res.json({ ok: true, item });
+    return res.json({ ok: true, item });
   } catch (e) {
-    logger.error({ err: e }, "❌ Erro ao criar SMS Campaign");
-    res.status(500).json({ ok: false, error: "Erro interno ao criar campanha SMS." });
+    logger.error({ err: e?.message || e }, "❌ Erro ao criar SMS Campaign");
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
 // UPLOAD AUDIÊNCIA (CSV TEXT)
-router.post(
-  "/:id/audience",
-  requireAuth,
-  requireRole(["admin", "manager"]),
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { csvText } = req.body || {};
+router.post("/:id/audience", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-      if (!csvText || !String(csvText).trim()) {
-        return res.status(400).json({ ok: false, error: "Envie csvText (texto do CSV)." });
-      }
+    const { id } = req.params;
+    const { csvText } = req.body || {};
 
-      const db = loadDB();
-      const camp = getCampaign(db, id);
-      if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
-
-      const rows = parseCsvToRows(csvText);
-
-      const stamp = Date.now();
-      camp.audienceRows = rows.map((r, idx) => ({
-        ...r,
-        codeSms: `sms_${id}_${stamp}_${idx}`
-      }));
-
-      camp.audienceCount = camp.audienceRows.length;
-      camp.status = camp.audienceCount ? "ready" : "draft";
-      camp.updatedAt = nowIso();
-
-      camp.results = [];
-      saveDB(db);
-
-      res.json({ ok: true, audienceCount: camp.audienceCount });
-    } catch (e) {
-      logger.warn({ err: e }, "⚠️ Erro ao importar audiência SMS");
-      res.status(400).json({ ok: false, error: e.message || "Erro ao importar CSV." });
+    if (!csvText || !String(csvText).trim()) {
+      return res.status(400).json({ ok: false, error: "Envie csvText (texto do CSV)." });
     }
+
+    const camp = await getCampaignOr404({ tenantId, id });
+    if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
+
+    const rows = parseCsvToRows(csvText);
+
+    const stamp = Date.now();
+    const audienceRows = rows.map((r, idx) => ({
+      ...r,
+      codeSms: `sms_${camp.id}_${stamp}_${idx}`
+    }));
+
+    const md = camp.metadata && typeof camp.metadata === "object" ? camp.metadata : {};
+
+    const updated = await prisma.outboundCampaign.update({
+      where: { id: camp.id },
+      data: {
+        status: audienceRows.length ? "ready" : "draft",
+        metadata: {
+          ...md,
+          audienceRows,
+          audienceCount: audienceRows.length
+        },
+        stats: {
+          total: audienceRows.length,
+          sent: 0,
+          failed: 0,
+          pending: audienceRows.length,
+          updatedAt: nowIso()
+        }
+      }
+    });
+
+    return res.json({ ok: true, audienceCount: updated?.metadata?.audienceCount || audienceRows.length });
+  } catch (e) {
+    logger.warn({ err: e?.message || e }, "⚠️ Erro ao importar audiência SMS");
+    return res.status(400).json({ ok: false, error: e?.message || "Erro ao importar CSV." });
   }
-);
+});
 
 // START
-router.post(
-  "/:id/start",
-  requireAuth,
-  requireRole(["admin", "manager"]),
-  async (req, res) => {
-    try {
-      const { id } = req.params;
+router.post("/:id/start", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-      const db = loadDB();
-      const camp = getCampaign(db, id);
-      if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
+    const { id } = req.params;
+    const camp = await getCampaignOr404({ tenantId, id });
+    if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
 
-      if (!ensureArray(camp.audienceRows).length) {
-        return res.status(400).json({ ok: false, error: "Campanha sem audiência." });
-      }
+    const md = camp.metadata && typeof camp.metadata === "object" ? camp.metadata : {};
+    const audienceRows = Array.isArray(md.audienceRows) ? md.audienceRows : [];
 
-      camp.status = "running";
-      camp.updatedAt = nowIso();
-      camp.results = ensureArray(camp.results);
-      saveDB(db);
-
-      const { queued, added } = enqueueCampaign(camp);
-      ensureWorker();
-
-      res.json({
-        ok: true,
-        queued,
-        added,
-        sent: camp.results.filter((x) => x.status === "sent").length,
-        failed: camp.results.filter((x) => x.status === "failed").length,
-        status: camp.status
-      });
-    } catch (e) {
-      logger.error({ err: e }, "❌ Erro ao iniciar SMS Campaign");
-      res.status(500).json({ ok: false, error: "Erro interno ao iniciar campanha SMS." });
+    if (!audienceRows.length) {
+      return res.status(400).json({ ok: false, error: "Campanha sem audiência." });
     }
-  }
-);
 
-// PAUSE
-router.post(
-  "/:id/pause",
-  requireAuth,
-  requireRole(["admin", "manager"]),
-  async (req, res) => {
-    const { id } = req.params;
-    const db = loadDB();
-    const camp = getCampaign(db, id);
-    if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
+    await prisma.outboundCampaign.update({
+      where: { id: camp.id },
+      data: { status: "running" }
+    });
 
-    camp.status = "paused";
-    camp.updatedAt = nowIso();
-    saveDB(db);
-
-    res.json({ ok: true, status: camp.status });
-  }
-);
-
-// RESUME
-router.post(
-  "/:id/resume",
-  requireAuth,
-  requireRole(["admin", "manager"]),
-  async (req, res) => {
-    const { id } = req.params;
-    const db = loadDB();
-    const camp = getCampaign(db, id);
-    if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
-
-    camp.status = "running";
-    camp.updatedAt = nowIso();
-    saveDB(db);
-
-    const { queued, added } = enqueueCampaign(camp);
+    const { queued, added } = await enqueueCampaignRuns({ tenantId, campaignId: camp.id });
     ensureWorker();
 
-    res.json({ ok: true, queued, added, status: camp.status });
-  }
-);
+    const sent = await prisma.outboundRun.count({ where: { tenantId, campaignId: camp.id, status: "sent" } });
+    const failed = await prisma.outboundRun.count({ where: { tenantId, campaignId: camp.id, status: "failed" } });
 
-// CANCEL
-router.post(
-  "/:id/cancel",
-  requireAuth,
-  requireRole(["admin", "manager"]),
-  async (req, res) => {
+    return res.json({ ok: true, queued, added, sent, failed, status: "running" });
+  } catch (e) {
+    logger.error({ err: e?.message || e }, "❌ Erro ao iniciar SMS Campaign");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// PAUSE
+router.post("/:id/pause", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
     const { id } = req.params;
-    const db = loadDB();
-    const camp = getCampaign(db, id);
+    const camp = await getCampaignOr404({ tenantId, id });
     if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
 
-    camp.status = "canceled";
-    camp.updatedAt = nowIso();
-    saveDB(db);
+    const updated = await prisma.outboundCampaign.update({
+      where: { id: camp.id },
+      data: { status: "paused" }
+    });
 
-    res.json({ ok: true, status: camp.status });
+    return res.json({ ok: true, status: updated.status });
+  } catch (e) {
+    logger.error({ err: e?.message || e }, "❌ Erro ao pausar SMS Campaign");
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
-);
+});
+
+// RESUME
+router.post("/:id/resume", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const { id } = req.params;
+    const camp = await getCampaignOr404({ tenantId, id });
+    if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
+
+    await prisma.outboundCampaign.update({
+      where: { id: camp.id },
+      data: { status: "running" }
+    });
+
+    const { queued, added } = await enqueueCampaignRuns({ tenantId, campaignId: camp.id });
+    ensureWorker();
+
+    return res.json({ ok: true, queued, added, status: "running" });
+  } catch (e) {
+    logger.error({ err: e?.message || e }, "❌ Erro ao retomar SMS Campaign");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// CANCEL
+router.post("/:id/cancel", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const { id } = req.params;
+    const camp = await getCampaignOr404({ tenantId, id });
+    if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
+
+    const updated = await prisma.outboundCampaign.update({
+      where: { id: camp.id },
+      data: { status: "canceled" }
+    });
+
+    return res.json({ ok: true, status: updated.status });
+  } catch (e) {
+    logger.error({ err: e?.message || e }, "❌ Erro ao cancelar SMS Campaign");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
 
 // REPORT (JSON)
 router.get("/:id/report", requireAuth, async (req, res) => {
-  const { id } = req.params;
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-  const db = loadDB();
-  const camp = getCampaign(db, id);
-  if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
+    const { id } = req.params;
+    const camp = await getCampaignOr404({ tenantId, id });
+    if (!camp) return res.status(404).json({ ok: false, error: "Campanha não encontrada." });
 
-  const total =
-    camp.audienceCount || ensureArray(camp.audienceRows).length || 0;
-  const results = ensureArray(camp.results);
+    const total = await prisma.outboundRun.count({ where: { tenantId, campaignId: camp.id } });
+    const results = await prisma.outboundRun.findMany({
+      where: { tenantId, campaignId: camp.id },
+      orderBy: { createdAt: "asc" },
+      select: { to: true, status: true, externalId: true, payload: true, error: true, updatedAt: true }
+    });
 
-  const sent = results.filter((r) => r.status === "sent").length;
-  const failed = results.filter((r) => r.status === "failed").length;
-  const pending = Math.max(0, total - (sent + failed));
+    const sent = results.filter((r) => r.status === "sent").length;
+    const failed = results.filter((r) => r.status === "failed").length;
+    const pending = Math.max(0, total - (sent + failed));
 
-  res.json({
-    ok: true,
-    id: camp.id,
-    name: camp.name,
-    status: camp.status,
-    total,
-    sent,
-    failed,
-    pending,
-    results
-  });
+    return res.json({
+      ok: true,
+      id: camp.id,
+      name: camp.name,
+      status: camp.status,
+      total,
+      sent,
+      failed,
+      pending,
+      results: results.map((r) => ({
+        phone: r.to,
+        status: r.status,
+        codeSms: r.externalId || "",
+        attempts: r?.payload?.attempts ?? "",
+        providerRaw: r?.payload?.providerRaw ?? "",
+        error: r.error || "",
+        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : nowIso()
+      }))
+    });
+  } catch (e) {
+    logger.error({ err: e?.message || e }, "❌ Erro ao gerar report SMS");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
 });
 
-// DOWNLOAD REPORT CSV (Excel)
+// DOWNLOAD REPORT CSV
 router.get("/:id/report.csv", requireAuth, async (req, res) => {
-  const { id } = req.params;
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).send("tenant_not_resolved");
 
-  const db = loadDB();
-  const camp = getCampaign(db, id);
-  if (!camp) return res.status(404).send("Campanha não encontrada");
+    const { id } = req.params;
+    const camp = await getCampaignOr404({ tenantId, id });
+    if (!camp) return res.status(404).send("Campanha não encontrada");
 
-  const rows = ensureArray(camp.results);
+    const rows = await prisma.outboundRun.findMany({
+      where: { tenantId, campaignId: camp.id },
+      orderBy: { createdAt: "asc" },
+      select: { to: true, status: true, externalId: true, payload: true, error: true, updatedAt: true }
+    });
 
-  const header = ["telefone", "status", "tentativas", "retorno_iagente", "erro", "atualizado_em"];
+    const header = ["telefone", "status", "codeSms", "tentativas", "retorno_iagente", "erro", "atualizado_em"];
 
-  const csv = [
-    header.join(";"),
-    ...rows.map((r) =>
-      [
-        r.phone,
-        r.status,
-        r.attempts,
-        `"${String(r.providerRaw || "").replace(/"/g, '""')}"`,
-        `"${String(r.error || "").replace(/"/g, '""')}"`,
-        r.updatedAt
-      ].join(";")
-    )
-  ].join("\n");
+    const csv = [
+      header.join(";"),
+      ...rows.map((r) =>
+        [
+          r.to,
+          r.status,
+          r.externalId || "",
+          r?.payload?.attempts ?? "",
+          `"${String(r?.payload?.providerRaw || "").replace(/"/g, '""')}"`,
+          `"${String(r.error || "").replace(/"/g, '""')}"`,
+          r.updatedAt ? new Date(r.updatedAt).toISOString() : ""
+        ].join(";")
+      )
+    ].join("\n");
 
-  res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="sms-report-${camp.id}.csv"`);
-
-  res.send(csv);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="sms-report-${camp.id}.csv"`);
+    return res.send(csv);
+  } catch (e) {
+    logger.error({ err: e?.message || e }, "❌ Erro ao exportar CSV SMS");
+    return res.status(500).send("Erro ao exportar CSV");
+  }
 });
 
 export default router;
