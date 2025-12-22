@@ -1,3 +1,4 @@
+// frontend/src/pages/LoginPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import "../styles/login-page.css";
 
@@ -32,8 +33,18 @@ function safeSet(storage, key, value) {
   try {
     storage.setItem(key, value);
     return true;
-  } catch {
+  } catch (e) {
+    console.error("[AUTH] storage.setItem falhou", { key, err: String(e?.message || e) });
     return false;
+  }
+}
+
+function safeGet(storage, key) {
+  try {
+    return storage.getItem(key);
+  } catch (e) {
+    console.error("[AUTH] storage.getItem falhou", { key, err: String(e?.message || e) });
+    return null;
   }
 }
 
@@ -43,6 +54,12 @@ function safeRemove(storage, key) {
   } catch {
     // ignore
   }
+}
+
+function maskToken(t) {
+  const s = String(t || "");
+  if (!s) return "(empty)";
+  return `${s.slice(0, 14)}...${s.slice(-8)} (len=${s.length})`;
 }
 
 export default function LoginPage({ onLogin }) {
@@ -66,6 +83,8 @@ export default function LoginPage({ onLogin }) {
   );
 
   function persistSession({ token, user }) {
+    if (typeof window === "undefined") return;
+
     const t = String(token || "").trim();
     if (!t) throw new Error("Token vazio no login.");
 
@@ -81,31 +100,50 @@ export default function LoginPage({ onLogin }) {
 
     // user segue a regra do rememberMe
     const storageForUser = rememberMe ? localStorage : sessionStorage;
-    const okUser = safeSet(storageForUser, AUTH_USER_KEY, JSON.stringify(user || null));
+    const okUser = safeSet(
+      storageForUser,
+      AUTH_USER_KEY,
+      JSON.stringify(user || null)
+    );
 
-    // ✅ sanity check real (é isso que evita o “não aparece no local storage”)
-    const saved =
-      localStorage.getItem(AUTH_TOKEN_KEY) ||
-      sessionStorage.getItem(AUTH_TOKEN_KEY);
+    // ✅ sanity check real (evita “não aparece no local storage”)
+    const savedLocal = safeGet(localStorage, AUTH_TOKEN_KEY);
+    const savedSession = safeGet(sessionStorage, AUTH_TOKEN_KEY);
+    const saved = savedLocal || savedSession;
 
     if (!saved || saved !== t) {
+      console.error("[AUTH] Token não persistiu", {
+        okLocalToken,
+        okSessionToken,
+        savedLocal: maskToken(savedLocal),
+        savedSession: maskToken(savedSession)
+      });
+
       throw new Error(
         "Login OK, mas o navegador não persistiu o token (storage bloqueado, modo privado, extensão, ou política do browser)."
       );
     }
 
-    // Se por algum motivo o Local falhar mas Session funcionar, tudo bem.
-    // Mas se ambos falharem, já estourou erro acima.
     if (!okLocalToken && !okSessionToken) {
       throw new Error("Não foi possível salvar o token em nenhum storage.");
     }
     if (!okUser) {
-      // não derruba login por causa disso, mas alerta.
       console.warn("[AUTH] Não consegui persistir o usuário no storage.");
     }
 
-    // debug opcional (não interfere em nada)
+    // ✅ evento pra mesma aba (App pode ouvir se quiser)
+    window.dispatchEvent(new Event("gp-auth-changed"));
+
+    // debug opcional (não interfere)
     window.__GP_AUTH_TOKEN__ = t;
+
+    console.log("[AUTH] sessão persistida", {
+      token: maskToken(t),
+      okLocalToken,
+      okSessionToken,
+      okUser,
+      rememberMe
+    });
   }
 
   async function handleSubmit(e) {
@@ -126,8 +164,14 @@ export default function LoginPage({ onLogin }) {
       });
 
       if (!data?.token || !data?.user) {
+        console.error("[AUTH] resposta /login inválida", data);
         throw new Error("Resposta inválida da API de login.");
       }
+
+      console.log("[AUTH] /login OK", {
+        userEmail: data?.user?.email,
+        token: maskToken(data?.token)
+      });
 
       persistSession({ token: data.token, user: data.user });
 
@@ -171,7 +215,9 @@ export default function LoginPage({ onLogin }) {
           </div>
         </div>
 
-        <div className="login-subtitle">Acesse com suas credenciais de operador.</div>
+        <div className="login-subtitle">
+          Acesse com suas credenciais de operador.
+        </div>
 
         {error && <div className="login-error">{error}</div>}
 
@@ -233,10 +279,10 @@ export default function LoginPage({ onLogin }) {
         </form>
 
         <div className="login-footer">
-          Ambiente: <strong>{import.meta.env.MODE}</strong> · API: <code>{API_BASE}</code>
+          Ambiente: <strong>{import.meta.env.MODE}</strong> · API:{" "}
+          <code>{API_BASE}</code>
         </div>
       </div>
     </div>
   );
 }
-
