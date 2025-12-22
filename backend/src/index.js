@@ -12,6 +12,7 @@ import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 
+// Middlewares
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { requireTenant } from "./middleware/requireTenant.js";
 import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
@@ -35,7 +36,7 @@ if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath });
 }
 
-// Compat WhatsApp ENV
+// Base domain (tenant por subdomínio)
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
 // ===============================
@@ -54,11 +55,10 @@ try {
   prisma = mod?.default || mod?.prisma;
 
   prismaReady = !!(prisma?.user && prisma?.tenant && prisma?.userTenant);
-
-  logger.info({ prismaReady }, "Prisma status");
+  logger.info({ prismaReady }, "🧠 Prisma status");
 } catch (err) {
   prismaReady = false;
-  logger.error({ err }, "Erro ao carregar Prisma");
+  logger.error({ err }, "❌ Erro ao carregar Prisma");
 }
 
 // ===============================
@@ -111,17 +111,23 @@ app.use(
   pinoHttp({
     logger,
     quietReqLogger: true,
+    autoLogging: {
+      ignore: (req) =>
+        req.method === "OPTIONS" ||
+        req.url.startsWith("/health") ||
+        req.url.startsWith("/webhook"),
+    },
   })
 );
 
 // ===============================
-// CORS
+// CORS + PARSERS
 // ===============================
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 
 // ===============================
-// TENANT RESOLUTION
+// TENANT RESOLUTION (ANTES DE AUTH)
 // ===============================
 app.use(
   resolveTenant({
@@ -150,19 +156,36 @@ function requirePrisma(req, res, next) {
 // 🌍 ROTAS PÚBLICAS
 // ===============================
 
-// 🔐 Criar / redefinir senha (PÚBLICO)
+// 🔐 Password / convite / reset
 app.use("/auth", passwordRouter);
 
-// 🌐 Webchat
+// 🌐 WebChat (widget)
 app.use("/webchat", webchatRouter);
+
+// 🌐 WhatsApp Webhook (PRECISA ser público)
+app.use("/webhook/whatsapp", whatsappRouter);
 
 // ❤️ Health
 app.get("/", (req, res) => res.json({ status: "ok" }));
 app.get("/health", async (req, res) => {
-  const users = prismaReady ? await prisma.user.count() : 0;
-  const tenants = prismaReady ? await prisma.tenant.count() : 0;
+  let users = 0;
+  let tenants = 0;
 
-  res.json({ ok: true, prismaReady, users, tenants, uptime: process.uptime() });
+  try {
+    if (prismaReady) {
+      users = await prisma.user.count();
+      tenants = await prisma.tenant.count();
+    }
+  } catch {}
+
+  res.json({
+    ok: true,
+    env: ENV,
+    prismaReady,
+    users,
+    tenants,
+    uptime: process.uptime(),
+  });
 });
 
 // ===============================
@@ -171,12 +194,20 @@ app.get("/health", async (req, res) => {
 app.post("/login", requirePrisma, async (req, res) => {
   const { email, password } = req.body || {};
 
+  if (!email || !password) {
+    return res.status(400).json({ error: "Informe e-mail e senha." });
+  }
+
   const user = await prisma.user.findFirst({
     where: { email, isActive: true },
-    include: { tenants: { include: { tenant: true } } },
+    include: {
+      tenants: {
+        include: { tenant: true },
+      },
+    },
   });
 
-  if (!user || !verifyPassword(password, user.passwordHash)) {
+  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
     return res.status(401).json({ error: "Credenciais inválidas." });
   }
 
@@ -193,13 +224,19 @@ app.post("/login", requirePrisma, async (req, res) => {
 // 🔐 SELEÇÃO DE TENANT
 // ===============================
 app.post("/auth/select-tenant", requireAuth, requirePrisma, async (req, res) => {
-  const { organizationId } = req.body;
+  const { organizationId } = req.body || {};
+
+  if (!organizationId) {
+    return res.status(400).json({ error: "organizationId obrigatório" });
+  }
 
   const tenant = await prisma.tenant.findUnique({
     where: { id: organizationId },
   });
 
-  if (!tenant) return res.status(404).json({ error: "Tenant inválido." });
+  if (!tenant || !tenant.isActive) {
+    return res.status(404).json({ error: "Tenant inválido." });
+  }
 
   const token = jwt.sign(
     {
@@ -225,16 +262,21 @@ app.use(requirePrisma);
 // ===============================
 // 🔒 ROTAS PROTEGIDAS
 // ===============================
+
+// API
 app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
 app.use("/api/human", assignmentRouter);
 
+// Settings
 app.use("/settings", usersRouter);
 app.use("/settings/groups", groupsRouter);
 app.use("/settings/channels", channelsRouter);
 
+// Conversas
 app.use("/conversations", conversationsRouter);
 
+// Outbound
 app.use("/outbound/assets", assetsRouter);
 app.use("/outbound/numbers", numbersRouter);
 app.use("/outbound/templates", templatesRouter);
@@ -244,15 +286,10 @@ app.use("/outbound/sms-campaigns", smsCampaignsRouter);
 app.use("/outbound", outboundRouter);
 
 // ===============================
-// WEBHOOK (PÚBLICO)
-// ===============================
-app.use("/webhook/whatsapp", whatsappRouter);
-
-// ===============================
 // ERROR HANDLER
 // ===============================
 app.use((err, req, res, next) => {
-  logger.error({ err, url: req.url }, "Erro não tratado");
+  logger.error({ err, url: req.url, method: req.method }, "❌ Erro não tratado");
   res.status(500).json({ error: "Internal server error" });
 });
 
