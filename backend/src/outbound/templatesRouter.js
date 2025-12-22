@@ -1,227 +1,239 @@
 // backend/src/outbound/templatesRouter.js
+// ✅ PRISMA-FIRST (SEM data.json)
+// Templates – espelho da Meta (WhatsApp)
+
 import express from "express";
+import fetch from "node-fetch";
 import logger from "../logger.js";
 import prisma from "../lib/prisma.js";
 
 const router = express.Router();
 
-/**
- * ===============================
- * HELPERS
- * ===============================
- */
-
 function getTenantId(req) {
-  const tenantId = req.tenant?.id || req.tenantId || req.user?.tenantId;
-  return tenantId ? String(tenantId) : null;
+  const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
+  return tid ? String(tid) : null;
 }
 
-async function getFetch() {
-  if (globalThis.fetch) return globalThis.fetch;
-  const mod = await import("node-fetch");
-  return mod.default;
+// Lê env sempre “atualizado” (não congela no import)
+function getWhatsAppEnv() {
+  const WABA_ID = String(process.env.WABA_ID || process.env.WHATSAPP_WABA_ID || "").trim();
+  const WHATSAPP_TOKEN = String(process.env.WHATSAPP_TOKEN || "").trim();
+  const apiVersion = String(process.env.WHATSAPP_API_VERSION || "v22.0").trim();
+  const v = apiVersion.startsWith("v") ? apiVersion : `v${apiVersion}`;
+  return { WABA_ID, WHATSAPP_TOKEN, apiVersion: v };
 }
 
-/**
- * Busca config do WhatsApp do tenant no ChannelConfig.
- * - channel sugerido: "whatsapp"
- * - fallback: process.env.WABA_ID / process.env.WHATSAPP_TOKEN
- */
-async function getWhatsAppEnvForTenant(tenantId) {
-  let wabaId = "";
-  let token = "";
-  let apiVersion = "v22.0";
+function ensureWhatsAppEnv(res) {
+  const { WABA_ID, WHATSAPP_TOKEN } = getWhatsAppEnv();
 
-  try {
-    const row = await prisma.channelConfig.findFirst({
-      where: { tenantId, channel: "whatsapp" },
-      select: { config: true }
-    });
-
-    const cfg = row?.config && typeof row.config === "object" ? row.config : {};
-
-    wabaId = String(cfg.wabaId || cfg.WABA_ID || "").trim();
-    token = String(cfg.token || cfg.WHATSAPP_TOKEN || "").trim();
-    apiVersion = String(cfg.apiVersion || cfg.WHATSAPP_API_VERSION || apiVersion).trim();
-  } catch (e) {
-    logger.warn({ e }, "templatesRouter: falha ao ler ChannelConfig, usando ENV");
-  }
-
-  // fallback ENV (para não travar enquanto você migra configs por tenant)
-  if (!wabaId) wabaId = String(process.env.WABA_ID || process.env.WHATSAPP_WABA_ID || "").trim();
-  if (!token) token = String(process.env.WHATSAPP_TOKEN || "").trim();
-  if (!apiVersion) apiVersion = "v22.0";
-
-  return { wabaId, token, apiVersion };
-}
-
-async function ensureEnv(req, res) {
-  const tenantId = getTenantId(req);
-  if (!tenantId) {
-    res.status(400).json({ error: "tenant_not_resolved" });
-    return null;
-  }
-
-  const { wabaId, token, apiVersion } = await getWhatsAppEnvForTenant(tenantId);
-
-  if (!wabaId || !token) {
+  if (!WABA_ID || !WHATSAPP_TOKEN) {
     logger.warn(
-      { tenantId, hasWaba: !!wabaId, hasToken: !!token },
-      "⚠️ Templates – WABA_ID/WHATSAPP_TOKEN ausentes (tenant/ENV)"
+      { hasWaba: !!WABA_ID, hasToken: !!WHATSAPP_TOKEN },
+      "⚠️ Templates: WABA_ID/WHATSAPP_TOKEN ausentes"
     );
 
     res.status(500).json({
       error:
-        "Configuração do WhatsApp não encontrada. Cadastre no ChannelConfig (channel=whatsapp) ou configure WABA_ID/WHATSAPP_TOKEN no .env."
+        "Configuração do WhatsApp não encontrada. Verifique WABA_ID/WHATSAPP_WABA_ID e WHATSAPP_TOKEN no .env."
     });
-    return null;
+    return false;
   }
 
-  return { tenantId, wabaId, token, apiVersion };
+  return true;
 }
 
-function metaUrl({ apiVersion, wabaId }) {
-  return `https://graph.facebook.com/${apiVersion}/${wabaId}/message_templates`;
-}
-
-/**
- * ===============================
- * ROUTES
- * ===============================
- */
-
-// ===============================
-// LISTAR TEMPLATES DA META
-// GET /outbound/templates
-// ===============================
+/* ============================================================
+   GET /outbound/templates
+   Lista templates do banco (por tenant)
+   ============================================================ */
 router.get("/", async (req, res) => {
-  const env = await ensureEnv(req, res);
-  if (!env) return;
-
-  const { tenantId, wabaId, token, apiVersion } = env;
-
   try {
-    const url = metaUrl({ apiVersion, wabaId });
-    const fetchFn = await getFetch();
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    const metaRes = await fetchFn(url, {
-      headers: { Authorization: `Bearer ${token}` }
+    const items = await prisma.outboundTemplate.findMany({
+      where: { tenantId, channel: "whatsapp" },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }]
     });
 
-    const raw = await metaRes.text().catch(() => "");
-    let json = {};
-    try {
-      json = raw ? JSON.parse(raw) : {};
-    } catch {
-      json = {};
-    }
+    // Mantém uma forma “compatível” com a UI antiga
+    const templates = items.map((t) => {
+      const raw = t?.metadata?.raw || null;
+      const content = t?.content || null;
 
-    if (!metaRes.ok) {
-      logger.error({ tenantId, status: metaRes.status, json }, "❌ Erro ao listar templates na Meta");
-      return res.status(500).json({ error: "Erro ao listar templates", details: json });
-    }
+      return {
+        id: t.id,
+        name: t.name,
+        category: raw?.category || t?.metadata?.category || null,
+        language: t.language || raw?.language || null,
+        status: t.status || raw?.status || null,
+        quality:
+          raw?.quality_score?.quality_score ||
+          raw?.quality_score ||
+          t?.metadata?.quality ||
+          null,
+        hasFlow: (() => {
+          const comps = raw?.components || content?.components || [];
+          if (!Array.isArray(comps)) return false;
+          return comps.some(
+            (c) =>
+              c?.type === "BUTTONS" &&
+              Array.isArray(c?.buttons) &&
+              c.buttons.some((b) => b?.type === "FLOW" || b?.button_type === "FLOW" || b?.flow_id)
+          );
+        })(),
+        components: raw?.components || content?.components || [],
+        latestVersion: raw?.latest_template || t?.metadata?.latest_template || null,
+        rejectedReason: raw?.rejected_reason || t?.metadata?.rejected_reason || null,
+        updatedAt: t.updatedAt ? new Date(t.updatedAt).toISOString() : null,
+        raw
+      };
+    });
 
-    return res.json(json.data || []);
+    return res.json(templates);
   } catch (err) {
-    logger.error({ err }, "❌ Erro inesperado ao listar templates");
-    return res.status(500).json({ error: "Erro interno ao listar templates" });
+    logger.error({ err: err?.message || err }, "❌ Templates GET / failed");
+    return res.status(500).json({ error: "Erro ao carregar templates." });
   }
 });
 
-// ===============================
-// SINCRONIZAR (por enquanto = listar)
-// POST /outbound/templates/sync
-// ===============================
+/* ============================================================
+   POST /outbound/templates/sync
+   Puxa da Meta e faz UPSERT no Prisma (por tenant)
+   ============================================================ */
 router.post("/sync", async (req, res) => {
-  const env = await ensureEnv(req, res);
-  if (!env) return;
+  const tenantId = getTenantId(req);
+  if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-  const { tenantId, wabaId, token, apiVersion } = env;
+  if (!ensureWhatsAppEnv(res)) return;
+
+  const { WABA_ID, WHATSAPP_TOKEN, apiVersion } = getWhatsAppEnv();
 
   try {
-    const url = metaUrl({ apiVersion, wabaId });
-    const fetchFn = await getFetch();
+    const url = new URL(`https://graph.facebook.com/${apiVersion}/${WABA_ID}/message_templates`);
 
-    const metaRes = await fetchFn(url, {
-      headers: { Authorization: `Bearer ${token}` }
+    url.searchParams.set(
+      "fields",
+      [
+        "id",
+        "name",
+        "category",
+        "language",
+        "status",
+        "quality_score",
+        "components",
+        "rejected_reason",
+        "latest_template"
+      ].join(",")
+    );
+
+    const graphRes = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
     });
 
-    const raw = await metaRes.text().catch(() => "");
-    let json = {};
-    try {
-      json = raw ? JSON.parse(raw) : {};
-    } catch {
-      json = {};
+    const graphJson = await graphRes.json().catch(() => ({}));
+
+    if (!graphRes.ok) {
+      logger.error(
+        { status: graphRes.status, graphJson },
+        "❌ Erro ao consultar message_templates na Meta"
+      );
+      return res.status(502).json({
+        error: "Falha ao consultar a API do WhatsApp (Meta) para templates.",
+        details: graphJson
+      });
     }
 
-    if (!metaRes.ok) {
-      logger.error({ tenantId, status: metaRes.status, json }, "❌ Erro ao sincronizar templates");
-      return res.status(500).json({ error: "Erro ao sincronizar templates", details: json });
+    const now = new Date();
+
+    const incoming = Array.isArray(graphJson?.data) ? graphJson.data : [];
+    const templates = incoming.map((tpl) => ({
+      id: tpl?.id || null,
+      name: String(tpl?.name || "").trim(),
+      category: tpl?.category || null,
+      language: tpl?.language || null,
+      status: tpl?.status || null,
+      quality:
+        tpl?.quality_score?.quality_score ||
+        tpl?.quality_score ||
+        null,
+      components: Array.isArray(tpl?.components) ? tpl.components : [],
+      latest_template: tpl?.latest_template || null,
+      rejected_reason: tpl?.rejected_reason || null,
+      raw: tpl
+    })).filter((t) => t.name);
+
+    // UPSERT por (tenantId, channel, name)
+    const results = [];
+    for (const t of templates) {
+      const up = await prisma.outboundTemplate.upsert({
+        where: {
+          tenantId_channel_name: {
+            tenantId,
+            channel: "whatsapp",
+            name: t.name
+          }
+        },
+        create: {
+          tenantId,
+          channel: "whatsapp",
+          name: t.name,
+          language: t.language || null,
+          status: String(t.status || "draft").toLowerCase(),
+          content: {
+            components: t.components,
+            category: t.category,
+            language: t.language
+          },
+          metadata: {
+            source: "meta",
+            metaTemplateId: t.id,
+            category: t.category,
+            quality: t.quality,
+            rejected_reason: t.rejected_reason,
+            latest_template: t.latest_template,
+            syncedAt: now.toISOString(),
+            raw: t.raw
+          }
+        },
+        update: {
+          language: t.language || null,
+          status: String(t.status || "draft").toLowerCase(),
+          content: {
+            components: t.components,
+            category: t.category,
+            language: t.language
+          },
+          metadata: {
+            source: "meta",
+            metaTemplateId: t.id,
+            category: t.category,
+            quality: t.quality,
+            rejected_reason: t.rejected_reason,
+            latest_template: t.latest_template,
+            syncedAt: now.toISOString(),
+            raw: t.raw
+          }
+        }
+      });
+
+      results.push(up);
     }
 
-    return res.json(json.data || []);
-  } catch (err) {
-    logger.error({ err }, "❌ Erro interno ao sincronizar templates");
-    return res.status(500).json({ error: "Erro interno ao sincronizar templates" });
-  }
-});
+    logger.info(
+      { tenantId, count: results.length },
+      "✅ Templates sincronizados (Prisma-first)"
+    );
 
-// ===============================
-// CRIAR TEMPLATE
-// POST /outbound/templates
-// ===============================
-router.post("/", async (req, res) => {
-  const env = await ensureEnv(req, res);
-  if (!env) return;
-
-  const { tenantId, wabaId, token, apiVersion } = env;
-
-  const payload = req.body;
-
-  // ✅ não loga token nem payload gigante (só fields úteis)
-  logger.info(
-    {
+    return res.json({
+      success: true,
       tenantId,
-      wabaId,
-      apiVersion,
-      name: payload?.name,
-      language: payload?.language,
-      category: payload?.category
-    },
-    "📨 Recebido pedido de criação de template"
-  );
-
-  try {
-    const url = metaUrl({ apiVersion, wabaId });
-    const fetchFn = await getFetch();
-
-    const metaRes = await fetchFn(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
+      count: results.length,
+      templates: results
     });
-
-    const raw = await metaRes.text().catch(() => "");
-    let json = {};
-    try {
-      json = raw ? JSON.parse(raw) : {};
-    } catch {
-      json = {};
-    }
-
-    if (!metaRes.ok) {
-      logger.error({ tenantId, status: metaRes.status, json }, "❌ Erro ao criar template na Meta");
-      return res.status(500).json({ error: "Erro ao criar template", details: json });
-    }
-
-    logger.info({ tenantId, templateId: json?.id || null }, "✅ Template criado com sucesso na Meta");
-    return res.json(json);
   } catch (err) {
-    logger.error({ err }, "❌ Erro interno ao criar template");
-    return res.status(500).json({ error: "Erro interno ao criar template" });
+    logger.error({ err: err?.message || err }, "❌ Erro interno ao sincronizar templates");
+    return res.status(500).json({ error: "Erro interno ao sincronizar templates." });
   }
 });
 

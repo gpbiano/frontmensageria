@@ -1,98 +1,95 @@
-// backend/src/outbound/templatesRouter.js
+// backend/src/outbound/outboundRouter.js
+// ✅ PRISMA-FIRST (SEM data.json)
+// Hub Outbound (MVP): health + compat endpoints (sem storage legado)
 
 import express from "express";
 import fetch from "node-fetch";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import logger from "../logger.js";
+import prisma from "../lib/prisma.js";
 
 const router = express.Router();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+function getTenantId(req) {
+  const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
+  return tid ? String(tid) : null;
+}
 
-// Compatibilidade: aceita tanto WABA_ID quanto WHATSAPP_WABA_ID
-const WABA_ID = process.env.WABA_ID || process.env.WHATSAPP_WABA_ID;
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+function normalizeApiVersion(v) {
+  const s = String(v || "").trim();
+  if (!s) return "v22.0";
+  return s.startsWith("v") ? s : `v${s}`;
+}
 
-// Usamos o mesmo data.json do resto da plataforma
-const DB_FILE = path.join(process.cwd(), "data.json");
+// Lê env no momento do request (evita env “stale”)
+function getWhatsAppEnv() {
+  const WABA_ID = String(process.env.WABA_ID || process.env.WHATSAPP_WABA_ID || "").trim();
+  const WHATSAPP_TOKEN = String(process.env.WHATSAPP_TOKEN || "").trim();
+  const apiVersion = normalizeApiVersion(process.env.WHATSAPP_API_VERSION || "v22.0");
+  return { WABA_ID, WHATSAPP_TOKEN, apiVersion };
+}
 
-function loadDB() {
-  try {
-    const raw = fs.readFileSync(DB_FILE, "utf-8");
-    return JSON.parse(raw);
-  } catch (err) {
+function ensureWhatsAppEnv(res) {
+  const { WABA_ID, WHATSAPP_TOKEN } = getWhatsAppEnv();
+  if (!WABA_ID || !WHATSAPP_TOKEN) {
     logger.warn(
-      { err },
-      "⚠️ data.json não encontrado ao carregar em templatesRouter, usando objeto vazio."
+      { hasWaba: !!WABA_ID, hasToken: !!WHATSAPP_TOKEN },
+      "⚠️ Outbound: WABA_ID/WHATSAPP_TOKEN ausentes"
     );
-    return {};
+    res.status(500).json({
+      error:
+        "Configuração do WhatsApp não encontrada. Verifique WABA_ID/WHATSAPP_WABA_ID e WHATSAPP_TOKEN no .env."
+    });
+    return false;
   }
+  return true;
 }
-
-function saveDB(data) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-  } catch (err) {
-    logger.error({ err }, "❌ Erro ao salvar data.json em templatesRouter");
-  }
-}
-
-/* ============================================================
-   TEMPLATES – ESPELHO DA META
-   ============================================================ */
 
 /**
- * GET /outbound/templates
- *
- * Retorna a lista de templates salva no data.json.
- * O index.js monta esta rota como:
- *   app.use("/outbound/templates", templatesRouter);
- *
- * Então aqui GET / → GET /outbound/templates no mundo externo.
+ * GET /outbound
+ * Hub do módulo outbound (status + contadores)
  */
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const db = loadDB();
-    const templates = db.templates || [];
-    return res.json(templates);
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const [templates, numbers, campaigns, optouts] = await Promise.all([
+      prisma.outboundTemplate.count({ where: { tenantId } }),
+      prisma.outboundNumber.count({ where: { tenantId } }),
+      prisma.outboundCampaign.count({ where: { tenantId } }),
+      prisma.optOutEntry.count({ where: { tenantId } })
+    ]);
+
+    return res.json({
+      ok: true,
+      tenantId,
+      counters: { templates, numbers, campaigns, optouts },
+      env: {
+        hasWaba: !!(process.env.WABA_ID || process.env.WHATSAPP_WABA_ID),
+        hasWhatsappToken: !!process.env.WHATSAPP_TOKEN,
+        whatsappApiVersion: normalizeApiVersion(process.env.WHATSAPP_API_VERSION || "v22.0")
+      }
+    });
   } catch (err) {
-    logger.error({ err }, "❌ Erro ao carregar templates");
-    return res.status(500).json({ error: "Erro ao carregar templates." });
+    logger.error({ err: err?.message || err }, "❌ outboundRouter GET / failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
 /**
- * POST /outbound/templates/sync
- *
- * Consulta o Graph API da Meta e salva os templates em data.json,
- * espelhando a tela de templates da conta WABA.
+ * GET /outbound/meta/templates
+ * Consulta a Meta (não grava em lugar nenhum).
+ * Útil pra debug / comparar com o banco.
  */
-router.post("/sync", async (req, res) => {
-  if (!WABA_ID || !WHATSAPP_TOKEN) {
-    logger.warn(
-      {
-        hasWaba: !!WABA_ID,
-        hasToken: !!WHATSAPP_TOKEN
-      },
-      "⚠️ Sync de templates chamado sem WABA_ID/WHATSAPP_TOKEN corretos."
-    );
-
-    return res.status(500).json({
-      error:
-        "WABA_ID/WHATSAPP_WABA_ID ou WHATSAPP_TOKEN não configurados nas variáveis de ambiente."
-    });
-  }
-
+router.get("/meta/templates", async (req, res) => {
   try {
-    // Endpoint oficial de templates da Meta
-    const url = new URL(
-      `https://graph.facebook.com/v22.0/${WABA_ID}/message_templates`
-    );
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-    // Campos principais para nossa UI
+    if (!ensureWhatsAppEnv(res)) return;
+    const { WABA_ID, WHATSAPP_TOKEN, apiVersion } = getWhatsAppEnv();
+
+    const url = new URL(`https://graph.facebook.com/${apiVersion}/${WABA_ID}/message_templates`);
     url.searchParams.set(
       "fields",
       [
@@ -108,77 +105,62 @@ router.post("/sync", async (req, res) => {
       ].join(",")
     );
 
-    const graphRes = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`
-      }
+    const metaRes = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
     });
 
-    const graphJson = await graphRes.json();
+    const json = await metaRes.json().catch(() => ({}));
 
-    if (!graphRes.ok) {
-      logger.error(
-        { status: graphRes.status, graphJson },
-        "❌ Erro ao consultar message_templates na Meta"
-      );
-      return res.status(502).json({
-        error: "Falha ao consultar a API do WhatsApp (Meta) para templates.",
-        details: graphJson
-      });
+    if (!metaRes.ok) {
+      logger.error({ status: metaRes.status, json }, "❌ Meta templates fetch failed");
+      return res.status(502).json({ error: "meta_fetch_failed", details: json });
     }
 
-    const now = new Date().toISOString();
-
-    const templates = (graphJson.data || []).map((tpl) => ({
-      id: tpl.id,
-      name: tpl.name,
-      category: tpl.category || null,
-      language: tpl.language || null,
-      status: tpl.status || null,
-      quality:
-        tpl.quality_score && tpl.quality_score.quality_score
-          ? tpl.quality_score.quality_score
-          : null,
-      hasFlow: Array.isArray(tpl.components)
-        ? tpl.components.some(
-            (c) =>
-              c.type === "BUTTONS" &&
-              Array.isArray(c.buttons) &&
-              c.buttons.some(
-                (b) =>
-                  b.type === "FLOW" ||
-                  b.button_type === "FLOW" ||
-                  b.flow_id
-              )
-          )
-        : false,
-      components: tpl.components || [],
-      latestVersion: tpl.latest_template || null,
-      rejectedReason: tpl.rejected_reason || null,
-      updatedAt: now,
-      raw: tpl
-    }));
-
-    const db = loadDB();
-    db.templates = templates;
-    saveDB(db);
-
-    logger.info(
-      { count: templates.length },
-      "✅ Templates sincronizados com sucesso"
-    );
-
-    return res.json({
-      success: true,
-      count: templates.length,
-      templates
-    });
+    return res.json({ ok: true, tenantId, data: json.data || [] });
   } catch (err) {
-    logger.error({ err }, "❌ Erro inesperado ao sincronizar templates");
-    return res
-      .status(500)
-      .json({ error: "Erro interno ao sincronizar templates." });
+    logger.error({ err: err?.message || err }, "❌ outboundRouter GET /meta/templates failed");
+    return res.status(500).json({ error: "internal_error" });
   }
+});
+
+/**
+ * GET /outbound/meta/health
+ * Checa apenas se as credenciais/config do WhatsApp estão presentes.
+ * (Sem chamada externa, sem banco.)
+ */
+router.get("/meta/health", (req, res) => {
+  const tenantId = getTenantId(req);
+  const { WABA_ID, WHATSAPP_TOKEN, apiVersion } = getWhatsAppEnv();
+
+  return res.json({
+    ok: true,
+    tenantId: tenantId || null,
+    hasWaba: !!WABA_ID,
+    hasToken: !!WHATSAPP_TOKEN,
+    apiVersion
+  });
+});
+
+/**
+ * COMPAT: se existia algo como /outbound/templates no router legado,
+ * a sua API atual já monta /outbound/templates via templatesRouter.
+ * Então aqui deixamos explícito pra evitar confusão.
+ */
+router.get("/_routes", (_req, res) => {
+  return res.json({
+    ok: true,
+    routes: [
+      "/outbound (hub)",
+      "/outbound/templates",
+      "/outbound/numbers",
+      "/outbound/assets",
+      "/outbound/campaigns",
+      "/outbound/optout",
+      "/outbound/sms-campaigns",
+      "/outbound/meta/templates",
+      "/outbound/meta/health"
+    ]
+  });
 });
 
 export default router;
