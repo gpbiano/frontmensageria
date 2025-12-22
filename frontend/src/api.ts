@@ -47,32 +47,22 @@ function isUnauthorized(res: Response) {
 }
 
 /**
- * ✅ Regra:
- * - Não deixar "extra headers" sobrescrever Authorization.
- * - Não sobrescrever Content-Type automaticamente se for FormData.
- * - Merge previsível (HeadersInit pode ser várias formas).
+ * ✅ Regras:
+ * - Se existir token no storage, ele SEMPRE vence (não deixa sobrescrever Authorization).
+ * - Se NÃO existir token, respeita Authorization vindo de fora (ajuda debug / chamadas custom).
+ * - Não forçar Content-Type quando for FormData.
+ * - Merge previsível pra qualquer HeadersInit.
  */
-function buildHeaders(extra?: HeadersInit): HeadersInit {
+function buildHeaders(extra?: HeadersInit): Headers {
   const token = getToken();
+  const headers = new Headers(extra || {});
 
-  // Normaliza extra -> objeto simples
-  const normalized: Record<string, string> = {};
-  if (extra) {
-    const h = new Headers(extra);
-    h.forEach((v, k) => {
-      normalized[k] = v;
-    });
+  // Se temos token, ele vence qualquer Authorization externo
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
   }
 
-  // Remove Authorization vindo de fora (case-insensitive), pra não sobrescrever o token
-  Object.keys(normalized).forEach((k) => {
-    if (k.toLowerCase() === "authorization") delete normalized[k];
-  });
-
-  return {
-    ...normalized,
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  };
+  return headers;
 }
 
 // ======================================================
@@ -325,7 +315,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
     body: { email, password }
   });
 
-  // ✅ FIX DEFINITIVO: grava em ambos (evita mismatch com rememberMe)
+  // ✅ grava em ambos (evita mismatch com rememberMe)
   if (data?.token && typeof window !== "undefined") {
     localStorage.setItem(AUTH_KEY, data.token);
     sessionStorage.setItem(AUTH_KEY, data.token);
@@ -344,10 +334,11 @@ export function logout(): void {
  */
 export function setAuthToken(token: string, mode: "local" | "session" | "both" = "both") {
   if (typeof window === "undefined") return;
-  if (!token) return;
+  const t = String(token || "").trim();
+  if (!t) return;
 
-  if (mode === "local" || mode === "both") localStorage.setItem(AUTH_KEY, token);
-  if (mode === "session" || mode === "both") sessionStorage.setItem(AUTH_KEY, token);
+  if (mode === "local" || mode === "both") localStorage.setItem(AUTH_KEY, t);
+  if (mode === "session" || mode === "both") sessionStorage.setItem(AUTH_KEY, t);
 }
 
 export function getAuthToken() {
