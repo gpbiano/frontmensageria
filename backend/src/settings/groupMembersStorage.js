@@ -1,21 +1,22 @@
 // backend/src/settings/groupMembersStorage.js
 // ✅ PRISMA-FIRST (SEM data.json)
-// Este módulo era legado (data.json) e agora virou um SHIM com helpers Prisma.
-// Mantém API compatível para não quebrar imports antigos.
+// SHIM compatível para imports antigos (legado usava data.json).
+// Agora tudo é Postgres via Prisma.
 
 import logger from "../logger.js";
 import prisma from "../lib/prisma.js";
 
 // ----------------------------
-// Compat (não existe mais DB JSON)
+// Compat (legado esperava db)
 // ----------------------------
 export function loadDB() {
-  // legado esperava um objeto "db". Agora não existe.
-  return null;
+  // Retorna um "db" neutro para não quebrar código legado que faz:
+  // const { db, items } = getGroupMembers(...)
+  return { _legacy: true };
 }
 
 export function saveDB() {
-  // noop: não escrevemos mais data.json
+  // noop: não existe mais data.json
   return true;
 }
 
@@ -41,9 +42,9 @@ async function resolveTenantIdByGroupId(groupId) {
 
 function normalizeRole(role) {
   const r = String(role || "").trim().toLowerCase();
-  if (!r) return "member";
-  // mantém compat com schema (member|admin), mas não bloqueia outros se você quiser evoluir
-  return r;
+  // Alinha com schema: member | admin
+  if (r === "admin") return "admin";
+  return "member";
 }
 
 // ----------------------------
@@ -51,43 +52,47 @@ function normalizeRole(role) {
 // ----------------------------
 
 /**
- * Helpers específicos de Group Members
- * Compat: getGroupMembers(groupId, { includeInactive? })
- * ✅ Agora Prisma-first
+ * getGroupMembers(groupId, { includeInactive?, tenantId? })
+ * ✅ Prisma-first
  */
-export async function getGroupMembers(groupId, { includeInactive = false, tenantId = null } = {}) {
+export async function getGroupMembers(
+  groupId,
+  { includeInactive = false, tenantId = null } = {}
+) {
   const gid = String(groupId || "").trim();
-  if (!gid) return { db: null, items: [] };
+  if (!gid) return { db: loadDB(), items: [] };
 
   let tid = tenantId ? String(tenantId) : null;
   if (!tid) tid = await resolveTenantIdByGroupId(gid);
 
   if (!tid) {
-    // grupo não existe (ou sem tenant) -> retorna vazio
-    return { db: null, items: [] };
+    // grupo não existe (ou sem tenant) -> retorna vazio (compat)
+    return { db: loadDB(), items: [] };
   }
 
-  const where = {
-    tenantId: tid,
-    groupId: gid,
-    ...(includeInactive ? {} : { isActive: true })
-  };
-
   const items = await prisma.groupMember.findMany({
-    where,
+    where: {
+      tenantId: tid,
+      groupId: gid,
+      ...(includeInactive ? {} : { isActive: true })
+    },
     orderBy: { updatedAt: "desc" }
   });
 
-  return { db: null, items };
+  return { db: loadDB(), items };
 }
 
 /**
- * upsertGroupMember(groupId, userId, patch)
+ * upsertGroupMember(groupId, userId, patch, opts)
  * patch: { role?, isActive? }
- *
- * ✅ Prisma-first (com garantia de tenantId)
+ * opts: { tenantId? }
  */
-export async function upsertGroupMember(groupId, userId, patch = {}, { tenantId = null } = {}) {
+export async function upsertGroupMember(
+  groupId,
+  userId,
+  patch = {},
+  { tenantId = null } = {}
+) {
   const gid = String(groupId || "").trim();
   const uid = String(userId || "").trim();
 
@@ -96,24 +101,27 @@ export async function upsertGroupMember(groupId, userId, patch = {}, { tenantId 
 
   let tid = tenantId ? String(tenantId) : null;
   if (!tid) tid = await resolveTenantIdByGroupId(gid);
-  if (!tid) throw new Error("group_not_found (não foi possível resolver tenantId pelo groupId)");
+  if (!tid) throw new Error("group_not_found");
 
-  const role = patch.role !== undefined ? normalizeRole(patch.role) : undefined;
-  const isActive = patch.isActive !== undefined ? !!patch.isActive : undefined;
-
-  // ✅ garante que o grupo pertence ao tenant e está ativo (opcional, mas seguro)
-  const group = await prisma.group.findFirst({
+  // ✅ valida grupo pertence ao tenant
+  const groupOk = await prisma.group.findFirst({
     where: { id: gid, tenantId: tid },
     select: { id: true }
   });
-  if (!group) throw new Error("group_not_found_or_forbidden");
+  if (!groupOk) throw new Error("group_not_found_or_forbidden");
 
-  // ✅ garante que o usuário existe (opcional, mas ajuda a evitar lixo)
-  const user = await prisma.user.findFirst({
+  // ✅ valida usuário existe
+  const userOk = await prisma.user.findUnique({
     where: { id: uid },
     select: { id: true }
   });
-  if (!user) throw new Error("user_not_found");
+  if (!userOk) throw new Error("user_not_found");
+
+  const role =
+    patch.role !== undefined ? normalizeRole(patch.role) : undefined;
+
+  const isActive =
+    patch.isActive !== undefined ? !!patch.isActive : undefined;
 
   const member = await prisma.groupMember.upsert({
     where: {
@@ -136,7 +144,7 @@ export async function upsertGroupMember(groupId, userId, patch = {}, { tenantId 
     }
   });
 
-  return { db: null, member };
+  return { db: loadDB(), member };
 }
 
 export async function deactivateGroupMember(groupId, userId, opts = {}) {
