@@ -1,5 +1,10 @@
-// backend/src/middlewares/resolveTenant.js
-import { prisma } from "../lib/prisma.js";
+// backend/src/middleware/resolveTenant.js
+// (ou backend/src/middlewares/resolveTenant.js — use o path que seu index.js importa)
+
+import prismaMod from "../lib/prisma.js";
+
+// Prisma compat (default / prisma / direto)
+const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 function normalizeHost(host) {
   return String(host || "")
@@ -23,6 +28,42 @@ function safeGetOriginHost(req) {
   return "";
 }
 
+// ✅ match por prefixo (resolve problema de /auth/password/*)
+function isAllowedPath(reqPath, allowNoTenantPaths = []) {
+  const p = String(reqPath || "/");
+  return allowNoTenantPaths.some((base) => {
+    const b = String(base || "").trim();
+    if (!b) return false;
+    if (p === b) return true;
+    // garante que "/auth/password" libera "/auth/password/verify"
+    return p.startsWith(b.endsWith("/") ? b : b + "/");
+  });
+}
+
+// ✅ tenta resolver header como ID e, se falhar, como SLUG
+async function resolveTenantByHeaderValue(value) {
+  const v = String(value || "").trim();
+  if (!v) return null;
+
+  // 1) tenta como id
+  const byId = await prisma.tenant.findUnique({
+    where: { id: v },
+    select: { id: true, slug: true, isActive: true }
+  });
+
+  if (byId && byId.isActive) return byId;
+
+  // 2) tenta como slug
+  const bySlug = await prisma.tenant.findUnique({
+    where: { slug: v },
+    select: { id: true, slug: true, isActive: true }
+  });
+
+  if (bySlug && bySlug.isActive) return bySlug;
+
+  return null;
+}
+
 export function resolveTenant({
   tenantBaseDomain = "cliente.gplabs.com.br",
   allowNoTenantPaths = []
@@ -31,27 +72,38 @@ export function resolveTenant({
 
   return async function resolveTenantMiddleware(req, res, next) {
     try {
-      // paths liberados (health/webhook/login etc.)
-      if (allowNoTenantPaths.includes(req.path)) {
-        return next();
-      }
+      // ✅ libera rotas públicas e sub-rotas
+      if (isAllowedPath(req.path, allowNoTenantPaths)) return next();
 
-      // 1) header direto (fallback dev)
+      // ✅ header direto (id OU slug)
       const headerTenant =
         String(req.headers["x-tenant-id"] || "").trim() ||
         String(req.headers["x-tenant"] || "").trim();
 
-      // 2) por origin/referer/host -> subdomínio
+      if (headerTenant) {
+        const tenant = await resolveTenantByHeaderValue(headerTenant);
+
+        if (tenant) {
+          req.tenant = tenant;
+          req.tenantId = String(tenant.id);
+          req.tenantSlug = String(tenant.slug);
+        }
+
+        // sempre segue (requireTenant decide bloquear)
+        return next();
+      }
+
+      // ✅ por origin/referer/host -> subdomínio
       const host = safeGetOriginHost(req);
 
       let slug = null;
 
-      // Se vier host tipo empresa.cliente.gplabs.com.br
+      // host tipo: empresa.cliente.gplabs.com.br
       if (host && base && host.endsWith("." + base)) {
-        slug = host.replace("." + base, "");
+        slug = host.slice(0, -(("." + base).length)); // remove ".cliente.gplabs.com.br"
       }
 
-      // Se não achou slug pelo host, aceita body/query (fallback dev)
+      // fallback dev (body/query/req)
       if (!slug) {
         slug =
           String(req.tenantSlug || "").trim() ||
@@ -60,22 +112,7 @@ export function resolveTenant({
           null;
       }
 
-      // Se veio tenantId direto no header, resolve por ID
-      if (headerTenant) {
-        const tenant = await prisma.tenant.findUnique({
-          where: { id: headerTenant },
-          select: { id: true, slug: true, isActive: true }
-        });
-
-        if (tenant && tenant.isActive) {
-          req.tenant = tenant;
-          req.tenantSlug = tenant.slug;
-        }
-
-        return next();
-      }
-
-      // Sem slug → segue (requireTenant decide se bloqueia)
+      // Sem slug → segue (requireTenant decide bloquear)
       if (!slug) return next();
 
       req.tenantSlug = slug;
@@ -87,6 +124,8 @@ export function resolveTenant({
 
       if (tenant && tenant.isActive) {
         req.tenant = tenant;
+        req.tenantId = String(tenant.id);
+        req.tenantSlug = String(tenant.slug);
       }
 
       return next();

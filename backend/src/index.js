@@ -51,8 +51,7 @@ let prismaReady = false;
 
 try {
   const mod = await import("./lib/prisma.js");
-  prisma = mod?.default || mod?.prisma;
-
+  prisma = mod?.prisma || mod?.default || mod;
   prismaReady = !!(prisma?.user && prisma?.tenant && prisma?.userTenant);
   logger.info({ prismaReady }, "🧠 Prisma status");
 } catch (err) {
@@ -67,7 +66,7 @@ try {
 // ✅ AUTH (LOGIN OFICIAL) — evita duplicidade /login
 const { default: authRouter } = await import("./auth/authRouter.js");
 
-// 🔐 Password / convite / reset
+// 🔐 Password / convite / reset (rotas públicas em /auth/password/*)
 const { default: passwordRouter } = await import("./auth/passwordRouter.js");
 
 // Settings
@@ -91,14 +90,10 @@ const { default: templatesRouter } = await import("./outbound/templatesRouter.js
 const { default: assetsRouter } = await import("./outbound/assetsRouter.js");
 const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js");
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
-const { default: smsCampaignsRouter } = await import(
-  "./outbound/smsCampaignsRouter.js"
-);
+const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
 // WhatsApp webhook (público)
-const { default: whatsappRouter } = await import(
-  "./routes/channels/whatsappRouter.js"
-);
+const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 
 // ===============================
 // VARS
@@ -122,8 +117,8 @@ app.use(
       ignore: (req) =>
         req.method === "OPTIONS" ||
         req.url.startsWith("/health") ||
-        req.url.startsWith("/webhook"),
-    },
+        req.url.startsWith("/webhook")
+    }
   })
 );
 
@@ -134,29 +129,6 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 
 // ===============================
-// TENANT RESOLUTION (ANTES DE AUTH)
-// ===============================
-app.use(
-  resolveTenant({
-    tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
-    allowNoTenantPaths: [
-      "/",
-      "/health",
-
-      // ✅ AUTH
-      "/login", // compat (authRouter expõe /login)
-      "/auth/login",
-      "/auth/select-tenant",
-      "/auth/password",
-
-      // ✅ Canais públicos
-      "/webhook/whatsapp",
-      "/webchat",
-    ],
-  })
-);
-
-// ===============================
 // HELPERS
 // ===============================
 function requirePrisma(req, res, next) {
@@ -165,11 +137,41 @@ function requirePrisma(req, res, next) {
 }
 
 // ===============================
+// TENANT RESOLUTION (ANTES DE AUTH)
+// ===============================
+const PUBLIC_NO_TENANT_PATHS = [
+  "/",
+  "/health",
+
+  // ✅ auth/login
+  "/login", // compat (authRouter expõe /login)
+  "/auth/login",
+  "/auth/select-tenant",
+
+  // ✅ password flow (invite/reset)
+  "/auth/password",
+  "/auth/password/verify",
+  "/auth/password/set",
+
+  // ✅ canais públicos
+  "/webhook/whatsapp",
+  "/webchat"
+];
+
+app.use(
+  resolveTenant({
+    tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
+    allowNoTenantPaths: PUBLIC_NO_TENANT_PATHS
+  })
+);
+
+// ===============================
 // 🌍 ROTAS PÚBLICAS
 // ===============================
 
 // ❤️ Health
 app.get("/", (req, res) => res.json({ status: "ok" }));
+
 app.get("/health", async (req, res) => {
   let users = 0;
   let tenants = 0;
@@ -189,17 +191,16 @@ app.get("/health", async (req, res) => {
     prismaReady,
     users,
     tenants,
-    uptime: process.uptime(),
+    uptime: process.uptime()
   });
 });
 
 // 🔐 AUTH (LOGIN OFICIAL)
-// - Mantém compatibilidade com /login (porque authRouter tem /login)
+// - Mantém compatibilidade com /login
 // - Evita duplicidade de handlers no index.js
 app.use("/", authRouter);
 
 // 🔐 Password / convite / reset
-// (mantém como estava: /auth/...)
 app.use("/auth", passwordRouter);
 
 // 🌐 WebChat (widget)
@@ -214,7 +215,14 @@ app.use("/webhook/whatsapp", whatsappRouter);
 // ⚠️ Daqui pra baixo: tudo exige token
 app.use(requireAuth);
 app.use(enforceTokenTenant);
-app.use(requireTenant);
+
+// ✅ IMPORTANTE: requireTenant virou factory (para não bloquear rotas públicas e aceitar tenantId do token)
+app.use(
+  requireTenant({
+    allowNoTenantPaths: PUBLIC_NO_TENANT_PATHS
+  })
+);
+
 app.use(requirePrisma);
 
 // ===============================
@@ -242,6 +250,13 @@ app.use("/outbound/campaigns", campaignsRouter);
 app.use("/outbound/optout", optoutRouter);
 app.use("/outbound/sms-campaigns", smsCampaignsRouter);
 app.use("/outbound", outboundRouter);
+
+// ===============================
+// 404 (opcional, mas ajuda debug)
+// ===============================
+app.use((req, res) => {
+  res.status(404).json({ error: "Not Found", path: req.path });
+});
 
 // ===============================
 // ERROR HANDLER
