@@ -1,7 +1,11 @@
 // backend/src/settings/groupMembersRouter.js
+// ✅ PRISMA-FIRST (SEM data.json)
+// Rotas de membros do grupo (settings)
+// Base: /settings/groups/:id/members
+
 import express from "express";
-import crypto from "crypto";
-import { loadDB, saveDB, ensureArray } from "../utils/db.js";
+import prisma from "../lib/prisma.js";
+import logger from "../logger.js";
 import { requireAuth, requireRole } from "../middleware/requireAuth.js";
 
 const router = express.Router({ mergeParams: true });
@@ -10,228 +14,274 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function newId(prefix = "gm") {
-  return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
-}
-
 function normalizeRole(role) {
+  // ✅ schema atual: GroupMember.role = "member" | "admin" (mas deixamos flexível)
   const v = String(role || "").trim().toLowerCase();
-  if (v === "manager") return "manager";
-  return "agent";
+  if (!v) return "member";
+  if (v === "admin") return "admin";
+  if (v === "member") return "member";
+  // compat antigo (manager/agent) -> mapeia
+  if (v === "manager") return "admin";
+  if (v === "agent") return "member";
+  return v;
 }
 
 function getGroupId(req) {
-  return req.params.id || req.params.groupId || null;
+  return String(req.params.id || req.params.groupId || "").trim() || null;
 }
 
-function findGroup(db, groupId) {
-  db.groups = ensureArray(db.groups);
-  return db.groups.find((g) => String(g.id) === String(groupId)) || null;
+function getTenantId(req) {
+  const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
+  return tid ? String(tid) : null;
 }
 
-function findUser(db, userId) {
-  db.users = ensureArray(db.users);
-  return db.users.find((u) => String(u.id) === String(userId)) || null;
+async function assertGroupInTenant({ tenantId, groupId }) {
+  const group = await prisma.group.findFirst({
+    where: { id: groupId, tenantId },
+    select: { id: true, tenantId: true, name: true, isActive: true, maxChatsPerAgent: true }
+  });
+  if (!group) return { ok: false, status: 404, error: "group_not_found" };
+  return { ok: true, group };
+}
+
+async function assertUserExists(userId) {
+  const user = await prisma.user.findFirst({
+    where: { id: String(userId) },
+    select: { id: true, name: true, email: true, role: true, isActive: true }
+  });
+  if (!user) return { ok: false, status: 404, error: "user_not_found" };
+  return { ok: true, user };
 }
 
 /**
- * GET /settings/groups/:id/members
+ * GET /settings/groups/:id/members?includeInactive=true
  */
-router.get("/", requireAuth, requireRole("admin", "manager"), (req, res) => {
-  const db = loadDB();
-  const groupId = getGroupId(req);
+router.get("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  try {
+    const groupId = getGroupId(req);
+    if (!groupId) return res.status(400).json({ error: "groupId inválido (param ausente)." });
 
-  if (!groupId) {
-    return res.status(400).json({ error: "groupId inválido (param ausente)." });
-  }
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-  const group = findGroup(db, groupId);
-  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
+    const g = await assertGroupInTenant({ tenantId, groupId });
+    if (!g.ok) return res.status(g.status).json({ error: g.error });
 
-  db.groupMembers = ensureArray(db.groupMembers);
-  db.users = ensureArray(db.users);
+    const includeInactive = String(req.query.includeInactive || "false") === "true";
 
-  const includeInactive = String(req.query.includeInactive || "false") === "true";
-
-  const members = db.groupMembers
-    .filter((m) => String(m.groupId) === String(groupId))
-    .filter((m) => (includeInactive ? true : m.isActive !== false))
-    .map((m) => {
-      const u = findUser(db, m.userId);
-      return {
-        id: m.id,
-        groupId: m.groupId,
-        userId: m.userId,
-        memberRole: m.role || "agent",
-        isActive: m.isActive !== false,
-        createdAt: m.createdAt,
-        updatedAt: m.updatedAt,
-        name: u?.name || "Usuário removido",
-        email: u?.email || "",
-        userRole: u?.role || "agent",
-        userIsActive: u?.isActive !== false
-      };
+    const members = await prisma.groupMember.findMany({
+      where: {
+        tenantId,
+        groupId,
+        ...(includeInactive ? {} : { isActive: true })
+      },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        user: { select: { id: true, name: true, email: true, role: true, isActive: true } }
+      }
     });
 
-  return res.json({ items: members, total: members.length, group });
+    const items = members.map((m) => ({
+      id: m.id,
+      groupId: m.groupId,
+      userId: m.userId,
+      memberRole: m.role || "member",
+      isActive: m.isActive !== false,
+      createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : nowIso(),
+      updatedAt: m.updatedAt ? new Date(m.updatedAt).toISOString() : nowIso(),
+
+      name: m.user?.name || "Usuário removido",
+      email: m.user?.email || "",
+      userRole: m.user?.role || "agent",
+      userIsActive: m.user?.isActive !== false
+    }));
+
+    return res.json({
+      items,
+      total: items.length,
+      group: {
+        id: g.group.id,
+        name: g.group.name,
+        tenantId: g.group.tenantId,
+        isActive: g.group.isActive !== false,
+        maxChatsPerAgent: g.group.maxChatsPerAgent
+      }
+    });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ groupMembersRouter GET / failed");
+    return res.status(500).json({ error: "internal_error" });
+  }
 });
 
 /**
  * POST /settings/groups/:id/members
  * Body: { userId, role }
  */
-router.post("/", requireAuth, requireRole("admin", "manager"), (req, res) => {
-  const db = loadDB();
-  const groupId = getGroupId(req);
+router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  try {
+    const groupId = getGroupId(req);
+    if (!groupId) return res.status(400).json({ error: "groupId inválido (param ausente)." });
 
-  if (!groupId) {
-    return res.status(400).json({ error: "groupId inválido (param ausente)." });
-  }
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-  const group = findGroup(db, groupId);
-  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
+    const g = await assertGroupInTenant({ tenantId, groupId });
+    if (!g.ok) return res.status(g.status).json({ error: g.error });
 
-  const userId = req.body?.userId;
-  if (userId === undefined || userId === null || String(userId).trim() === "") {
-    return res.status(400).json({ error: "userId é obrigatório." });
-  }
+    const userId = req.body?.userId;
+    if (userId === undefined || userId === null || String(userId).trim() === "") {
+      return res.status(400).json({ error: "userId é obrigatório." });
+    }
 
-  const user = findUser(db, userId);
-  if (!user) return res.status(404).json({ error: "Usuário não encontrado." });
+    const u = await assertUserExists(String(userId).trim());
+    if (!u.ok) return res.status(u.status).json({ error: u.error });
 
-  db.groupMembers = ensureArray(db.groupMembers);
+    const role = normalizeRole(req.body?.role);
 
-  const role = normalizeRole(req.body?.role);
-  const ts = nowIso();
-
-  const existing = db.groupMembers.find(
-    (m) =>
-      String(m.groupId) === String(groupId) &&
-      String(m.userId) === String(userId)
-  );
-
-  if (existing) {
-    existing.role = role;
-    existing.isActive = true;
-    existing.updatedAt = ts;
-    saveDB(db);
-
-    return res.status(200).json({
-      success: true,
-      member: existing,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role }
+    const member = await prisma.groupMember.upsert({
+      where: {
+        tenantId_groupId_userId: {
+          tenantId,
+          groupId,
+          userId: u.user.id
+        }
+      },
+      create: {
+        tenantId,
+        groupId,
+        userId: u.user.id,
+        role,
+        isActive: true
+      },
+      update: {
+        role,
+        isActive: true
+      }
     });
+
+    return res.status(201).json({
+      success: true,
+      member,
+      user: { id: u.user.id, name: u.user.name, email: u.user.email, role: u.user.role }
+    });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ groupMembersRouter POST / failed");
+    return res.status(500).json({ error: "internal_error" });
   }
-
-  const member = {
-    id: newId("gm"),
-    groupId: String(groupId),
-    userId: Number(userId),
-    role,
-    isActive: true,
-    createdAt: ts,
-    updatedAt: ts
-  };
-
-  db.groupMembers.push(member);
-  saveDB(db);
-
-  return res.status(201).json({
-    success: true,
-    member,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role }
-  });
 });
 
-router.patch("/:userId", requireAuth, requireRole("admin", "manager"), (req, res) => {
-  const db = loadDB();
-  const groupId = getGroupId(req);
+/**
+ * PATCH /settings/groups/:id/members/:userId
+ * Body: { role?, isActive? }
+ */
+router.patch("/:userId", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  try {
+    const groupId = getGroupId(req);
+    if (!groupId) return res.status(400).json({ error: "groupId inválido (param ausente)." });
 
-  if (!groupId) {
-    return res.status(400).json({ error: "groupId inválido (param ausente)." });
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const g = await assertGroupInTenant({ tenantId, groupId });
+    if (!g.ok) return res.status(g.status).json({ error: g.error });
+
+    const userId = String(req.params.userId || "").trim();
+    if (!userId) return res.status(400).json({ error: "userId inválido (param ausente)." });
+
+    const existing = await prisma.groupMember.findFirst({
+      where: { tenantId, groupId, userId },
+      select: { id: true }
+    });
+    if (!existing) return res.status(404).json({ error: "member_not_found" });
+
+    const data = {};
+    if (req.body?.role !== undefined) data.role = normalizeRole(req.body.role);
+    if (req.body?.isActive !== undefined) data.isActive = !!req.body.isActive;
+
+    const member = await prisma.groupMember.update({
+      where: { id: existing.id },
+      data
+    });
+
+    return res.json({ success: true, member });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ groupMembersRouter PATCH /:userId failed");
+    return res.status(500).json({ error: "internal_error" });
   }
-
-  const group = findGroup(db, groupId);
-  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
-
-  const userId = req.params.userId;
-
-  db.groupMembers = ensureArray(db.groupMembers);
-
-  const member = db.groupMembers.find(
-    (m) =>
-      String(m.groupId) === String(groupId) &&
-      String(m.userId) === String(userId)
-  );
-  if (!member) return res.status(404).json({ error: "Membro não encontrado." });
-
-  if (req.body?.role !== undefined) member.role = normalizeRole(req.body.role);
-  if (req.body?.isActive !== undefined) member.isActive = !!req.body.isActive;
-
-  member.updatedAt = nowIso();
-  saveDB(db);
-
-  return res.json({ success: true, member });
 });
 
-router.patch("/:userId/deactivate", requireAuth, requireRole("admin", "manager"), (req, res) => {
-  const db = loadDB();
-  const groupId = getGroupId(req);
+/**
+ * PATCH /settings/groups/:id/members/:userId/deactivate
+ */
+router.patch("/:userId/deactivate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  try {
+    const groupId = getGroupId(req);
+    if (!groupId) return res.status(400).json({ error: "groupId inválido (param ausente)." });
 
-  if (!groupId) {
-    return res.status(400).json({ error: "groupId inválido (param ausente)." });
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const g = await assertGroupInTenant({ tenantId, groupId });
+    if (!g.ok) return res.status(g.status).json({ error: g.error });
+
+    const userId = String(req.params.userId || "").trim();
+    if (!userId) return res.status(400).json({ error: "userId inválido (param ausente)." });
+
+    const existing = await prisma.groupMember.findFirst({
+      where: { tenantId, groupId, userId },
+      select: { id: true }
+    });
+    if (!existing) return res.status(404).json({ error: "member_not_found" });
+
+    const member = await prisma.groupMember.update({
+      where: { id: existing.id },
+      data: { isActive: false }
+    });
+
+    return res.json({ success: true, member });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ groupMembersRouter PATCH deactivate failed");
+    return res.status(500).json({ error: "internal_error" });
   }
-
-  const group = findGroup(db, groupId);
-  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
-
-  const userId = req.params.userId;
-
-  db.groupMembers = ensureArray(db.groupMembers);
-
-  const member = db.groupMembers.find(
-    (m) =>
-      String(m.groupId) === String(groupId) &&
-      String(m.userId) === String(userId)
-  );
-  if (!member) return res.status(404).json({ error: "Membro não encontrado." });
-
-  member.isActive = false;
-  member.updatedAt = nowIso();
-  saveDB(db);
-
-  return res.json({ success: true, member });
 });
 
-router.patch("/:userId/activate", requireAuth, requireRole("admin", "manager"), (req, res) => {
-  const db = loadDB();
-  const groupId = getGroupId(req);
+/**
+ * PATCH /settings/groups/:id/members/:userId/activate
+ * Body: { role? }
+ */
+router.patch("/:userId/activate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  try {
+    const groupId = getGroupId(req);
+    if (!groupId) return res.status(400).json({ error: "groupId inválido (param ausente)." });
 
-  if (!groupId) {
-    return res.status(400).json({ error: "groupId inválido (param ausente)." });
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const g = await assertGroupInTenant({ tenantId, groupId });
+    if (!g.ok) return res.status(g.status).json({ error: g.error });
+
+    const userId = String(req.params.userId || "").trim();
+    if (!userId) return res.status(400).json({ error: "userId inválido (param ausente)." });
+
+    const existing = await prisma.groupMember.findFirst({
+      where: { tenantId, groupId, userId },
+      select: { id: true }
+    });
+    if (!existing) return res.status(404).json({ error: "member_not_found" });
+
+    const data = { isActive: true };
+    if (req.body?.role !== undefined) data.role = normalizeRole(req.body.role);
+
+    const member = await prisma.groupMember.update({
+      where: { id: existing.id },
+      data
+    });
+
+    return res.json({ success: true, member });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ groupMembersRouter PATCH activate failed");
+    return res.status(500).json({ error: "internal_error" });
   }
-
-  const group = findGroup(db, groupId);
-  if (!group) return res.status(404).json({ error: "Grupo não encontrado." });
-
-  const userId = req.params.userId;
-
-  db.groupMembers = ensureArray(db.groupMembers);
-
-  const member = db.groupMembers.find(
-    (m) =>
-      String(m.groupId) === String(groupId) &&
-      String(m.userId) === String(userId)
-  );
-  if (!member) return res.status(404).json({ error: "Membro não encontrado." });
-
-  member.isActive = true;
-  if (req.body?.role !== undefined) member.role = normalizeRole(req.body.role);
-
-  member.updatedAt = nowIso();
-  saveDB(db);
-
-  return res.json({ success: true, member });
 });
 
 export default router;

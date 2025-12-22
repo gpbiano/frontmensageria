@@ -1,132 +1,161 @@
 // backend/src/settings/groupMembersStorage.js
-import fs from "fs";
-import path from "path";
+// ✅ PRISMA-FIRST (SEM data.json)
+// Este módulo era legado (data.json) e agora virou um SHIM com helpers Prisma.
+// Mantém API compatível para não quebrar imports antigos.
 
-const DB_FILE = process.env.DB_FILE
-  ? path.resolve(process.cwd(), process.env.DB_FILE)
-  : path.join(process.cwd(), "data.json");
+import logger from "../logger.js";
+import prisma from "../lib/prisma.js";
 
-function safeJsonParse(text, fallback) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return fallback;
-  }
-}
-
+// ----------------------------
+// Compat (não existe mais DB JSON)
+// ----------------------------
 export function loadDB() {
-  try {
-    if (!fs.existsSync(DB_FILE)) {
-      const initial = {
-        users: [],
-        passwordTokens: [],
-        contacts: [],
-        conversations: [],
-        messagesByConversation: {},
-        settings: { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] },
-        outboundCampaigns: [],
-        groups: [],
-        groupMembers: []
-      };
-      fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), "utf8");
-      return initial;
-    }
-
-    const raw = fs.readFileSync(DB_FILE, "utf8");
-    const db = safeJsonParse(raw, {});
-
-    // garante arrays
-    if (!Array.isArray(db.users)) db.users = [];
-    if (!Array.isArray(db.groups)) db.groups = [];
-    if (!Array.isArray(db.groupMembers)) db.groupMembers = [];
-    if (!Array.isArray(db.passwordTokens)) db.passwordTokens = [];
-    if (!Array.isArray(db.contacts)) db.contacts = [];
-    if (!Array.isArray(db.conversations)) db.conversations = [];
-    if (!db.messagesByConversation || typeof db.messagesByConversation !== "object")
-      db.messagesByConversation = {};
-    if (!db.settings) db.settings = { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] };
-    if (!Array.isArray(db.outboundCampaigns)) db.outboundCampaigns = [];
-
-    return db;
-  } catch (err) {
-    // fallback seguro
-    return {
-      users: [],
-      passwordTokens: [],
-      contacts: [],
-      conversations: [],
-      messagesByConversation: {},
-      settings: { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] },
-      outboundCampaigns: [],
-      groups: [],
-      groupMembers: []
-    };
-  }
+  // legado esperava um objeto "db". Agora não existe.
+  return null;
 }
 
-export function saveDB(db) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf8");
+export function saveDB() {
+  // noop: não escrevemos mais data.json
+  return true;
 }
 
-// helper simples (mesmo padrão que você usa)
+// helper simples (mantém padrão que você usa)
 export function ensureArray(v) {
   return Array.isArray(v) ? v : [];
 }
 
+// ----------------------------
+// Helpers internos
+// ----------------------------
+async function resolveTenantIdByGroupId(groupId) {
+  const gid = String(groupId || "").trim();
+  if (!gid) return null;
+
+  const g = await prisma.group.findUnique({
+    where: { id: gid },
+    select: { tenantId: true }
+  });
+
+  return g?.tenantId ? String(g.tenantId) : null;
+}
+
+function normalizeRole(role) {
+  const r = String(role || "").trim().toLowerCase();
+  if (!r) return "member";
+  // mantém compat com schema (member|admin), mas não bloqueia outros se você quiser evoluir
+  return r;
+}
+
+// ----------------------------
+// API pública (compat)
+// ----------------------------
+
 /**
  * Helpers específicos de Group Members
+ * Compat: getGroupMembers(groupId, { includeInactive? })
+ * ✅ Agora Prisma-first
  */
-export function getGroupMembers(groupId, { includeInactive = false } = {}) {
-  const db = loadDB();
-  db.groupMembers = ensureArray(db.groupMembers);
+export async function getGroupMembers(groupId, { includeInactive = false, tenantId = null } = {}) {
+  const gid = String(groupId || "").trim();
+  if (!gid) return { db: null, items: [] };
 
-  const items = db.groupMembers
-    .filter((m) => String(m.groupId) === String(groupId))
-    .filter((m) => (includeInactive ? true : m.isActive !== false));
+  let tid = tenantId ? String(tenantId) : null;
+  if (!tid) tid = await resolveTenantIdByGroupId(gid);
 
-  return { db, items };
-}
-
-export function upsertGroupMember(groupId, userId, patch = {}) {
-  const db = loadDB();
-  db.groupMembers = ensureArray(db.groupMembers);
-
-  const now = new Date().toISOString();
-
-  let member = db.groupMembers.find(
-    (m) =>
-      String(m.groupId) === String(groupId) &&
-      String(m.userId) === String(userId)
-  );
-
-  if (!member) {
-    member = {
-      id: `gm_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-      groupId: String(groupId),
-      userId: Number(userId),
-      role: "agent",
-      isActive: true,
-      createdAt: now,
-      updatedAt: now
-    };
-    db.groupMembers.push(member);
+  if (!tid) {
+    // grupo não existe (ou sem tenant) -> retorna vazio
+    return { db: null, items: [] };
   }
 
-  if (patch.role !== undefined) member.role = String(patch.role);
-  if (patch.isActive !== undefined) member.isActive = !!patch.isActive;
+  const where = {
+    tenantId: tid,
+    groupId: gid,
+    ...(includeInactive ? {} : { isActive: true })
+  };
 
-  member.updatedAt = now;
+  const items = await prisma.groupMember.findMany({
+    where,
+    orderBy: { updatedAt: "desc" }
+  });
 
-  saveDB(db);
-  return { db, member };
+  return { db: null, items };
 }
 
-export function deactivateGroupMember(groupId, userId) {
-  return upsertGroupMember(groupId, userId, { isActive: false });
+/**
+ * upsertGroupMember(groupId, userId, patch)
+ * patch: { role?, isActive? }
+ *
+ * ✅ Prisma-first (com garantia de tenantId)
+ */
+export async function upsertGroupMember(groupId, userId, patch = {}, { tenantId = null } = {}) {
+  const gid = String(groupId || "").trim();
+  const uid = String(userId || "").trim();
+
+  if (!gid) throw new Error("groupId obrigatório");
+  if (!uid) throw new Error("userId obrigatório");
+
+  let tid = tenantId ? String(tenantId) : null;
+  if (!tid) tid = await resolveTenantIdByGroupId(gid);
+  if (!tid) throw new Error("group_not_found (não foi possível resolver tenantId pelo groupId)");
+
+  const role = patch.role !== undefined ? normalizeRole(patch.role) : undefined;
+  const isActive = patch.isActive !== undefined ? !!patch.isActive : undefined;
+
+  // ✅ garante que o grupo pertence ao tenant e está ativo (opcional, mas seguro)
+  const group = await prisma.group.findFirst({
+    where: { id: gid, tenantId: tid },
+    select: { id: true }
+  });
+  if (!group) throw new Error("group_not_found_or_forbidden");
+
+  // ✅ garante que o usuário existe (opcional, mas ajuda a evitar lixo)
+  const user = await prisma.user.findFirst({
+    where: { id: uid },
+    select: { id: true }
+  });
+  if (!user) throw new Error("user_not_found");
+
+  const member = await prisma.groupMember.upsert({
+    where: {
+      tenantId_groupId_userId: {
+        tenantId: tid,
+        groupId: gid,
+        userId: uid
+      }
+    },
+    create: {
+      tenantId: tid,
+      groupId: gid,
+      userId: uid,
+      role: role ?? "member",
+      isActive: isActive ?? true
+    },
+    update: {
+      ...(role !== undefined ? { role } : {}),
+      ...(isActive !== undefined ? { isActive } : {})
+    }
+  });
+
+  return { db: null, member };
 }
 
-export function activateGroupMember(groupId, userId, role) {
+export async function deactivateGroupMember(groupId, userId, opts = {}) {
+  try {
+    return await upsertGroupMember(groupId, userId, { isActive: false }, opts);
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ deactivateGroupMember failed");
+    throw err;
+  }
+}
+
+export async function activateGroupMember(groupId, userId, role, opts = {}) {
   const patch = { isActive: true };
   if (role !== undefined) patch.role = role;
-  return upsertGroupMember(groupId, userId, patch);
+
+  try {
+    return await upsertGroupMember(groupId, userId, patch, opts);
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ activateGroupMember failed");
+    throw err;
+  }
 }
