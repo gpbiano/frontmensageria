@@ -3,9 +3,11 @@
 // Base: /outbound/numbers
 
 import express from "express";
-import prisma from "../lib/prisma.js";
+import prismaMod from "../lib/prisma.js";
 import logger from "../logger.js";
 import { requireAuth, requireRole } from "../middleware/requireAuth.js";
+
+const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
 
@@ -14,15 +16,24 @@ function getTenantId(req) {
   return tid ? String(tid) : null;
 }
 
+function assertPrisma(res) {
+  if (!prisma?.outboundNumber) {
+    res.status(503).json({ ok: false, error: "prisma_not_ready" });
+    return false;
+  }
+  return true;
+}
+
 function normalizeE164(raw) {
   const digits = String(raw || "").replace(/\D/g, "");
   if (!digits) return "";
-  // se já veio com 55 etc, mantemos só dígitos; armazenamos com "+"
   return digits.startsWith("55") ? `+${digits}` : `+${digits}`;
 }
 
 router.get("/", requireAuth, async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
@@ -40,6 +51,8 @@ router.get("/", requireAuth, async (req, res) => {
 
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
@@ -64,61 +77,10 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     return res.status(201).json({ ok: true, item });
   } catch (err) {
     const msg = String(err?.message || err);
-    if (msg.includes("Unique constraint") || msg.includes("Unique") || msg.includes("P2002")) {
+    if (msg.includes("P2002") || msg.toLowerCase().includes("unique")) {
       return res.status(409).json({ ok: false, error: "number_already_exists" });
     }
-
     logger.error({ err: err?.message || err }, "❌ numbersRouter POST / failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
-});
-
-router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
-
-    const id = String(req.params.id || "");
-    if (!id) return res.status(400).json({ ok: false, error: "id_required" });
-
-    const existing = await prisma.outboundNumber.findFirst({
-      where: { id, tenantId },
-      select: { id: true }
-    });
-    if (!existing) return res.status(404).json({ ok: false, error: "not_found" });
-
-    const data = {};
-    if (req.body?.label !== undefined) data.label = req.body.label ? String(req.body.label) : null;
-    if (req.body?.provider !== undefined) data.provider = req.body.provider ? String(req.body.provider) : null;
-    if (req.body?.isActive !== undefined) data.isActive = !!req.body.isActive;
-    if (req.body?.metadata !== undefined) data.metadata = req.body.metadata;
-
-    const item = await prisma.outboundNumber.update({ where: { id }, data });
-    return res.json({ ok: true, item });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ numbersRouter PATCH /:id failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
-});
-
-router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
-
-    const id = String(req.params.id || "");
-    if (!id) return res.status(400).json({ ok: false, error: "id_required" });
-
-    const existing = await prisma.outboundNumber.findFirst({
-      where: { id, tenantId },
-      select: { id: true }
-    });
-    if (!existing) return res.status(404).json({ ok: false, error: "not_found" });
-
-    await prisma.outboundNumber.delete({ where: { id } });
-    return res.json({ ok: true });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ numbersRouter DELETE /:id failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });

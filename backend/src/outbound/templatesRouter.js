@@ -4,15 +4,25 @@
 
 import express from "express";
 import fetch from "node-fetch";
-import prisma from "../lib/prisma.js";
+import prismaMod from "../lib/prisma.js";
 import logger from "../logger.js";
 import { requireAuth, requireRole } from "../middleware/requireAuth.js";
+
+const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
 
 function getTenantId(req) {
   const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
   return tid ? String(tid) : null;
+}
+
+function assertPrisma(res) {
+  if (!prisma?.outboundTemplate) {
+    res.status(503).json({ ok: false, error: "prisma_not_ready" });
+    return false;
+  }
+  return true;
 }
 
 function getMetaEnv() {
@@ -24,6 +34,8 @@ function getMetaEnv() {
 
 router.get("/", requireAuth, async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
@@ -51,6 +63,8 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
   }
 
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
@@ -75,56 +89,53 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
     });
 
     const graphJson = await graphRes.json().catch(() => ({}));
-
     if (!graphRes.ok) {
       logger.error({ status: graphRes.status, graphJson }, "❌ Meta templates sync failed");
-      return res.status(502).json({
-        ok: false,
-        error: "meta_api_error",
-        details: graphJson
-      });
+      return res.status(502).json({ ok: false, error: "meta_api_error", details: graphJson });
     }
 
     const data = Array.isArray(graphJson?.data) ? graphJson.data : [];
-    const now = new Date();
+    const now = new Date().toISOString();
 
-    // Upsert por @@unique([tenantId, channel, name])
-    const ops = data.map((tpl) => {
-      const name = String(tpl?.name || "").trim();
-      const language = tpl?.language ? String(tpl.language) : null;
+    const ops = data
+      .map((tpl) => {
+        const name = String(tpl?.name || "").trim();
+        if (!name) return null;
 
-      const content = {
-        category: tpl?.category || null,
-        status: tpl?.status || null,
-        quality: tpl?.quality_score?.quality_score || null,
-        rejectedReason: tpl?.rejected_reason || null,
-        components: tpl?.components || [],
-        latestTemplate: tpl?.latest_template || null,
-        metaTemplateId: tpl?.id || null
-      };
+        const language = tpl?.language ? String(tpl.language) : null;
 
-      return prisma.outboundTemplate.upsert({
-        where: { tenantId_channel_name: { tenantId, channel: "whatsapp", name } },
-        create: {
-          tenantId,
-          channel: "whatsapp",
-          name,
-          language,
-          status: tpl?.status ? String(tpl.status).toLowerCase() : "draft",
-          content,
-          metadata: { raw: tpl, syncedAt: now.toISOString() }
-        },
-        update: {
-          language,
-          status: tpl?.status ? String(tpl.status).toLowerCase() : undefined,
-          content,
-          metadata: { raw: tpl, syncedAt: now.toISOString() },
-          updatedAt: now
-        }
-      });
-    });
+        const content = {
+          category: tpl?.category || null,
+          status: tpl?.status || null,
+          quality: tpl?.quality_score?.quality_score || null,
+          rejectedReason: tpl?.rejected_reason || null,
+          components: tpl?.components || [],
+          latestTemplate: tpl?.latest_template || null,
+          metaTemplateId: tpl?.id || null
+        };
 
-    await prisma.$transaction(ops);
+        return prisma.outboundTemplate.upsert({
+          where: { tenantId_channel_name: { tenantId, channel: "whatsapp", name } },
+          create: {
+            tenantId,
+            channel: "whatsapp",
+            name,
+            language,
+            status: tpl?.status ? String(tpl.status).toLowerCase() : "draft",
+            content,
+            metadata: { raw: tpl, syncedAt: now }
+          },
+          update: {
+            language,
+            status: tpl?.status ? String(tpl.status).toLowerCase() : undefined,
+            content,
+            metadata: { raw: tpl, syncedAt: now }
+          }
+        });
+      })
+      .filter(Boolean);
+
+    if (ops.length) await prisma.$transaction(ops);
 
     const items = await prisma.outboundTemplate.findMany({
       where: { tenantId, channel: "whatsapp" },

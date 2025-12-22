@@ -3,9 +3,11 @@
 // Base: /outbound/campaigns
 
 import express from "express";
-import prisma from "../lib/prisma.js";
+import prismaMod from "../lib/prisma.js";
 import logger from "../logger.js";
 import { requireAuth, requireRole } from "../middleware/requireAuth.js";
+
+const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
 
@@ -14,8 +16,18 @@ function getTenantId(req) {
   return tid ? String(tid) : null;
 }
 
+function assertPrisma(res) {
+  if (!prisma?.outboundCampaign) {
+    res.status(503).json({ ok: false, error: "prisma_not_ready" });
+    return false;
+  }
+  return true;
+}
+
 router.get("/", requireAuth, async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
@@ -33,6 +45,8 @@ router.get("/", requireAuth, async (req, res) => {
 
 router.get("/:id", requireAuth, async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
@@ -51,6 +65,8 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
@@ -79,6 +95,8 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
 
 router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
@@ -92,9 +110,12 @@ router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, r
     const data = {};
     if (req.body?.name !== undefined) data.name = String(req.body.name).trim();
     if (req.body?.status !== undefined) data.status = String(req.body.status);
-    if (req.body?.templateId !== undefined) data.templateId = req.body.templateId ? String(req.body.templateId) : null;
-    if (req.body?.numberId !== undefined) data.numberId = req.body.numberId ? String(req.body.numberId) : null;
-    if (req.body?.scheduleAt !== undefined) data.scheduleAt = req.body.scheduleAt ? new Date(req.body.scheduleAt) : null;
+    if (req.body?.templateId !== undefined)
+      data.templateId = req.body.templateId ? String(req.body.templateId) : null;
+    if (req.body?.numberId !== undefined)
+      data.numberId = req.body.numberId ? String(req.body.numberId) : null;
+    if (req.body?.scheduleAt !== undefined)
+      data.scheduleAt = req.body.scheduleAt ? new Date(req.body.scheduleAt) : null;
     if (req.body?.metadata !== undefined) data.metadata = req.body.metadata;
     if (req.body?.audience !== undefined) data.audience = req.body.audience;
     if (req.body?.stats !== undefined) data.stats = req.body.stats;
