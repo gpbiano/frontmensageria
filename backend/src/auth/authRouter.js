@@ -29,7 +29,7 @@ const PBKDF2_DIGEST = "sha256";
 function hashPasswordPBKDF2(password) {
   const salt = crypto.randomBytes(16);
   const hash = crypto.pbkdf2Sync(
-    password,
+    String(password),
     salt,
     PBKDF2_ITERS,
     PBKDF2_KEYLEN,
@@ -43,7 +43,8 @@ function hashPasswordPBKDF2(password) {
 function verifyPasswordPBKDF2(password, passwordHash) {
   try {
     if (!passwordHash?.startsWith("pbkdf2$")) return false;
-    const parts = passwordHash.split("$");
+
+    const parts = String(passwordHash).split("$");
     if (parts.length !== 4) return false;
 
     const iters = Number(parts[1]);
@@ -70,30 +71,33 @@ try {
   const legacy = await import("../security/passwords.js");
   if (typeof legacy.verifyPassword === "function") {
     verifyPasswordLegacy = legacy.verifyPassword;
+    logger.info("✅ verifyPasswordLegacy carregado (security/passwords.js)");
+  } else {
+    logger.warn("⚠️ security/passwords.js não exporta verifyPassword()");
   }
 } catch (e) {
   logger.warn({ e }, "⚠️ Não consegui importar security/passwords.js");
 }
 
+// ✅ AQUI ESTÁ O FIX: tenta primeiro o LEGADO, depois PBKDF2
 function verifyAnyPassword(password, passwordHash) {
   const h = String(passwordHash || "").trim();
   if (!h) return false;
 
-  // novo padrão
-  if (h.startsWith("pbkdf2$")) {
-    return verifyPasswordPBKDF2(password, h);
-  }
-
-  // compat antigo
+  // 1) tenta legacy primeiro (banco atual)
   if (verifyPasswordLegacy) {
     try {
-      return !!verifyPasswordLegacy(String(password), h);
+      if (verifyPasswordLegacy(String(password), h)) return true;
     } catch {
-      return false;
+      // segue para PBKDF2
     }
   }
 
-  // sem fallback inseguro
+  // 2) fallback PBKDF2 (novo padrão)
+  if (h.startsWith("pbkdf2$")) {
+    return verifyPasswordPBKDF2(String(password), h);
+  }
+
   return false;
 }
 
@@ -135,9 +139,7 @@ function signUserToken({ user, tenantId, tenantSlug }) {
 // ======================================================
 async function getUserByEmail(email) {
   return prisma.user.findFirst({
-    where: {
-      email: String(email).toLowerCase().trim()
-    },
+    where: { email: String(email).toLowerCase().trim() },
     select: {
       id: true,
       email: true,
@@ -179,12 +181,30 @@ router.post("/login", async (req, res) => {
     }
 
     const user = await getUserByEmail(email);
+
     if (!user || user.isActive === false) {
       return res.status(401).json({ error: "Credenciais inválidas." });
     }
 
+    const hash = String(user.passwordHash || "");
+    const hashPrefix = hash.slice(0, 16);
+    const hashLen = hash.length;
+
     const ok = verifyAnyPassword(password, user.passwordHash);
+
     if (!ok) {
+      logger.warn(
+        {
+          email: user.email,
+          userId: user.id,
+          hashPrefix,
+          hashLen,
+          hasLegacyVerifier: !!verifyPasswordLegacy,
+          looksPBKDF2: hash.startsWith("pbkdf2$"),
+          looksBcrypt: hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")
+        },
+        "❌ Login: senha não conferiu"
+      );
       return res.status(401).json({ error: "Credenciais inválidas." });
     }
 
@@ -202,12 +222,7 @@ router.post("/login", async (req, res) => {
     });
 
     logger.info(
-      {
-        userId: user.id,
-        email: user.email,
-        tenant: chosen.slug,
-        hashPrefix: String(user.passwordHash || "").slice(0, 12)
-      },
+      { userId: user.id, email: user.email, tenant: chosen.slug },
       "✅ Login realizado"
     );
 
@@ -283,8 +298,7 @@ router.post("/auth/select-tenant", async (req, res) => {
 });
 
 // ======================================================
-// ✅ POST /auth/set-password
-// (salva em PBKDF2 daqui pra frente)
+// ✅ POST /auth/set-password (salva PBKDF2 daqui pra frente)
 // ======================================================
 router.post("/auth/set-password", async (req, res) => {
   try {
