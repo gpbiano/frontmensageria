@@ -26,53 +26,25 @@ const API_BASE =
 const AUTH_KEY = "gpLabsAuthToken";
 
 // ======================================================
-// HELPERS DE AUTENTICAÇÃO
+// HELPERS DE AUTENTICAÇÃO (FIX DEFINITIVO)
 // ======================================================
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
 
-  // ✅ FIX DEFINITIVO: o front pode gravar no localStorage OU sessionStorage
+  // 🔐 prioridade: localStorage → sessionStorage
   return (
-    localStorage.getItem(AUTH_KEY) ||
-    sessionStorage.getItem(AUTH_KEY)
+    localStorage.getItem("gpLabsAuthToken") ||
+    sessionStorage.getItem("gpLabsAuthToken")
   );
-}
-
-/**
- * ✅ Regra:
- * - Não deixar "extra headers" sobrescrever Authorization.
- * - Também não sobrescrever Content-Type automaticamente se for FormData.
- */
-function buildHeaders(extra?: HeadersInit): HeadersInit {
-  const token = getToken();
-
-  // Normaliza HeadersInit -> objeto simples (pra merge previsível)
-  const normalized: Record<string, string> = {};
-  if (extra) {
-    const h = new Headers(extra);
-    h.forEach((v, k) => {
-      normalized[k] = v;
-    });
-  }
-
-  return {
-    ...normalized,
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  };
 }
 
 function clearAuth() {
   if (typeof window === "undefined") return;
-
-  // ✅ FIX: limpa os dois para evitar sessão “fantasma”
-  localStorage.removeItem(AUTH_KEY);
-  sessionStorage.removeItem(AUTH_KEY);
+  localStorage.removeItem("gpLabsAuthToken");
+  sessionStorage.removeItem("gpLabsAuthToken");
 }
 
-function isUnauthorized(res: Response) {
-  return res.status === 401;
-}
 
 // ======================================================
 // HELPERS INTERNOS
