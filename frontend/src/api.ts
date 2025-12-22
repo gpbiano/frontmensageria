@@ -31,7 +31,12 @@ const AUTH_KEY = "gpLabsAuthToken";
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(AUTH_KEY);
+
+  // ✅ FIX DEFINITIVO: o front pode gravar no localStorage OU sessionStorage
+  return (
+    localStorage.getItem(AUTH_KEY) ||
+    sessionStorage.getItem(AUTH_KEY)
+  );
 }
 
 /**
@@ -59,7 +64,10 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
 
 function clearAuth() {
   if (typeof window === "undefined") return;
+
+  // ✅ FIX: limpa os dois para evitar sessão “fantasma”
   localStorage.removeItem(AUTH_KEY);
+  sessionStorage.removeItem(AUTH_KEY);
 }
 
 function isUnauthorized(res: Response) {
@@ -301,8 +309,10 @@ export async function login(email: string, password: string): Promise<LoginRespo
     body: { email, password }
   });
 
+  // ✅ FIX DEFINITIVO: grava em ambos para evitar mismatch
   if (data?.token && typeof window !== "undefined") {
     localStorage.setItem(AUTH_KEY, data.token);
+    sessionStorage.setItem(AUTH_KEY, data.token);
   }
 
   return data;
@@ -311,6 +321,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
 export function logout(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(AUTH_KEY);
+  sessionStorage.removeItem(AUTH_KEY);
 }
 
 // (PÚBLICO) Criar senha por token (invite/reset)
