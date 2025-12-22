@@ -17,7 +17,6 @@ function getJwtSecret() {
 }
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
-
 const router = express.Router();
 
 // ======================================================
@@ -88,11 +87,10 @@ function signUserToken({ user, tenantId, tenantSlug }) {
   const payload = {
     id: user.id,
     email: user.email,
-    role: user.role
+    role: user.role,
+    // ✅ sempre exigido pelo core multi-tenant
+    tenantId: String(tenantId)
   };
-
-  // ✅ o middleware multi-tenant exige tenantId
-  if (tenantId) payload.tenantId = String(tenantId);
   if (tenantSlug) payload.tenantSlug = String(tenantSlug);
 
   return jwt.sign(payload, getJwtSecret(), { expiresIn: JWT_EXPIRES_IN });
@@ -141,9 +139,11 @@ async function getTenantsForUser(userId) {
 }
 
 // ======================================================
-// POST /login  (Prisma-first + token com tenantId)
-// - se 1 tenant: retorna token já com tenantId ✅ resolve 401
-// - se >1: retorna token base + tenants para seleção
+// ✅ POST /login
+// Regra: SEMPRE entrar automaticamente no tenant associado.
+// - se tiver 1 tenant: usa ele
+// - se tiver >1 (super admin): usa o primeiro ativo (determinístico)
+// - NUNCA retorna token sem tenantId
 // ======================================================
 router.post("/login", async (req, res) => {
   try {
@@ -173,47 +173,30 @@ router.post("/login", async (req, res) => {
 
     const tenants = await getTenantsForUser(user.id);
 
-    // ✅ se não tiver tenant vinculado -> não deixa passar
     if (!tenants.length) {
       return res.status(403).json({
-        error:
-          "Usuário sem tenant associado. Vincule em UserTenant antes de acessar."
+        error: "Usuário não possui tenant associado."
       });
     }
 
-    // ✅ 1 tenant -> token já pronto com tenantId
-    if (tenants.length === 1) {
-      const t = tenants[0];
-      const token = signUserToken({
-        user,
-        tenantId: t.id,
-        tenantSlug: t.slug
-      });
+    // ✅ entra automático
+    const chosen = tenants[0];
 
-      logger.info(
-        { userId: user.id, email: user.email, tenant: t.slug },
-        "✅ Login realizado (tenant único)"
-      );
-
-      return res.json({
-        token,
-        user: sanitizeUser(user),
-        tenant: { id: t.id, slug: t.slug, name: t.name }
-      });
-    }
-
-    // ✅ multi-tenant -> token base (sem tenantId) + lista
-    const token = signUserToken({ user, tenantId: null, tenantSlug: null });
+    const token = signUserToken({
+      user,
+      tenantId: chosen.id,
+      tenantSlug: chosen.slug
+    });
 
     logger.info(
-      { userId: user.id, email: user.email, tenants: tenants.length },
-      "✅ Login realizado (multi-tenant)"
+      { userId: user.id, email: user.email, tenant: chosen.slug },
+      "✅ Login realizado (auto-tenant)"
     );
 
     return res.json({
       token,
       user: sanitizeUser(user),
-      tenants: tenants.map((t) => ({ id: t.id, slug: t.slug, name: t.name }))
+      tenant: { id: chosen.id, slug: chosen.slug, name: chosen.name }
     });
   } catch (err) {
     logger.error({ err }, "❌ Erro no login");
@@ -223,7 +206,7 @@ router.post("/login", async (req, res) => {
 
 // ======================================================
 // ✅ GET /auth/me
-// retorna user + tenants disponíveis
+// (agora apenas informativo — token já vem com tenantId)
 // ======================================================
 router.get("/auth/me", async (req, res) => {
   try {
@@ -241,11 +224,13 @@ router.get("/auth/me", async (req, res) => {
     if (!user || user.isActive === false)
       return res.status(401).json({ error: "Usuário inválido." });
 
-    const tenants = await getTenantsForUser(user.id);
-
+    // tenant atual vem do token
     return res.json({
       user,
-      tenants: tenants.map((t) => ({ id: t.id, slug: t.slug, name: t.name }))
+      tenant: {
+        id: decoded.tenantId || null,
+        slug: decoded.tenantSlug || null
+      }
     });
   } catch (err) {
     logger.error({ err }, "❌ Erro em /auth/me");
@@ -255,6 +240,7 @@ router.get("/auth/me", async (req, res) => {
 
 // ======================================================
 // ✅ POST /auth/select-tenant
+// Troca de empresa DENTRO da plataforma (super admin).
 // body: { tenantId } (aceita id OU slug)
 // devolve novo token com tenantId
 // ======================================================
@@ -273,20 +259,13 @@ router.post("/auth/select-tenant", async (req, res) => {
 
     const user = await prisma.user.findFirst({
       where: { id: String(userId) },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true
-      }
+      select: { id: true, email: true, name: true, role: true, isActive: true }
     });
     if (!user || user.isActive === false)
       return res.status(401).json({ error: "Usuário inválido." });
 
     const tenants = await getTenantsForUser(user.id);
 
-    // aceita escolher por ID ou por SLUG
     const chosen =
       tenants.find((t) => String(t.id) === tid) ||
       tenants.find((t) => String(t.slug) === tid);
@@ -305,7 +284,7 @@ router.post("/auth/select-tenant", async (req, res) => {
 
     return res.json({
       token: newToken,
-      user,
+      user: sanitizeUser(user),
       tenant: { id: chosen.id, slug: chosen.slug, name: chosen.name }
     });
   } catch (err) {
@@ -331,14 +310,12 @@ router.post("/auth/set-password", async (req, res) => {
         .json({ error: "A senha deve ter no mínimo 8 caracteres." });
     }
 
-    // ⚠️ Mantive compat por enquanto: se você usa passwordTokens em Prisma, ótimo.
-    // Se ainda não existe esse model no schema, me fala e eu ajusto para o formato correto.
-    const t = await prisma.passwordToken.findFirst({
-      where: { id: tok }
-    });
+    // ⚠️ Se você ainda não tem PasswordToken no Prisma, este endpoint deve ser removido/ajustado.
+    const t = await prisma.passwordToken.findFirst({ where: { id: tok } });
 
     if (!t) return res.status(404).json({ error: "Token não encontrado." });
-    if (t.used === true) return res.status(400).json({ error: "Token já utilizado." });
+    if (t.used === true)
+      return res.status(400).json({ error: "Token já utilizado." });
     if (t.expiresAt && new Date(t.expiresAt).getTime() < Date.now())
       return res.status(400).json({ error: "Token expirado." });
 
@@ -348,14 +325,12 @@ router.post("/auth/set-password", async (req, res) => {
     });
 
     if (!user) return res.status(404).json({ error: "Usuário não encontrado." });
-    if (user.isActive === false) return res.status(400).json({ error: "Usuário está inativo." });
+    if (user.isActive === false)
+      return res.status(400).json({ error: "Usuário está inativo." });
 
     await prisma.user.update({
       where: { id: String(user.id) },
-      data: {
-        passwordHash: hashPassword(pwd),
-        updatedAt: new Date()
-      }
+      data: { passwordHash: hashPassword(pwd), updatedAt: new Date() }
     });
 
     await prisma.passwordToken.update({
