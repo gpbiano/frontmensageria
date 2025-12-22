@@ -28,10 +28,15 @@ function ensureDbShape(db) {
 function ensureConversationMessages(db, conversationId) {
   ensureDbShape(db);
   const key = String(conversationId);
-  if (!Array.isArray(db.messagesByConversation[key])) db.messagesByConversation[key] = [];
+  if (!Array.isArray(db.messagesByConversation[key])) {
+    db.messagesByConversation[key] = [];
+  }
   return db.messagesByConversation[key];
 }
 
+// ======================================================
+// NORMALIZA CONVERSA (handoff tradicional)
+// ======================================================
 function normalizeConversation(conv) {
   if (!conv) return conv;
 
@@ -39,55 +44,65 @@ function normalizeConversation(conv) {
   conv.source = String(conv.source || conv.channel || "whatsapp").toLowerCase();
   conv.channel = String(conv.channel || conv.source || "whatsapp").toLowerCase();
 
-  if (!conv.status) conv.status = "open";
-  conv.status = String(conv.status).toLowerCase() === "closed" ? "closed" : "open";
+  conv.status = conv.status === "closed" ? "closed" : "open";
 
   if (!conv.createdAt) conv.createdAt = nowIso();
   if (!conv.updatedAt) conv.updatedAt = conv.createdAt;
 
-  if (!conv.currentMode) conv.currentMode = "bot";
-  if (typeof conv.botAttempts !== "number") conv.botAttempts = Number(conv.botAttempts || 0);
-  if (typeof conv.hadHuman !== "boolean") conv.hadHuman = Boolean(conv.hadHuman);
+  conv.currentMode = conv.currentMode || "bot";
+  conv.botAttempts = Number(conv.botAttempts || 0);
+  conv.hadHuman = Boolean(conv.hadHuman);
 
-  if (!conv.peerId) conv.peerId = "";
+  conv.handoffActive = Boolean(conv.handoffActive);
+  if (conv.handoffActive && !conv.handoffSince) {
+    conv.handoffSince = conv.updatedAt || conv.createdAt;
+  }
 
-  if (typeof conv.lastMessagePreview !== "string") conv.lastMessagePreview = "";
-  if (!conv.lastMessageAt) conv.lastMessageAt = null;
+  conv.peerId = String(conv.peerId || "");
+
+  conv.lastMessagePreview = String(conv.lastMessagePreview || "");
+  conv.lastMessageAt = conv.lastMessageAt || null;
+
+  // 🔑 REGRA DE OURO DO PAINEL
+  if (typeof conv.inboxVisible !== "boolean") {
+    conv.inboxVisible =
+      conv.currentMode === "human" ||
+      conv.hadHuman === true ||
+      conv.handoffActive === true;
+  }
+
+  conv.inboxStatus =
+    conv.inboxVisible === true ? "waiting_human" : "bot_only";
+
+  conv.queuedAt =
+    conv.inboxVisible === true
+      ? conv.queuedAt || conv.handoffSince || conv.updatedAt
+      : null;
 
   return conv;
 }
 
-function safeStringify(v) {
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
-  }
-}
-
+// ======================================================
+// NORMALIZA MENSAGEM
+// ======================================================
 function normalizeMsg(conv, raw) {
-  const createdAt = raw.createdAt || raw.timestamp || raw.sentAt || nowIso();
-
+  const createdAt = raw.createdAt || raw.timestamp || nowIso();
   const type = String(raw.type || "text").toLowerCase();
 
-  const extracted =
-    raw?.text?.body ??
-    raw?.text ??
-    raw?.body ??
-    raw?.message ??
-    raw?.content ??
-    raw?.caption ??
-    "";
+  const text =
+    typeof raw.text === "string"
+      ? raw.text
+      : typeof raw.text?.body === "string"
+      ? raw.text.body
+      : "";
 
-  const text = typeof extracted === "string" ? extracted : safeStringify(extracted);
-
-  let from = raw.from || raw.sender || raw.author || null;
+  let from = raw.from || null;
   let direction = raw.direction || null;
 
-  if (from === "user" || from === "contact" || from === "visitor") from = "client";
-  if (from === "attendant" || from === "human") from = "agent";
+  if (from === "user" || from === "visitor") from = "client";
+  if (from === "human" || from === "attendant") from = "agent";
 
-  const isBot = !!(raw.isBot || raw.fromBot || raw.bot === true || from === "bot");
+  const isBot = raw.isBot === true || from === "bot";
 
   if (!direction) direction = from === "client" ? "in" : "out";
   if (!from) from = direction === "in" ? "client" : "agent";
@@ -98,94 +113,97 @@ function normalizeMsg(conv, raw) {
   }
 
   return {
-    id: raw.id || raw._id || newId("msg"),
-    conversationId: String(raw.conversationId || conv.id),
-    channel: raw.channel || conv.channel || conv.source || "whatsapp",
-    source: raw.source || conv.source || raw.channel || "whatsapp",
+    id: raw.id || newId("msg"),
+    conversationId: conv.id,
+    channel: raw.channel || conv.channel,
+    source: raw.source || conv.source,
     type,
     from,
     direction,
     isBot,
-    isSystem: !!raw.isSystem,
-    text: String(text || ""),
-    createdAt: typeof createdAt === "number" ? new Date(createdAt).toISOString() : createdAt,
-    senderName: raw.senderName || raw.byName || raw.agentName || undefined,
-    waMessageId: raw.waMessageId || raw.messageId || raw.metaMessageId || undefined,
-    delivery: raw.delivery || undefined,
-    payload: raw.payload || undefined,
-    tenantId: raw.tenantId || conv.tenantId || undefined,
+    text,
+    createdAt,
+    waMessageId: raw.waMessageId,
+    payload: raw.payload,
+    delivery: raw.delivery,
+    tenantId: raw.tenantId || conv.tenantId
   };
 }
 
+// ======================================================
+// ATUALIZA METADADOS DA CONVERSA
+// ======================================================
 function touchConversation(conv, msg) {
   const at = nowIso();
   conv.updatedAt = at;
   conv.lastMessageAt = at;
-
-  const preview = String(msg?.text || "").trim();
-  conv.lastMessagePreview = preview ? preview.slice(0, 120) : (conv.lastMessagePreview || "");
+  conv.lastMessagePreview = String(msg.text || "").slice(0, 120);
 }
 
 // ======================================================
-// ✅ CORE EXPORTS (O QUE O WHATSAPP + WEBCHAT PRECISAM)
+// PROMOVE PARA INBOX (handoff real)
 // ======================================================
+function promoteToInbox(conv, reason = "handoff") {
+  conv.currentMode = "human";
+  conv.hadHuman = true;
+  conv.handoffActive = true;
+  conv.handoffSince = conv.handoffSince || nowIso();
 
+  conv.inboxVisible = true;
+  conv.inboxStatus = "waiting_human";
+  conv.queuedAt = conv.queuedAt || nowIso();
+  conv.handoffReason = reason;
+}
+
+// ======================================================
+// CORE EXPORTS (usados por WhatsApp / Webchat)
+// ======================================================
 export function getOrCreateChannelConversation(db, payload) {
   db = ensureDbShape(db);
 
-  const source = String(payload?.source || "").toLowerCase();
-  if (!source) return { ok: false, error: "source obrigatório" };
+  const source = String(payload.source || "").toLowerCase();
+  const peerId = String(payload.peerId || "").trim();
+  if (!source || !peerId) {
+    return { ok: false, error: "source e peerId obrigatórios" };
+  }
 
-  const peerId = String(payload?.peerId || "").trim();
-  if (!peerId) return { ok: false, error: "peerId obrigatório" };
-
-  const accountId = payload?.accountId ? String(payload.accountId) : null;
-
-  let conv = db.conversations.find((c) => {
-    normalizeConversation(c);
-    return (
+  let conv = db.conversations.find(
+    (c) =>
       c.status === "open" &&
-      String(c.source || "") === source &&
-      String(c.peerId || "") === peerId &&
-      (accountId ? String(c.accountId || "") === accountId : true)
-    );
-  });
+      c.source === source &&
+      c.peerId === peerId
+  );
 
   if (!conv) {
-    const idPrefix =
-      source === "webchat" ? "wc" : source === "whatsapp" ? "wa" : "conv";
-
     conv = {
-      id: newId(idPrefix),
+      id: newId(source === "whatsapp" ? "wa" : "wc"),
       source,
       channel: source,
       peerId,
-      title: payload?.title || "Contato",
+      title: payload.title || "Contato",
       status: "open",
 
-      currentMode: payload?.currentMode || "bot",
+      currentMode: payload.currentMode || "bot",
       hadHuman: false,
       botAttempts: 0,
 
-      assignedGroupId: null,
-      assignedUserId: null,
+      handoffActive: false,
+      handoffSince: null,
+      handoffReason: null,
 
-      tags: [],
-      notes: "",
-
-      accountId: accountId || null,
-      channelId: payload?.channelId ? String(payload.channelId) : null,
-
-      phone: payload?.phone || null,
-      waId: payload?.waId || null,
-      visitorId: payload?.visitorId || null,
-
-      tenantId: payload?.tenantId || null,
+      phone: payload.phone || null,
+      waId: payload.waId || null,
+      visitorId: payload.visitorId || null,
+      tenantId: payload.tenantId || null,
 
       createdAt: nowIso(),
       updatedAt: nowIso(),
       lastMessageAt: null,
       lastMessagePreview: "",
+
+      inboxVisible: false,
+      inboxStatus: "bot_only",
+      queuedAt: null
     };
 
     db.conversations.push(conv);
@@ -199,38 +217,31 @@ export function getOrCreateChannelConversation(db, payload) {
 export function appendMessage(db, conversationId, rawMsg) {
   db = ensureDbShape(db);
 
-  const id = String(conversationId || "");
-  const conv =
-    db.conversations.find((c) => String(c?.id) === id) ||
-    db.conversations.find((c) => String(c?.sessionId || "") === id) ||
-    null;
-
+  const conv = db.conversations.find((c) => c.id === conversationId);
   if (!conv) return { ok: false, error: "Conversa não encontrada" };
 
   normalizeConversation(conv);
 
   const list = ensureConversationMessages(db, conv.id);
-  const msg = normalizeMsg(conv, { ...rawMsg, conversationId: String(conv.id) });
+  const msg = normalizeMsg(conv, rawMsg);
 
-  // dedupe por id
-  if (msg.id && list.some((m) => String(m.id) === String(msg.id))) {
-    return { ok: true, msg, duplicated: true };
-  }
-  // dedupe por waMessageId (quando existir)
-  if (msg.waMessageId && list.some((m) => String(m.waMessageId || "") === String(msg.waMessageId))) {
+  // dedupe WhatsApp
+  if (
+    msg.waMessageId &&
+    list.some((m) => m.waMessageId === msg.waMessageId)
+  ) {
     return { ok: true, msg, duplicated: true };
   }
 
   list.push(msg);
 
-  // flags de modo
-  if (msg.from === "bot" || msg.isBot) {
-    conv.botAttempts = Number(conv.botAttempts || 0) + 1;
+  if (msg.from === "bot") {
+    conv.botAttempts++;
     conv.currentMode = "bot";
   }
-  if (msg.from === "agent") {
-    conv.hadHuman = true;
-    conv.currentMode = "human";
+
+  if (msg.from === "agent" || rawMsg?.handoff === true) {
+    promoteToInbox(conv, "agent_message");
   }
 
   touchConversation(conv, msg);
@@ -238,56 +249,52 @@ export function appendMessage(db, conversationId, rawMsg) {
 }
 
 // ======================================================
-// ROUTES (mantém pra painel/histórico)
+// ROTAS DO PAINEL
 // ======================================================
 
 // GET /conversations
+// padrão: só inbox humano
 router.get("/", (req, res) => {
   const db = ensureDbShape(loadDB());
-  const items = ensureArray(db.conversations);
+  let items = ensureArray(db.conversations);
   items.forEach(normalizeConversation);
 
-  items.sort((a, b) => {
-    const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
-    const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
-    return tb - ta;
-  });
+  if (req.query.inbox !== "all") {
+    items = items.filter((c) => c.inboxVisible === true);
+  }
 
-  return res.json(items);
+  items.sort(
+    (a, b) =>
+      new Date(b.queuedAt || b.updatedAt).getTime() -
+      new Date(a.queuedAt || a.updatedAt).getTime()
+  );
+
+  res.json(items);
 });
 
 // GET /conversations/:id/messages
 router.get("/:id/messages", (req, res) => {
   const db = ensureDbShape(loadDB());
-  const id = String(req.params.id);
-
-  const conv = db.conversations.find((c) => String(c?.id) === id) || null;
+  const conv = db.conversations.find((c) => c.id === req.params.id);
   if (!conv) return res.status(404).json({ error: "Conversa não encontrada" });
 
-  const list = ensureConversationMessages(db, id).slice();
-  list.sort(
-    (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
-  );
-
-  return res.json(list);
+  const list = ensureConversationMessages(db, conv.id);
+  res.json(list);
 });
 
-// POST /conversations/:id/messages (persistência local apenas)
+// POST /conversations/:id/messages (humano)
 router.post("/:id/messages", (req, res) => {
   const db = ensureDbShape(loadDB());
-  const id = String(req.params.id);
-
-  const r = appendMessage(db, id, {
+  const r = appendMessage(db, req.params.id, {
     ...req.body,
-    from: req.body?.from || "agent",
-    direction: req.body?.direction || "out",
-    createdAt: nowIso(),
+    from: "agent",
+    direction: "out",
+    createdAt: nowIso()
   });
 
-  if (!r?.ok) return res.status(400).json({ error: r.error || "Falha ao salvar" });
-
+  if (!r.ok) return res.status(400).json({ error: r.error });
   saveDB(db);
-  return res.status(201).json(r.msg);
+  res.status(201).json(r.msg);
 });
 
 export default router;
