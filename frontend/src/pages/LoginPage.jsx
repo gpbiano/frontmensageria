@@ -25,40 +25,6 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
-function clearAuthStorages() {
-  try {
-    localStorage.removeItem(AUTH_TOKEN_KEY);
-    localStorage.removeItem(AUTH_USER_KEY);
-  } catch {}
-  try {
-    sessionStorage.removeItem(AUTH_TOKEN_KEY);
-    sessionStorage.removeItem(AUTH_USER_KEY);
-  } catch {}
-}
-
-function persistSession({ token, user }, rememberMe) {
-  const storage = rememberMe ? localStorage : sessionStorage;
-  const otherStorage = rememberMe ? sessionStorage : localStorage;
-
-  // limpa os dois pra não misturar sessão
-  try {
-    storage.removeItem(AUTH_TOKEN_KEY);
-    storage.removeItem(AUTH_USER_KEY);
-  } catch {}
-  try {
-    otherStorage.removeItem(AUTH_TOKEN_KEY);
-    otherStorage.removeItem(AUTH_USER_KEY);
-  } catch {}
-
-  // grava no storage escolhido
-  storage.setItem(AUTH_TOKEN_KEY, String(token));
-  storage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-
-  // (opcional) espelha o token no outro storage também (evita mismatch do app)
-  // Se você preferir NÃO espelhar, pode remover as 2 linhas abaixo.
-  otherStorage.setItem(AUTH_TOKEN_KEY, String(token));
-}
-
 export default function LoginPage({ onLogin }) {
   const isDev = import.meta.env.DEV;
 
@@ -66,7 +32,6 @@ export default function LoginPage({ onLogin }) {
   const [email, setEmail] = useState(isDev ? "admin@gplabs.com.br" : "");
   const [password, setPassword] = useState(isDev ? "gplabs123" : "");
   const [rememberMe, setRememberMe] = useState(true);
-
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -80,6 +45,23 @@ export default function LoginPage({ onLogin }) {
     [email, password, isSubmitting]
   );
 
+  function persistSession({ token, user }) {
+    // ✅ limpa sempre (evita “mismatch”)
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    sessionStorage.removeItem(AUTH_USER_KEY);
+
+    // ✅ FIX DEFINITIVO: token gravado nos DOIS storages
+    // (assim qualquer parte do app encontra)
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+    sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+
+    // user segue a regra do rememberMe
+    const storage = rememberMe ? localStorage : sessionStorage;
+    storage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
 
@@ -92,23 +74,31 @@ export default function LoginPage({ onLogin }) {
     setError("");
 
     try {
-      // sempre limpa sessão antes de tentar logar
-      clearAuthStorages();
-
       const data = await fetchJson(`${API_BASE}/login`, {
         method: "POST",
         body: JSON.stringify({ email, password })
       });
 
       if (!data?.token || !data?.user) {
-        throw new Error("Resposta inválida da API de login (token/user ausente).");
+        throw new Error("Resposta inválida da API de login.");
       }
 
-      // ✅ ESSENCIAL: salvar token no storage
-      persistSession({ token: data.token, user: data.user }, rememberMe);
+      // ✅ salva token + user
+      persistSession({ token: data.token, user: data.user });
+
+      // ✅ sanity check: garante que realmente salvou
+      const saved =
+        localStorage.getItem(AUTH_TOKEN_KEY) ||
+        sessionStorage.getItem(AUTH_TOKEN_KEY);
+
+      if (!saved) {
+        throw new Error(
+          "Login ok, mas não consegui salvar o token no browser (storage bloqueado)."
+        );
+      }
 
       setPassword("");
-      onLogin?.({ token: data.token, user: data.user, tenant: data.tenant, tenants: data.tenants });
+      onLogin?.({ token: data.token, user: data.user });
     } catch (err) {
       console.error("Erro ao logar:", err);
 
@@ -119,13 +109,13 @@ export default function LoginPage({ onLogin }) {
           token: "dev-fallback-token",
           user: { id: 0, name: "Admin (Dev)", email }
         };
-        persistSession(fakeData, rememberMe);
+        persistSession(fakeData);
         onLogin?.(fakeData);
       } else {
         setError(
-          err?.message?.includes("Failed to fetch")
+          err.message?.includes("Failed to fetch")
             ? "Não foi possível conectar ao servidor."
-            : err?.message || "Não foi possível entrar."
+            : err.message || "Não foi possível entrar."
         );
       }
     } finally {
@@ -184,7 +174,9 @@ export default function LoginPage({ onLogin }) {
             <button
               type="button"
               className="login-link"
-              onClick={() => alert("Fluxo de recuperação de senha ainda não implementado.")}
+              onClick={() =>
+                alert("Fluxo de recuperação de senha ainda não implementado.")
+              }
             >
               Esqueci minha senha
             </button>
@@ -203,7 +195,8 @@ export default function LoginPage({ onLogin }) {
         </form>
 
         <div className="login-footer">
-          Ambiente: <strong>{import.meta.env.MODE}</strong> · API: <code>{API_BASE}</code>
+          Ambiente: <strong>{import.meta.env.MODE}</strong> · API:{" "}
+          <code>{API_BASE}</code>
         </div>
       </div>
     </div>
