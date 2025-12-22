@@ -1,14 +1,12 @@
 // backend/src/routes/channels/whatsappRouter.js
 import express from "express";
 import logger from "../../logger.js";
-import { loadDB, saveDB, ensureArray } from "../../utils/db.js";
+import prisma from "../../lib/prisma.js";
 
 import { getChatbotSettingsForAccount, decideRoute } from "../../chatbot/rulesEngine.js";
 import { callGenAIBot } from "../../chatbot/botEngine.js";
 
-// ✅ CORE OFICIAL
-// whatsappRouter.js está em: src/routes/channels/
-// conversations.js está em: src/routes/
+// ✅ Prisma-first conversations core
 import { getOrCreateChannelConversation, appendMessage } from "../conversations.js";
 
 const router = express.Router();
@@ -24,18 +22,6 @@ const HANDOFF_MESSAGE = String(
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function ensureDbShape(db) {
-  db.users = ensureArray(db.users);
-  db.contacts = ensureArray(db.contacts);
-  db.conversations = ensureArray(db.conversations);
-  db.messagesByConversation =
-    db.messagesByConversation && typeof db.messagesByConversation === "object"
-      ? db.messagesByConversation
-      : {};
-  db.settings = db.settings || { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] };
-  return db;
 }
 
 // ======================================================
@@ -79,6 +65,33 @@ function getPublicApiBaseUrl(req) {
   const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http");
   const host = String(req.headers["x-forwarded-host"] || req.headers.host || "localhost");
   return `${proto}://${host}`;
+}
+
+function safeTenantIdFromReq(req) {
+  const t1 = req?.tenant?.id ? String(req.tenant.id).trim() : "";
+  if (t1) return t1;
+
+  const t2 = req.headers["x-tenant-id"] ? String(req.headers["x-tenant-id"]).trim() : "";
+  if (t2) return t2;
+
+  const t3 = String(process.env.WHATSAPP_DEFAULT_TENANT_ID || "").trim();
+  if (t3) return t3;
+
+  return "";
+}
+
+async function resolveTenantIdForWebhook(req) {
+  const direct = safeTenantIdFromReq(req);
+  if (direct) return direct;
+
+  // Fallback final: pega o último ChannelConfig do WhatsApp que estiver enabled
+  const cfg = await prisma.channelConfig.findFirst({
+    where: { channel: "whatsapp", enabled: true },
+    orderBy: { updatedAt: "desc" },
+    select: { tenantId: true }
+  });
+
+  return cfg?.tenantId ? String(cfg.tenantId) : "";
 }
 
 // ======================================================
@@ -165,7 +178,7 @@ router.get("/", (req, res) => {
 });
 
 // ======================================================
-// POST /webhook/whatsapp (mensagens)
+// POST /webhook/whatsapp (mensagens) — PRISMA ONLY
 // ======================================================
 router.post("/", async (req, res, next) => {
   try {
@@ -185,19 +198,30 @@ router.post("/", async (req, res, next) => {
 
     if (!hasWaConfigured()) {
       logger.warn(
-        "⚠️ WhatsApp ENV não configurado (WHATSAPP_TOKEN / PHONE_NUMBER_ID). Vai salvar, mas não envia."
+        "⚠️ WhatsApp ENV não configurado (WHATSAPP_TOKEN / PHONE_NUMBER_ID). Vai persistir no banco, mas envios podem falhar."
       );
     }
 
-    let db = ensureDbShape(loadDB());
     const publicBase = getPublicApiBaseUrl(req);
+
+    // ✅ resolve tenantId pro webhook (público)
+    const tenantId = await resolveTenantIdForWebhook(req);
+    if (!tenantId) {
+      logger.error(
+        { hint: "Defina WHATSAPP_DEFAULT_TENANT_ID ou habilite ChannelConfig whatsapp" },
+        "❌ TenantId não resolvido para webhook WhatsApp"
+      );
+      return res.status(400).json({
+        error: "Tenant não resolvido",
+        hint: "Defina WHATSAPP_DEFAULT_TENANT_ID ou habilite ChannelConfig(channel=whatsapp, enabled=true)"
+      });
+    }
 
     for (const msg of messages) {
       const waId = msg.from;
       if (!waId) continue;
 
-      // ✅ Anti-loop: se por algum motivo vier mensagem enviada por nós mesmos (raro),
-      // não respondemos de novo.
+      // ✅ Anti-loop (defensivo)
       if (msg.from === value?.metadata?.display_phone_number) {
         continue;
       }
@@ -207,7 +231,9 @@ router.post("/", async (req, res, next) => {
 
       const profileName = contactMatch?.profile?.name || null;
 
-      const r = getOrCreateChannelConversation(db, {
+      // ✅ Prisma-first: create/reuse conversation OPEN do mesmo contact/channel
+      const r = await getOrCreateChannelConversation({
+        tenantId,
         source: "whatsapp",
         peerId: `wa:${waId}`,
         title: profileName || waId,
@@ -280,9 +306,9 @@ router.post("/", async (req, res, next) => {
       }
 
       // =====================
-      // PERSISTE INBOUND
+      // PERSISTE INBOUND (PRISMA)
       // =====================
-      appendMessage(db, conv.id, {
+      await appendMessage(conv.id, {
         type,
         from: "client",
         direction: "in",
@@ -291,7 +317,8 @@ router.post("/", async (req, res, next) => {
         createdAt: tsIso,
         waMessageId: msg.id,
         channel: "whatsapp",
-        source: "whatsapp"
+        source: "whatsapp",
+        tenantId
       });
 
       // ==================================================
@@ -306,7 +333,7 @@ router.post("/", async (req, res, next) => {
       if (isAlreadyHandoff) continue;
 
       // ==================================================
-      // BOT DECISION (só decide com texto; outros tipos ficam só no histórico)
+      // BOT DECISION (só decide com texto)
       // ==================================================
       if (type !== "text") continue;
 
@@ -334,7 +361,7 @@ router.post("/", async (req, res, next) => {
           sent?.data?.id ||
           null;
 
-        appendMessage(db, conv.id, {
+        await appendMessage(conv.id, {
           type: "text",
           from: "bot",
           direction: "out",
@@ -354,13 +381,9 @@ router.post("/", async (req, res, next) => {
                 at: nowIso()
               },
           channel: "whatsapp",
-          source: "whatsapp"
+          source: "whatsapp",
+          tenantId
         });
-
-        // reforça modo local também
-        conv.currentMode = "human";
-        conv.handoffActive = true;
-        conv.handoffSince = conv.handoffSince || nowIso();
 
         continue;
       }
@@ -386,7 +409,7 @@ router.post("/", async (req, res, next) => {
         sent?.data?.id ||
         null;
 
-      appendMessage(db, conv.id, {
+      await appendMessage(conv.id, {
         type: "text",
         from: "bot",
         direction: "out",
@@ -398,18 +421,18 @@ router.post("/", async (req, res, next) => {
           ? { status: "sent", at: nowIso() }
           : {
               status: "failed",
-              error: sent?.raw || sent?.error || (sent?.data ? JSON.stringify(sent.data) : "send_failed"),
+              error:
+                sent?.raw ||
+                sent?.error ||
+                (sent?.data ? JSON.stringify(sent.data) : "send_failed"),
               at: nowIso()
             },
         channel: "whatsapp",
-        source: "whatsapp"
+        source: "whatsapp",
+        tenantId
       });
-
-      conv.currentMode = "bot";
-      conv.botAttempts = (conv.botAttempts || 0) + 1;
     }
 
-    saveDB(db);
     return res.sendStatus(200);
   } catch (err) {
     logger.error({ err }, "❌ Erro no webhook WhatsApp");

@@ -38,6 +38,9 @@ if (ENV === "production" && fs.existsSync(envProdPath)) {
 // Base domain (tenant por subdomínio)
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
+// (Opcional, mas recomendado pro webhook público)
+process.env.WHATSAPP_DEFAULT_TENANT_ID ||= String(process.env.WHATSAPP_DEFAULT_TENANT_ID || "").trim();
+
 // ===============================
 // LOGGER
 // ===============================
@@ -52,8 +55,16 @@ let prismaReady = false;
 try {
   const mod = await import("./lib/prisma.js");
   prisma = mod?.prisma || mod?.default || mod;
+
   prismaReady = !!(prisma?.user && prisma?.tenant && prisma?.userTenant);
-  logger.info({ prismaReady }, "🧠 Prisma status");
+  logger.info(
+    {
+      prismaReady,
+      tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
+      hasWhatsappDefaultTenant: !!process.env.WHATSAPP_DEFAULT_TENANT_ID
+    },
+    "🧠 Prisma status"
+  );
 } catch (err) {
   prismaReady = false;
   logger.error({ err }, "❌ Erro ao carregar Prisma");
@@ -125,7 +136,15 @@ app.use(
 // ===============================
 // CORS + PARSERS
 // ===============================
-app.use(cors({ origin: true, credentials: true }));
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization", "X-Tenant-Id"],
+    exposedHeaders: ["Authorization"]
+  })
+);
+
 app.use(express.json({ limit: "2mb" }));
 
 // ===============================
@@ -144,11 +163,11 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/health",
 
   // ✅ auth/login
-  "/login", // compat (authRouter expõe /login)
+  "/login",
   "/auth/login",
   "/auth/select-tenant",
 
-  // ✅ password flow (invite/reset)
+  // ✅ password flow
   "/auth/password",
   "/auth/password/verify",
   "/auth/password/set",
@@ -169,17 +188,23 @@ app.use(
 // 🌍 ROTAS PÚBLICAS
 // ===============================
 
-// ❤️ Health
+// ❤️ Root
 app.get("/", (req, res) => res.json({ status: "ok" }));
 
+// ❤️ Health (Prisma-only)
 app.get("/health", async (req, res) => {
   let users = 0;
   let tenants = 0;
+  let whatsappEnabledTenants = 0;
 
   try {
     if (prismaReady) {
       users = await prisma.user.count();
       tenants = await prisma.tenant.count();
+
+      whatsappEnabledTenants = await prisma.channelConfig.count({
+        where: { channel: "whatsapp", enabled: true }
+      });
     }
   } catch {
     // ignore
@@ -191,13 +216,14 @@ app.get("/health", async (req, res) => {
     prismaReady,
     users,
     tenants,
+    tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
+    hasWhatsappDefaultTenant: !!process.env.WHATSAPP_DEFAULT_TENANT_ID,
+    whatsappEnabledTenants,
     uptime: process.uptime()
   });
 });
 
-// 🔐 AUTH (LOGIN OFICIAL)
-// - Mantém compatibilidade com /login
-// - Evita duplicidade de handlers no index.js
+// 🔐 AUTH
 app.use("/", authRouter);
 
 // 🔐 Password / convite / reset
@@ -206,17 +232,15 @@ app.use("/auth", passwordRouter);
 // 🌐 WebChat (widget)
 app.use("/webchat", webchatRouter);
 
-// 🌐 WhatsApp Webhook (PRECISA ser público)
+// 🌐 WhatsApp Webhook (público)
 app.use("/webhook/whatsapp", whatsappRouter);
 
 // ===============================
 // 🔒 MIDDLEWARE GLOBAL (PROTEGIDO)
 // ===============================
-// ⚠️ Daqui pra baixo: tudo exige token
 app.use(requireAuth);
 app.use(enforceTokenTenant);
 
-// ✅ IMPORTANTE: requireTenant virou factory (para não bloquear rotas públicas e aceitar tenantId do token)
 app.use(
   requireTenant({
     allowNoTenantPaths: PUBLIC_NO_TENANT_PATHS
@@ -228,8 +252,6 @@ app.use(requirePrisma);
 // ===============================
 // 🔒 ROTAS PROTEGIDAS
 // ===============================
-
-// API
 app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
 app.use("/api/human", assignmentRouter);
@@ -252,7 +274,7 @@ app.use("/outbound/sms-campaigns", smsCampaignsRouter);
 app.use("/outbound", outboundRouter);
 
 // ===============================
-// 404 (opcional, mas ajuda debug)
+// 404
 // ===============================
 app.use((req, res) => {
   res.status(404).json({ error: "Not Found", path: req.path });
