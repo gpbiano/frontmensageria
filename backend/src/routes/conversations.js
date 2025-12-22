@@ -43,6 +43,12 @@ function setMeta(obj, patch) {
   return { ...curr, ...asJson(patch) };
 }
 
+function hasCol(obj, key) {
+  // Prisma retorna sempre as props selecionadas.
+  // Aqui checamos se o campo existe no row (migração aplicada) e não é undefined.
+  return obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 function msgTextFromRaw(raw) {
   if (!raw) return "";
   if (typeof raw.text === "string") return raw.text;
@@ -55,6 +61,7 @@ function msgTextFromRaw(raw) {
 // ======================================================
 // NORMALIZA PARA O SHAPE LEGADO DO FRONT
 // (mantém compatibilidade com ChatPanel / Inbox)
+// Agora lê de colunas (se existirem) e cai pra metadata (fallback)
 // ======================================================
 function normalizeConversationRow(convRow) {
   if (!convRow) return null;
@@ -69,12 +76,22 @@ function normalizeConversationRow(convRow) {
   const createdAt = convRow.createdAt ? new Date(convRow.createdAt).toISOString() : nowIso();
   const updatedAt = convRow.updatedAt ? new Date(convRow.updatedAt).toISOString() : createdAt;
 
-  const currentMode = safeStr(m.currentMode || "bot");
-  const hadHuman = Boolean(m.hadHuman);
+  // ✅ colunas novas (fallback para metadata)
+  const currentMode = safeStr(
+    (hasCol(convRow, "currentMode") ? convRow.currentMode : undefined) ?? m.currentMode ?? "bot"
+  ).toLowerCase();
+
+  const hadHuman = Boolean(m.hadHuman); // ainda fica no metadata por compat
   const botAttempts = Number(m.botAttempts || 0);
 
-  const handoffActive = Boolean(m.handoffActive);
-  const handoffSince = m.handoffSince || (handoffActive ? updatedAt : null);
+  const handoffActive = Boolean(
+    (hasCol(convRow, "handoffActive") ? convRow.handoffActive : undefined) ?? m.handoffActive
+  );
+
+  const handoffSince =
+    (hasCol(convRow, "handoffSince") ? convRow.handoffSince : undefined) ??
+    m.handoffSince ??
+    (handoffActive ? updatedAt : null);
 
   const peerId = safeStr(m.peerId || "");
   const title = safeStr(m.title || "Contato");
@@ -84,18 +101,32 @@ function normalizeConversationRow(convRow) {
     ? new Date(convRow.lastMessageAt).toISOString()
     : m.lastMessageAt || null;
 
-  // regra do painel (legado)
-  let inboxVisible = m.inboxVisible;
+  // inboxVisible/inboxStatus/queuedAt:
+  // ✅ prioriza colunas, fallback metadata, fallback regra legado
+  let inboxVisible =
+    (hasCol(convRow, "inboxVisible") ? convRow.inboxVisible : undefined) ?? m.inboxVisible;
+
   if (typeof inboxVisible !== "boolean") {
-    inboxVisible =
-      currentMode === "human" || hadHuman === true || handoffActive === true;
+    inboxVisible = currentMode === "human" || hadHuman === true || handoffActive === true;
   }
 
-  const inboxStatus = inboxVisible ? safeStr(m.inboxStatus || "waiting_human") : "bot_only";
+  const inboxStatusCol = hasCol(convRow, "inboxStatus") ? convRow.inboxStatus : undefined;
+  const inboxStatus = inboxVisible
+    ? safeStr(inboxStatusCol ?? m.inboxStatus ?? "waiting_human")
+    : "bot_only";
 
+  const queuedAtCol = hasCol(convRow, "queuedAt") ? convRow.queuedAt : undefined;
   const queuedAt = inboxVisible
-    ? m.queuedAt || handoffSince || updatedAt
+    ? (queuedAtCol ? new Date(queuedAtCol).toISOString() : (m.queuedAt || handoffSince || updatedAt))
     : null;
+
+  // assignment (colunas novas; fallback metadata)
+  const assignedGroupId = safeStr(
+    (hasCol(convRow, "assignedGroupId") ? convRow.assignedGroupId : undefined) ?? m.assignedGroupId ?? m.groupId ?? ""
+  );
+  const assignedUserId = safeStr(
+    (hasCol(convRow, "assignedUserId") ? convRow.assignedUserId : undefined) ?? m.assignedUserId ?? m.assignedAgentId ?? ""
+  );
 
   return {
     // legado
@@ -111,7 +142,7 @@ function normalizeConversationRow(convRow) {
     botAttempts,
 
     handoffActive,
-    handoffSince,
+    handoffSince: handoffSince ? (handoffSince instanceof Date ? handoffSince.toISOString() : handoffSince) : null,
     handoffReason: m.handoffReason || null,
 
     tenantId: convRow.tenantId,
@@ -121,9 +152,13 @@ function normalizeConversationRow(convRow) {
     lastMessageAt,
     lastMessagePreview,
 
-    inboxVisible,
+    inboxVisible: Boolean(inboxVisible),
     inboxStatus,
-    queuedAt
+    queuedAt,
+
+    // extras úteis (não quebra front se ignorar)
+    assignedGroupId: assignedGroupId || null,
+    assignedUserId: assignedUserId || null
   };
 }
 
@@ -153,24 +188,18 @@ function normalizeMessageRow(convNorm, msgRow) {
 }
 
 // ======================================================
-// CORE (PRISMA-FIRST, SEM data.json)
-// Mantém a assinatura antiga para não quebrar imports existentes:
+// CORE (PRISMA-FIRST)
+// Mantém assinatura antiga para não quebrar imports existentes:
 // getOrCreateChannelConversation(db, payload) e appendMessage(db, conversationId, rawMsg)
 // ======================================================
 
 async function upsertContact({ tenantId, channel, peerId, title, phone, waId, visitorId }) {
-  // usamos externalId = peerId para dedupe por canal
-  // (se vc preferir, pode usar externalId diferente, mas mantenha estável)
   const externalId = safeStr(peerId);
 
-  // ✅ OBS: externalId é opcional no schema, mas aqui a gente precisa dele.
-  // Se vier vazio, cria contato "solto" (não recomendado). Por segurança, bloqueia:
   if (!externalId) {
     throw new Error("peerId obrigatório para criar/achar contato (externalId).");
   }
 
-  // nome composto automático: Contact_tenantId_channel_externalId_key
-  // no prisma client, vira: tenantId_channel_externalId
   return prisma.contact.upsert({
     where: {
       tenantId_channel_externalId: {
@@ -202,12 +231,11 @@ async function upsertContact({ tenantId, channel, peerId, title, phone, waId, vi
 }
 
 export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) {
-  // compat: se chamarem (payload) ao invés de (db,payload)
   const payload = maybePayload || dbOrPayload || {};
   const tenantId = safeStr(payload.tenantId);
 
   const source = safeStr(payload.source || payload.channel || "whatsapp").toLowerCase();
-  const channel = source; // padrão do legado
+  const channel = source;
   const peerId = safeStr(payload.peerId);
 
   if (!tenantId) return { ok: false, error: "tenantId obrigatório" };
@@ -223,7 +251,6 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
     visitorId: payload.visitorId || null
   });
 
-  // regra: nunca reabrir closed -> só reutiliza se OPEN
   const existing = await prisma.conversation.findFirst({
     where: {
       tenantId,
@@ -239,6 +266,29 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   if (!conv) {
     const convId = newId(source === "whatsapp" ? "wa" : "wc");
 
+    const baseMeta = {
+      source,
+      channel,
+      peerId,
+      title: payload.title || "Contato",
+
+      currentMode: payload.currentMode || "bot",
+      hadHuman: false,
+      botAttempts: 0,
+
+      handoffActive: false,
+      handoffSince: null,
+      handoffReason: null,
+
+      lastMessageAt: null,
+      lastMessagePreview: "",
+
+      inboxVisible: false,
+      inboxStatus: "bot_only",
+      queuedAt: null
+    };
+
+    // ✅ se schema novo existir, já preenche colunas também
     conv = await prisma.conversation.create({
       data: {
         id: convId,
@@ -247,28 +297,20 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
         channel,
         status: "open",
         lastMessageAt: null,
-        metadata: {
-          // ✅ estado legado salvo no metadata
-          source,
-          channel,
-          peerId,
-          title: payload.title || "Contato",
 
-          currentMode: payload.currentMode || "bot",
-          hadHuman: false,
-          botAttempts: 0,
+        // colunas novas (se existirem no schema aplicado)
+        // Prisma vai aceitar porque o schema atual do runtime já inclui ou não inclui esses campos.
+        // Se ainda não migrou, remova esse bloco ou aplique a migration antes.
+        inboxVisible: false,
+        inboxStatus: "bot_only",
+        queuedAt: null,
+        currentMode: safeStr(payload.currentMode || "bot").toLowerCase(),
+        handoffActive: false,
+        handoffSince: null,
+        assignedGroupId: null,
+        assignedUserId: null,
 
-          handoffActive: false,
-          handoffSince: null,
-          handoffReason: null,
-
-          lastMessageAt: null,
-          lastMessagePreview: "",
-
-          inboxVisible: false,
-          inboxStatus: "bot_only",
-          queuedAt: null
-        }
+        metadata: baseMeta
       }
     });
   }
@@ -279,24 +321,35 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
 
 async function promoteToInboxPrisma({ convRow, reason = "handoff" }) {
   const meta = getMeta(convRow);
+  const now = nowIso();
 
   const patch = {
     currentMode: "human",
     hadHuman: true,
     handoffActive: true,
-    handoffSince: meta.handoffSince || nowIso(),
+    handoffSince: meta.handoffSince || now,
     handoffReason: reason,
 
     inboxVisible: true,
     inboxStatus: "waiting_human",
-    queuedAt: meta.queuedAt || nowIso()
+    queuedAt: meta.queuedAt || now
   };
+
+  const data = {
+    metadata: setMeta(convRow, patch)
+  };
+
+  // ✅ atualiza colunas se existirem
+  if (hasCol(convRow, "currentMode")) data.currentMode = "human";
+  if (hasCol(convRow, "handoffActive")) data.handoffActive = true;
+  if (hasCol(convRow, "handoffSince")) data.handoffSince = new Date(patch.handoffSince);
+  if (hasCol(convRow, "inboxVisible")) data.inboxVisible = true;
+  if (hasCol(convRow, "inboxStatus")) data.inboxStatus = "waiting_human";
+  if (hasCol(convRow, "queuedAt")) data.queuedAt = new Date(patch.queuedAt);
 
   return prisma.conversation.update({
     where: { id: convRow.id },
-    data: {
-      metadata: setMeta(convRow, patch)
-    }
+    data
   });
 }
 
@@ -309,13 +362,36 @@ async function touchConversationPrisma({ convRow, msgText }) {
     lastMessagePreview: preview
   };
 
+  const data = {
+    lastMessageAt: new Date(atIso),
+    metadata: setMeta(convRow, patch)
+  };
+
   return prisma.conversation.update({
     where: { id: convRow.id },
-    data: {
-      lastMessageAt: new Date(atIso),
-      metadata: setMeta(convRow, patch)
-    }
+    data
   });
+}
+
+async function bumpBotAttempts({ convRow }) {
+  const meta = getMeta(convRow);
+  const nextBotAttempts = Number(meta.botAttempts || 0) + 1;
+
+  const data = {
+    metadata: setMeta(convRow, {
+      botAttempts: nextBotAttempts,
+      currentMode: "bot"
+    })
+  };
+
+  if (hasCol(convRow, "currentMode")) data.currentMode = "bot";
+
+  await prisma.conversation.update({
+    where: { id: convRow.id },
+    data
+  });
+
+  return nextBotAttempts;
 }
 
 export async function appendMessage(dbOrConversationId, conversationIdOrRaw, maybeRaw) {
@@ -331,13 +407,17 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 
   if (!conversationId) return { ok: false, error: "conversationId obrigatório" };
 
-  const convRow = await prisma.conversation.findUnique({
-    where: { id: conversationId }
-  });
+  // ✅ garante tenant guard quando rawMsg traz tenantId
+  const rawTenantId = rawMsg?.tenantId ? safeStr(rawMsg.tenantId) : "";
+
+  const convRow = rawTenantId
+    ? await prisma.conversation.findFirst({ where: { id: conversationId, tenantId: rawTenantId } })
+    : await prisma.conversation.findUnique({ where: { id: conversationId } });
 
   if (!convRow) return { ok: false, error: "Conversa não encontrada" };
 
   const convNorm = normalizeConversationRow(convRow);
+
   const type = safeStr(rawMsg?.type || "text").toLowerCase();
   const text = msgTextFromRaw(rawMsg);
 
@@ -391,14 +471,12 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
       type: type || "text",
       text: text || null,
 
-      // campos nativos opcionais
       mediaUrl: rawMsg?.mediaUrl || null,
       fromName: rawMsg?.fromName || null,
       fromId: rawMsg?.fromId || null,
       status: rawMsg?.status || "sent",
 
       metadata: {
-        // tudo que faltaria em colunas vira metadata (paridade com legado)
         from,
         isBot,
         waMessageId,
@@ -413,20 +491,9 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   });
 
-  // atualiza counters/estado (bot/handoff/inbox) em Conversation.metadata
-  const convMeta = getMeta(convRow);
-
+  // counters/estado (bot/handoff/inbox)
   if (from === "bot") {
-    const nextBotAttempts = Number(convMeta.botAttempts || 0) + 1;
-    await prisma.conversation.update({
-      where: { id: convRow.id },
-      data: {
-        metadata: setMeta(convRow, {
-          botAttempts: nextBotAttempts,
-          currentMode: "bot"
-        })
-      }
-    });
+    await bumpBotAttempts({ convRow });
   }
 
   if (from === "agent" || rawMsg?.handoff === true) {
