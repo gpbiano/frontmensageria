@@ -1,17 +1,30 @@
 // backend/src/outbound/outboundRouter.js
 // ✅ PRISMA-FIRST (SEM data.json)
-// Hub Outbound (MVP): health + compat endpoints (sem storage legado)
+// Hub Outbound: health + debug + meta (sem storage legado)
 
 import express from "express";
 import fetch from "node-fetch";
 import logger from "../logger.js";
 import prisma from "../lib/prisma.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 
 const router = express.Router();
+
+/* =========================
+ * Helpers
+ * ========================= */
 
 function getTenantId(req) {
   const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
   return tid ? String(tid) : null;
+}
+
+function assertPrisma(res) {
+  if (!prisma || typeof prisma.$queryRaw !== "function") {
+    res.status(503).json({ ok: false, error: "prisma_not_ready" });
+    return false;
+  }
+  return true;
 }
 
 function normalizeApiVersion(v) {
@@ -36,22 +49,32 @@ function ensureWhatsAppEnv(res) {
       "⚠️ Outbound: WABA_ID/WHATSAPP_TOKEN ausentes"
     );
     res.status(500).json({
-      error:
-        "Configuração do WhatsApp não encontrada. Verifique WABA_ID/WHATSAPP_WABA_ID e WHATSAPP_TOKEN no .env."
+      ok: false,
+      error: "missing_whatsapp_env",
+      details:
+        "Defina WABA_ID/WHATSAPP_WABA_ID e WHATSAPP_TOKEN nas variáveis de ambiente."
     });
     return false;
   }
   return true;
 }
 
+/* =========================
+ * ROUTES
+ * ========================= */
+
 /**
  * GET /outbound
  * Hub do módulo outbound (status + contadores)
  */
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) {
+      return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+    }
 
     const [templates, numbers, campaigns, optouts] = await Promise.all([
       prisma.outboundTemplate.count({ where: { tenantId } }),
@@ -78,13 +101,16 @@ router.get("/", async (req, res) => {
 
 /**
  * GET /outbound/meta/templates
- * Consulta a Meta (não grava em lugar nenhum).
- * Útil pra debug / comparar com o banco.
+ * Consulta a Meta (não grava no banco).
  */
-router.get("/meta/templates", async (req, res) => {
+router.get("/meta/templates", requireAuth, async (req, res) => {
   try {
+    if (!assertPrisma(res)) return;
+
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) {
+      return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+    }
 
     if (!ensureWhatsAppEnv(res)) return;
     const { WABA_ID, WHATSAPP_TOKEN, apiVersion } = getWhatsAppEnv();
@@ -113,22 +139,21 @@ router.get("/meta/templates", async (req, res) => {
 
     if (!metaRes.ok) {
       logger.error({ status: metaRes.status, json }, "❌ Meta templates fetch failed");
-      return res.status(502).json({ error: "meta_fetch_failed", details: json });
+      return res.status(502).json({ ok: false, error: "meta_fetch_failed", details: json });
     }
 
     return res.json({ ok: true, tenantId, data: json.data || [] });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ outboundRouter GET /meta/templates failed");
-    return res.status(500).json({ error: "internal_error" });
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
 /**
  * GET /outbound/meta/health
  * Checa apenas se as credenciais/config do WhatsApp estão presentes.
- * (Sem chamada externa, sem banco.)
  */
-router.get("/meta/health", (req, res) => {
+router.get("/meta/health", requireAuth, (req, res) => {
   const tenantId = getTenantId(req);
   const { WABA_ID, WHATSAPP_TOKEN, apiVersion } = getWhatsAppEnv();
 
@@ -142,15 +167,14 @@ router.get("/meta/health", (req, res) => {
 });
 
 /**
- * COMPAT: se existia algo como /outbound/templates no router legado,
- * a sua API atual já monta /outbound/templates via templatesRouter.
- * Então aqui deixamos explícito pra evitar confusão.
+ * GET /outbound/_routes
+ * Lista rotas do módulo outbound
  */
 router.get("/_routes", (_req, res) => {
   return res.json({
     ok: true,
     routes: [
-      "/outbound (hub)",
+      "/outbound",
       "/outbound/templates",
       "/outbound/numbers",
       "/outbound/assets",

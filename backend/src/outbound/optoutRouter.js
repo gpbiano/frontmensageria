@@ -3,11 +3,9 @@
 // Base: /outbound/optout
 
 import express from "express";
-import prismaMod from "../lib/prisma.js";
+import prisma from "../lib/prisma.js";
 import logger from "../logger.js";
 import { requireAuth, requireRole } from "../middleware/requireAuth.js";
-
-const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
 
@@ -17,7 +15,7 @@ function getTenantId(req) {
 }
 
 function assertPrisma(res) {
-  if (!prisma?.optOutEntry) {
+  if (!prisma || typeof prisma.$queryRaw !== "function") {
     res.status(503).json({ ok: false, error: "prisma_not_ready" });
     return false;
   }
@@ -41,13 +39,13 @@ router.get("/", requireAuth, async (req, res) => {
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
     const page = Math.max(1, Number(req.query.page || 1));
     const limit = Math.min(200, Math.max(1, Number(req.query.limit || 25)));
     const skip = (page - 1) * limit;
 
-    const channel = String(req.query.channel || "whatsapp");
+    const channel = String(req.query.channel || "whatsapp").trim() || "whatsapp";
     const q = String(req.query.query || "").trim();
 
     const where = {
@@ -89,9 +87,9 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    const channel = String(req.body?.channel || "whatsapp");
+    const channel = String(req.body?.channel || "whatsapp").trim() || "whatsapp";
     const target = normalizeTarget(req.body?.target);
     const reason = req.body?.reason ? String(req.body.reason) : null;
 
@@ -118,9 +116,11 @@ router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, 
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    const id = String(req.params.id || "");
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ ok: false, error: "invalid_id" });
+
     const existing = await prisma.optOutEntry.findFirst({
       where: { id, tenantId },
       select: { id: true }
@@ -136,3 +136,4 @@ router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, 
 });
 
 export default router;
+

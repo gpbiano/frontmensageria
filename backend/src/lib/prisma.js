@@ -1,17 +1,31 @@
 // backend/src/lib/prisma.js
-import pkg from "@prisma/client";
-const { PrismaClient } = pkg;
+import { PrismaClient } from "@prisma/client";
+import logger from "../logger.js";
 
-const prisma =
-  globalThis.__prisma ||
-  new PrismaClient({
-    log: process.env.NODE_ENV === "production" ? ["error"] : ["error", "warn"],
+let prisma;
+
+/**
+ * Singleton global do Prisma
+ * Evita múltiplas instâncias em imports diferentes
+ */
+if (!global.__GP_PRISMA__) {
+  prisma = new PrismaClient({
+    log: ["error", "warn"]
   });
 
-if (process.env.NODE_ENV !== "production") {
-  globalThis.__prisma = prisma;
+  prisma
+    .$connect()
+    .then(() => {
+      logger.info("✅ Prisma conectado (singleton)");
+    })
+    .catch((err) => {
+      logger.error({ err }, "❌ Falha ao conectar Prisma");
+    });
+
+  global.__GP_PRISMA__ = prisma;
+} else {
+  prisma = global.__GP_PRISMA__;
 }
 
-// Exporta dos dois jeitos (compat)
-export { prisma, PrismaClient };
 export default prisma;
+export { prisma };

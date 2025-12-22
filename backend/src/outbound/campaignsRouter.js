@@ -3,11 +3,9 @@
 // Base: /outbound/campaigns
 
 import express from "express";
-import prismaMod from "../lib/prisma.js";
+import prisma from "../lib/prisma.js";
 import logger from "../logger.js";
 import { requireAuth, requireRole } from "../middleware/requireAuth.js";
-
-const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
 
@@ -17,19 +15,34 @@ function getTenantId(req) {
 }
 
 function assertPrisma(res) {
-  if (!prisma?.outboundCampaign) {
+  if (!prisma || typeof prisma.$queryRaw !== "function") {
     res.status(503).json({ ok: false, error: "prisma_not_ready" });
     return false;
   }
   return true;
 }
 
+function normalizeStatus(v) {
+  const s = String(v || "").toLowerCase();
+  if (
+    ["draft", "scheduled", "running", "paused", "finished", "canceled"].includes(s)
+  ) {
+    return s;
+  }
+  return undefined;
+}
+
+// ========================
+// LISTAR CAMPANHAS
+// ========================
 router.get("/", requireAuth, async (req, res) => {
   try {
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) {
+      return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+    }
 
     const items = await prisma.outboundCampaign.findMany({
       where: { tenantId, channel: "whatsapp" },
@@ -43,19 +56,28 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
+// ========================
+// DETALHE
+// ========================
 router.get("/:id", requireAuth, async (req, res) => {
   try {
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    const id = String(req.params.id || "").trim();
 
-    const id = String(req.params.id || "");
+    if (!tenantId || !id) {
+      return res.status(400).json({ ok: false, error: "invalid_params" });
+    }
+
     const item = await prisma.outboundCampaign.findFirst({
       where: { id, tenantId, channel: "whatsapp" }
     });
 
-    if (!item) return res.status(404).json({ ok: false, error: "not_found" });
+    if (!item) {
+      return res.status(404).json({ ok: false, error: "not_found" });
+    }
+
     return res.json({ ok: true, item });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ campaignsRouter GET /:id failed");
@@ -63,15 +85,22 @@ router.get("/:id", requireAuth, async (req, res) => {
   }
 });
 
+// ========================
+// CRIAR
+// ========================
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) {
+      return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+    }
 
     const { name, templateId, numberId, scheduleAt, metadata } = req.body || {};
-    if (!name) return res.status(400).json({ ok: false, error: "name_required" });
+    if (!name) {
+      return res.status(400).json({ ok: false, error: "name_required" });
+    }
 
     const item = await prisma.outboundCampaign.create({
       data: {
@@ -93,23 +122,36 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
   }
 });
 
+// ========================
+// ATUALIZAR
+// ========================
 router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    const id = String(req.params.id || "").trim();
 
-    const id = String(req.params.id || "");
+    if (!tenantId || !id) {
+      return res.status(400).json({ ok: false, error: "invalid_params" });
+    }
+
     const existing = await prisma.outboundCampaign.findFirst({
       where: { id, tenantId, channel: "whatsapp" },
       select: { id: true }
     });
-    if (!existing) return res.status(404).json({ ok: false, error: "not_found" });
+
+    if (!existing) {
+      return res.status(404).json({ ok: false, error: "not_found" });
+    }
 
     const data = {};
+
     if (req.body?.name !== undefined) data.name = String(req.body.name).trim();
-    if (req.body?.status !== undefined) data.status = String(req.body.status);
+    if (req.body?.status !== undefined) {
+      const s = normalizeStatus(req.body.status);
+      if (s) data.status = s;
+    }
     if (req.body?.templateId !== undefined)
       data.templateId = req.body.templateId ? String(req.body.templateId) : null;
     if (req.body?.numberId !== undefined)
@@ -120,7 +162,11 @@ router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, r
     if (req.body?.audience !== undefined) data.audience = req.body.audience;
     if (req.body?.stats !== undefined) data.stats = req.body.stats;
 
-    const item = await prisma.outboundCampaign.update({ where: { id }, data });
+    const item = await prisma.outboundCampaign.update({
+      where: { id },
+      data
+    });
+
     return res.json({ ok: true, item });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ campaignsRouter PATCH /:id failed");

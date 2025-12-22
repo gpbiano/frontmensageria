@@ -11,25 +11,39 @@ const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
 
+/* =========================
+ * Helpers
+ * ========================= */
+
 function getTenantId(req) {
   const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
   return tid ? String(tid) : null;
 }
 
 function assertPrisma(res) {
-  if (!prisma?.outboundCampaign) {
+  if (!prisma || typeof prisma.$queryRaw !== "function") {
+    res.status(503).json({ ok: false, error: "prisma_not_ready" });
+    return false;
+  }
+  // precisamos do model que vamos usar
+  if (!prisma.outboundCampaign) {
     res.status(503).json({ ok: false, error: "prisma_not_ready" });
     return false;
   }
   return true;
 }
 
+/* =========================
+ * Routes
+ * ========================= */
+
+// LISTAR
 router.get("/", requireAuth, async (req, res) => {
   try {
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
     const items = await prisma.outboundCampaign.findMany({
       where: { tenantId, channel: "sms" },
@@ -43,24 +57,29 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
+// CRIAR
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
     if (!assertPrisma(res)) return;
 
     const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    const { name, message, metadata } = req.body || {};
+    const name = String(req.body?.name || "").trim();
+    const message = String(req.body?.message || "");
+    const metadata = req.body?.metadata && typeof req.body.metadata === "object" ? req.body.metadata : {};
+
     if (!name) return res.status(400).json({ ok: false, error: "name_required" });
-    if (!message) return res.status(400).json({ ok: false, error: "message_required" });
+    if (!message.trim()) return res.status(400).json({ ok: false, error: "message_required" });
 
     const item = await prisma.outboundCampaign.create({
       data: {
         tenantId,
         channel: "sms",
-        name: String(name).trim(),
+        name,
         status: "draft",
-        metadata: { ...(metadata || {}), message: String(message) }
+        // ✅ MVP: persistimos message em metadata (sem quebrar schema)
+        metadata: { ...metadata, message }
       }
     });
 
