@@ -38,8 +38,10 @@ if (ENV === "production" && fs.existsSync(envProdPath)) {
 // Base domain (tenant por subdomínio)
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
-// (Opcional, mas recomendado pro webhook público)
-process.env.WHATSAPP_DEFAULT_TENANT_ID ||= String(process.env.WHATSAPP_DEFAULT_TENANT_ID || "").trim();
+// (Opcional, recomendado pro webhook público quando não houver contexto do tenant)
+process.env.WHATSAPP_DEFAULT_TENANT_ID ||= String(
+  process.env.WHATSAPP_DEFAULT_TENANT_ID || ""
+).trim();
 
 // ===============================
 // LOGGER
@@ -49,7 +51,7 @@ const { default: logger } = await import("./logger.js");
 // ===============================
 // PRISMA
 // ===============================
-let prisma;
+let prisma = null;
 let prismaReady = false;
 
 try {
@@ -109,7 +111,7 @@ const { default: whatsappRouter } = await import("./routes/channels/whatsappRout
 // ===============================
 // VARS
 // ===============================
-const PORT = process.env.PORT || 3010;
+const PORT = Number(process.env.PORT || 3010);
 
 // ===============================
 // APP
@@ -128,7 +130,7 @@ app.use(
       ignore: (req) =>
         req.method === "OPTIONS" ||
         req.url.startsWith("/health") ||
-        req.url.startsWith("/webhook")
+        req.url.startsWith("/webhook/whatsapp")
     }
   })
 );
@@ -140,19 +142,26 @@ app.use(
   cors({
     origin: true,
     credentials: true,
-    allowedHeaders: ["Content-Type", "Authorization", "X-Tenant-Id"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Tenant-Id",
+      "X-Widget-Key",
+      "X-Webchat-Token"
+    ],
     exposedHeaders: ["Authorization"]
   })
 );
 
-app.use(express.json({ limit: "2mb" }));
+// ⚠️ JSON parser global
+app.use(express.json({ limit: "5mb" }));
 
 // ===============================
 // HELPERS
 // ===============================
-function requirePrisma(req, res, next) {
+function requirePrisma(_req, res, next) {
   if (prismaReady) return next();
-  return res.status(503).json({ error: "DB not ready" });
+  return res.status(503).json({ error: "db_not_ready" });
 }
 
 // ===============================
@@ -189,10 +198,10 @@ app.use(
 // ===============================
 
 // ❤️ Root
-app.get("/", (req, res) => res.json({ status: "ok" }));
+app.get("/", (_req, res) => res.json({ status: "ok" }));
 
-// ❤️ Health (Prisma-only)
-app.get("/health", async (req, res) => {
+// ❤️ Health
+app.get("/health", async (_req, res) => {
   let users = 0;
   let tenants = 0;
   let whatsappEnabledTenants = 0;
@@ -223,17 +232,17 @@ app.get("/health", async (req, res) => {
   });
 });
 
-// 🔐 AUTH
+// 🔐 AUTH (rotas públicas de login)
 app.use("/", authRouter);
 
-// 🔐 Password / convite / reset
+// 🔐 Password / convite / reset (rotas públicas em /auth/password/*)
 app.use("/auth", passwordRouter);
 
-// 🌐 WebChat (widget)
-app.use("/webchat", webchatRouter);
+// 🌐 WebChat (widget) — público, mas depende do DB
+app.use("/webchat", requirePrisma, webchatRouter);
 
-// 🌐 WhatsApp Webhook (público)
-app.use("/webhook/whatsapp", whatsappRouter);
+// 🌐 WhatsApp Webhook — público, mas depende do DB
+app.use("/webhook/whatsapp", requirePrisma, whatsappRouter);
 
 // ===============================
 // 🔒 MIDDLEWARE GLOBAL (PROTEGIDO)
@@ -283,9 +292,12 @@ app.use((req, res) => {
 // ===============================
 // ERROR HANDLER
 // ===============================
-app.use((err, req, res, next) => {
-  logger.error({ err, url: req.url, method: req.method }, "❌ Erro não tratado");
-  res.status(500).json({ error: "Internal server error" });
+app.use((err, req, res, _next) => {
+  logger.error(
+    { err, url: req.url, method: req.method },
+    "❌ Erro não tratado"
+  );
+  res.status(500).json({ error: "internal_server_error" });
 });
 
 // ===============================

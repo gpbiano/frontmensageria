@@ -3,101 +3,19 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import jwt from "jsonwebtoken";
+import prisma from "../lib/prisma.js";
 import logger from "../logger.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 
 const router = express.Router();
 
-// ===============================
-// CONFIG
-// ===============================
-// ⚠️ Sem fallback inseguro em produção
-function getJwtSecret() {
-  const secret = String(process.env.JWT_SECRET || "").trim();
-  if (!secret) {
-    if ((process.env.NODE_ENV || "development") !== "production") {
-      logger?.warn?.("⚠️ JWT_SECRET ausente. Usando secret dev APENAS em development.");
-      return "gplabs-dev-secret";
-    }
-    throw new Error("JWT_SECRET não definido.");
-  }
-  return secret;
-}
+const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 
-const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "")
-  .trim()
-  .replace(/\/+$/, "");
-
-const DATA_FILE = path.resolve(process.cwd(), "data.json");
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 const ASSETS_DIR = path.join(UPLOADS_DIR, "assets");
 
-// garante pastas
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
-
-// ===============================
-// AUTH
-// ===============================
-function requireAuth(req, res, next) {
-  try {
-    const h = String(req.headers.authorization || "");
-    const token = h.startsWith("Bearer ") ? h.slice(7).trim() : "";
-    if (!token) return res.status(401).json({ error: "missing_token" });
-    req.user = jwt.verify(token, getJwtSecret());
-    return next();
-  } catch {
-    return res.status(401).json({ error: "invalid_token" });
-  }
-}
-
-// ===============================
-// HELPERS
-// ===============================
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function safeReadJSON(filePath, fallback) {
-  try {
-    if (!fs.existsSync(filePath)) return fallback;
-    const raw = fs.readFileSync(filePath, "utf8");
-    if (!raw || !raw.trim()) return fallback;
-    return JSON.parse(raw);
-  } catch (err) {
-    logger?.warn?.({ err, filePath }, "⚠️ Falha ao ler JSON (fallback)");
-    return fallback;
-  }
-}
-
-function safeWriteJSON(filePath, data) {
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
-    return true;
-  } catch (err) {
-    logger?.error?.({ err, filePath }, "❌ Falha ao salvar JSON");
-    return false;
-  }
-}
-
-function loadDB() {
-  const parsed = safeReadJSON(DATA_FILE, {});
-  return parsed && typeof parsed === "object" ? parsed : {};
-}
-
-function saveDB(db) {
-  return safeWriteJSON(DATA_FILE, db && typeof db === "object" ? db : {});
-}
-
-function ensureDbShape(db) {
-  if (!db || typeof db !== "object") db = {};
-  if (!Array.isArray(db.assets)) db.assets = [];
-  return db;
-}
-
-function makeId() {
-  return `asset_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
 
 function sanitizeName(name) {
   return String(name || "file")
@@ -105,36 +23,19 @@ function sanitizeName(name) {
     .replace(/[^\w.\-]/g, "");
 }
 
+function getTenantId(req) {
+  const tid = req.tenant?.id || req.user?.tenantId || null;
+  return tid ? String(tid) : null;
+}
+
 function getPublicUrl(req, publicPath) {
-  const base =
-    PUBLIC_BASE_URL ||
-    `${String(req.headers["x-forwarded-proto"] || req.protocol || "http")}://${String(
-      req.headers["x-forwarded-host"] || req.get("host")
-    )}`;
-  return `${String(base).replace(/\/+$/, "")}${publicPath}`;
+  const base = PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+  return `${base}${publicPath}`;
 }
 
-function tryDeleteFileByUrl(url) {
-  try {
-    const marker = "/uploads/assets/";
-    const u = String(url || "");
-    const pos = u.indexOf(marker);
-    const filename = pos >= 0 ? u.slice(pos + marker.length) : null;
-    if (!filename) return;
-
-    const filePath = path.join(ASSETS_DIR, filename);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch {
-    // ignore
-  }
-}
-
-// ===============================
-// MULTER (DISK)
-// ===============================
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, ASSETS_DIR),
-  filename: (req, file, cb) => {
+  destination: (_req, _file, cb) => cb(null, ASSETS_DIR),
+  filename: (_req, file, cb) => {
     const original = sanitizeName(file.originalname);
     const ext = path.extname(original);
     const base = path.basename(original, ext);
@@ -150,55 +51,93 @@ const upload = multer({
 // =====================
 // GET /outbound/assets
 // =====================
-router.get("/", requireAuth, (req, res) => {
-  const db = ensureDbShape(loadDB());
-  return res.json(db.assets);
+router.get("/", requireAuth, async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+    const items = await prisma.asset.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" }
+    });
+
+    return res.json(items);
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ assetsRouter GET / failed");
+    return res.status(500).json({ error: "internal_error" });
+  }
 });
 
 // =============================
 // POST /outbound/assets/upload
 // field: file
 // =============================
-router.post("/upload", requireAuth, upload.single("file"), (req, res) => {
-  const file = req.file;
-  if (!file) return res.status(400).json({ error: "file_required" });
+router.post("/upload", requireAuth, upload.single("file"), async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-  const db = ensureDbShape(loadDB());
-  const publicPath = `/uploads/assets/${file.filename}`;
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "file_required" });
 
-  const item = {
-    id: makeId(),
-    name: file.originalname,
-    label: file.originalname,
-    type: file.mimetype,
-    size: file.size,
-    url: getPublicUrl(req, publicPath),
-    createdAt: nowIso()
-  };
+    const publicPath = `/uploads/assets/${file.filename}`;
+    const storageKey = `uploads/assets/${file.filename}`;
 
-  db.assets.unshift(item);
-  saveDB(db);
+    const item = await prisma.asset.create({
+      data: {
+        tenantId,
+        name: String(file.originalname || file.filename),
+        label: String(file.originalname || file.filename),
+        mimeType: String(file.mimetype || ""),
+        size: Number(file.size || 0),
+        storageKey,
+        url: getPublicUrl(req, publicPath)
+      }
+    });
 
-  return res.status(201).json(item);
+    return res.status(201).json(item);
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ assetsRouter POST /upload failed");
+    return res.status(500).json({ error: "internal_error" });
+  }
 });
 
 // ==========================
 // DELETE /outbound/assets/:id
 // ==========================
-router.delete("/:id", requireAuth, (req, res) => {
-  const { id } = req.params;
+router.delete("/:id", requireAuth, async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-  const db = ensureDbShape(loadDB());
-  const idx = db.assets.findIndex((a) => String(a.id) === String(id));
-  if (idx === -1) return res.status(404).json({ error: "not_found" });
+    const { id } = req.params;
 
-  const [removed] = db.assets.splice(idx, 1);
-  saveDB(db);
+    const asset = await prisma.asset.findFirst({
+      where: { id: String(id), tenantId }
+    });
+    if (!asset) return res.status(404).json({ error: "not_found" });
 
-  // best-effort delete file
-  tryDeleteFileByUrl(removed?.url);
+    await prisma.asset.delete({ where: { id: asset.id } });
 
-  return res.json({ success: true });
+    // best-effort delete file
+    try {
+      const marker = "uploads/assets/";
+      const key = String(asset.storageKey || "");
+      const filename = key.includes(marker) ? key.split(marker).pop() : null;
+
+      if (filename) {
+        const filePath = path.join(ASSETS_DIR, filename);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      }
+    } catch {
+      // ignore
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ assetsRouter DELETE /:id failed");
+    return res.status(500).json({ error: "internal_error" });
+  }
 });
 
 export default router;

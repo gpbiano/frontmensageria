@@ -1,81 +1,52 @@
 // backend/src/human/humanStorage.js
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+// ✅ PRISMA-FIRST (SEM human-data.json)
+// Este módulo era legado e persistia estado do "human" em human-data.json.
+// Agora o projeto é Prisma-first. Mantemos as funções para não quebrar imports antigos,
+// porém SEM escrever em disco. Se algum fluxo ainda depender desse estado, ele precisa
+// ser migrado para Prisma (Conversation/Message/GroupMember/etc).
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Arquivo específico do módulo Human
-const HUMAN_DB_FILE = path.join(process.cwd(), "human-data.json");
+import logger from "../logger.js";
 
 /**
- * Garante que o arquivo human-data.json exista
- * com a estrutura base esperada.
- */
-function ensureFileExists() {
-  if (!fs.existsSync(HUMAN_DB_FILE)) {
-    const initial = {
-      sessions: [],
-      actions: []
-    };
-
-    fs.writeFileSync(HUMAN_DB_FILE, JSON.stringify(initial, null, 2), "utf8");
-  }
-}
-
-/**
- * Carrega o estado completo do módulo humano.
+ * Carrega estado legado do módulo humano.
+ * ✅ Agora não existe mais storage local.
+ * Retornamos um estado vazio para compatibilidade.
  */
 export function loadHumanState() {
-  try {
-    ensureFileExists();
-    const raw = fs.readFileSync(HUMAN_DB_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-
-    if (!parsed.sessions) parsed.sessions = [];
-    if (!parsed.actions) parsed.actions = [];
-
-    return parsed;
-  } catch (err) {
-    console.error("❌ Erro ao carregar human-data.json", err);
-    return {
-      sessions: [],
-      actions: []
-    };
-  }
+  logger.warn(
+    "⚠️ humanStorage.loadHumanState chamado, mas human-data.json foi desativado (Prisma-first)."
+  );
+  return { sessions: [], actions: [] };
 }
 
 /**
- * Salva o estado completo do módulo humano.
+ * Salva estado legado do módulo humano.
+ * ✅ noop intencional para impedir gravação em disco.
  */
-export function saveHumanState(state) {
-  try {
-    const toSave = {
-      sessions: state.sessions || [],
-      actions: state.actions || []
-    };
-
-    fs.writeFileSync(
-      HUMAN_DB_FILE,
-      JSON.stringify(toSave, null, 2),
-      "utf8"
-    );
-  } catch (err) {
-    console.error("❌ Erro ao salvar human-data.json", err);
-  }
+export function saveHumanState(_state) {
+  logger.warn(
+    "⚠️ humanStorage.saveHumanState chamado, mas human-data.json foi desativado (Prisma-first)."
+  );
+  return true;
 }
 
 /**
- * Helper para atualizar o estado com uma função de mutação.
- * Ex:
- *   updateHumanState((state) => {
- *     state.sessions.push(...);
- *   });
+ * Helper legado que mutava estado em memória e persistia em JSON.
+ * ✅ Agora apenas executa o mutator em um estado vazio e devolve.
+ * Se algum código depender disso para funcionar, esse código precisa migrar para Prisma.
  */
 export function updateHumanState(mutatorFn) {
-  const state = loadHumanState();
-  mutatorFn(state);
-  saveHumanState(state);
+  logger.warn(
+    "⚠️ humanStorage.updateHumanState chamado, mas human-data.json foi desativado (Prisma-first)."
+  );
+
+  const state = { sessions: [], actions: [] };
+
+  try {
+    if (typeof mutatorFn === "function") mutatorFn(state);
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ humanStorage.updateHumanState mutator falhou");
+  }
+
   return state;
 }
