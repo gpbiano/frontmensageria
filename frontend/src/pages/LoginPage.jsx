@@ -1,28 +1,12 @@
+// frontend/src/pages/LoginPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import "../styles/login-page.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3010";
+// ✅ use SEMPRE o client central (api.ts)
+import { login as apiLogin } from "../api";
+
 const AUTH_TOKEN_KEY = "gpLabsAuthToken";
 const AUTH_USER_KEY = "gpLabsAuthUser";
-
-async function fetchJson(url, options = {}) {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...options
-  });
-
-  const contentType = res.headers.get("content-type") || "";
-  if (!contentType.includes("application/json")) {
-    const text = await res.text();
-    throw new Error(
-      `Resposta inválida da API (${res.status}): ${text?.slice?.(0, 200) || ""}`
-    );
-  }
-
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error || "Erro na API.");
-  return data;
-}
 
 export default function LoginPage({ onLogin }) {
   const isDev = import.meta.env.DEV;
@@ -45,14 +29,17 @@ export default function LoginPage({ onLogin }) {
   );
 
   function persistSession({ token, user }) {
-    const storage = rememberMe ? localStorage : sessionStorage;
-
+    // limpa tudo (evita sessão “misturada”)
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
     sessionStorage.removeItem(AUTH_TOKEN_KEY);
     sessionStorage.removeItem(AUTH_USER_KEY);
 
-    storage.setItem(AUTH_TOKEN_KEY, token);
+    // ✅ GARANTIA: token SEMPRE no localStorage (o api.ts lê ambos, mas isso evita mismatch)
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+
+    // ✅ rememberMe controla apenas onde guardar o USER
+    const storage = rememberMe ? localStorage : sessionStorage;
     storage.setItem(AUTH_USER_KEY, JSON.stringify(user));
   }
 
@@ -68,16 +55,14 @@ export default function LoginPage({ onLogin }) {
     setError("");
 
     try {
-      const data = await fetchJson(`${API_BASE}/login`, {
-        method: "POST",
-        body: JSON.stringify({ email, password })
-      });
+      // ✅ LOGIN CENTRALIZADO (api.ts salva token também)
+      const data = await apiLogin(email, password);
 
       if (!data?.token || !data?.user) {
         throw new Error("Resposta inválida da API de login.");
       }
 
-      // 🔐 Token já vem com tenantId (garantido pelo backend)
+      // ✅ reforço de persistência (rememberMe + user)
       persistSession({ token: data.token, user: data.user });
 
       setPassword("");
@@ -96,9 +81,9 @@ export default function LoginPage({ onLogin }) {
         onLogin?.(fakeData);
       } else {
         setError(
-          err.message?.includes("Failed to fetch")
+          err?.message?.includes("Failed to fetch")
             ? "Não foi possível conectar ao servidor."
-            : err.message || "Não foi possível entrar."
+            : err?.message || "Não foi possível entrar."
         );
       }
     } finally {
@@ -181,7 +166,7 @@ export default function LoginPage({ onLogin }) {
 
         <div className="login-footer">
           Ambiente: <strong>{import.meta.env.MODE}</strong> · API:{" "}
-          <code>{API_BASE}</code>
+          <code>{import.meta.env.VITE_API_BASE || "http://localhost:3010"}</code>
         </div>
       </div>
     </div>
