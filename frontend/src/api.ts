@@ -24,22 +24,71 @@ const API_BASE =
   "http://localhost:3010";
 
 const AUTH_KEY = "gpLabsAuthToken";
+const AUTH_USER_KEY = "gpLabsAuthUser";
 
 // ======================================================
 // HELPERS DE AUTENTICAÇÃO (FIX DEFINITIVO)
 // ======================================================
 
+function safeParseJson<T = any>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function getAuthUser(): any | null {
+  if (typeof window === "undefined") return null;
+
+  // prioridade: localStorage → sessionStorage
+  return (
+    safeParseJson(localStorage.getItem(AUTH_USER_KEY)) ||
+    safeParseJson(sessionStorage.getItem(AUTH_USER_KEY))
+  );
+}
+
+/**
+ * ✅ TenantId:
+ * - vem dentro do user salvo no storage (gpLabsAuthUser)
+ * - formatos aceitos:
+ *   - user.tenantId
+ *   - user.tenants[0].tenantId
+ *   - user.tenants[0].tenant.id
+ *   - user.tenant.id
+ */
+function getTenantId(): string | null {
+  const u = getAuthUser();
+  if (!u) return null;
+
+  const direct =
+    u.tenantId ||
+    u?.tenant?.id ||
+    u?.tenants?.[0]?.tenantId ||
+    u?.tenants?.[0]?.tenant?.id;
+
+  return direct ? String(direct) : null;
+}
+
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
 
   // 🔐 prioridade: localStorage → sessionStorage
-  return localStorage.getItem(AUTH_KEY) || sessionStorage.getItem(AUTH_KEY);
+  const token =
+    localStorage.getItem(AUTH_KEY) || sessionStorage.getItem(AUTH_KEY);
+
+  return token ? String(token) : null;
 }
 
 function clearAuth() {
   if (typeof window === "undefined") return;
+
   localStorage.removeItem(AUTH_KEY);
   sessionStorage.removeItem(AUTH_KEY);
+
+  localStorage.removeItem(AUTH_USER_KEY);
+  sessionStorage.removeItem(AUTH_USER_KEY);
 }
 
 function isUnauthorized(res: Response) {
@@ -47,22 +96,40 @@ function isUnauthorized(res: Response) {
 }
 
 /**
- * ✅ Regras:
- * - Se existir token no storage, ele SEMPRE vence (não deixa sobrescrever Authorization).
- * - Se NÃO existir token, respeita Authorization vindo de fora (ajuda debug / chamadas custom).
- * - Não forçar Content-Type quando for FormData.
- * - Merge previsível pra qualquer HeadersInit.
+ * ✅ Regra:
+ * - Não deixar "extra headers" sobrescrever Authorization.
+ * - Injeta x-tenant-id automaticamente (resolve "Token sem tenantId").
+ * - Não sobrescrever Content-Type automaticamente se for FormData.
+ * - Merge previsível (HeadersInit pode ser várias formas).
  */
-function buildHeaders(extra?: HeadersInit): Headers {
+function buildHeaders(extra?: HeadersInit): HeadersInit {
   const token = getToken();
-  const headers = new Headers(extra || {});
+  const tenantId = getTenantId();
 
-  // Se temos token, ele vence qualquer Authorization externo
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+  // Normaliza extra -> objeto simples
+  const normalized: Record<string, string> = {};
+  if (extra) {
+    const h = new Headers(extra);
+    h.forEach((v, k) => {
+      normalized[k] = v;
+    });
   }
 
-  return headers;
+  // Remove Authorization vindo de fora (case-insensitive)
+  Object.keys(normalized).forEach((k) => {
+    if (k.toLowerCase() === "authorization") delete normalized[k];
+  });
+
+  // Se já vier x-tenant-id no extra, respeita; senão injeta do storage
+  const hasTenantHeader = Object.keys(normalized).some(
+    (k) => k.toLowerCase() === "x-tenant-id"
+  );
+
+  return {
+    ...normalized,
+    ...(tenantId && !hasTenantHeader ? { "x-tenant-id": tenantId } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  };
 }
 
 // ======================================================
@@ -173,6 +240,8 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
 
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
+    // ✅ importante: se no futuro o backend usar cookie, isso não quebra
+    credentials: "include",
     headers,
     body
   });
@@ -184,6 +253,7 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
 
     console.error("🔒 API 401:", path, payload || text);
 
+    // só limpa auth depois de logar, pra debug ficar claro
     clearAuth();
 
     throw new Error(
@@ -222,6 +292,7 @@ async function requestForm<T = any>(
 ): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: "include",
     method: options.method || "POST",
     headers: buildHeaders(options.headers), // NÃO seta Content-Type aqui (boundary)
     body: formData
@@ -268,6 +339,7 @@ async function downloadBlob(path: string, filename: string) {
 
   const res = await fetch(`${API_BASE}${path}`, {
     method: "GET",
+    credentials: "include",
     headers: buildHeaders()
   });
 
@@ -309,16 +381,45 @@ async function downloadBlob(path: string, filename: string) {
 // AUTH
 // ======================================================
 
+/**
+ * ✅ Use isso no LoginPage se quiser centralizar o storage:
+ * setAuthSession({ token, user }, rememberMe)
+ */
+export function setAuthSession(
+  data: { token?: string; user?: any },
+  rememberMe: boolean = true
+) {
+  if (typeof window === "undefined") return;
+
+  const storage = rememberMe ? localStorage : sessionStorage;
+
+  // limpa os dois sempre (evita mismatch)
+  localStorage.removeItem(AUTH_KEY);
+  sessionStorage.removeItem(AUTH_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
+  sessionStorage.removeItem(AUTH_USER_KEY);
+
+  if (data?.token) storage.setItem(AUTH_KEY, String(data.token));
+  if (data?.user) storage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+}
+
 export async function login(email: string, password: string): Promise<LoginResponse> {
   const data = await request<LoginResponse>("/login", {
     method: "POST",
     body: { email, password }
   });
 
-  // ✅ grava em ambos (evita mismatch com rememberMe)
-  if (data?.token && typeof window !== "undefined") {
-    localStorage.setItem(AUTH_KEY, data.token);
-    sessionStorage.setItem(AUTH_KEY, data.token);
+  // ✅ grava token + user no localStorage (padrão)
+  // (se teu LoginPage já controla rememberMe, chama setAuthSession lá com rememberMe)
+  if (typeof window !== "undefined") {
+    if ((data as any)?.token) {
+      localStorage.setItem(AUTH_KEY, String((data as any).token));
+      sessionStorage.setItem(AUTH_KEY, String((data as any).token));
+    }
+    if ((data as any)?.user) {
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify((data as any).user));
+      sessionStorage.setItem(AUTH_USER_KEY, JSON.stringify((data as any).user));
+    }
   }
 
   return data;
@@ -328,21 +429,12 @@ export function logout(): void {
   clearAuth();
 }
 
-/**
- * ✅ útil caso teu LoginPage use persistSession fora do api.ts
- * (não quebra nada existente, só ajuda)
- */
-export function setAuthToken(token: string, mode: "local" | "session" | "both" = "both") {
-  if (typeof window === "undefined") return;
-  const t = String(token || "").trim();
-  if (!t) return;
-
-  if (mode === "local" || mode === "both") localStorage.setItem(AUTH_KEY, t);
-  if (mode === "session" || mode === "both") sessionStorage.setItem(AUTH_KEY, t);
-}
-
 export function getAuthToken() {
   return getToken();
+}
+
+export function getAuthTenantId() {
+  return getTenantId();
 }
 
 // (PÚBLICO) Criar senha por token (invite/reset)
