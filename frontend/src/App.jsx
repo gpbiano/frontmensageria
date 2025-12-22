@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import LoginPage from "./pages/LoginPage.jsx";
 
@@ -74,10 +75,11 @@ const SIDEBAR_LS_COLLAPSED = "gp.sidebar.collapsed";
 const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
 
 // ✅ Help Portal
-const HELP_PORTAL_URL = "https://gplabs.atlassian.net/servicedesk/customer/portals";
+const HELP_PORTAL_URL =
+  "https://gplabs.atlassian.net/servicedesk/customer/portals";
 
 /* ==========================================================
-   AUTH HELPERS (localStorage OU sessionStorage)
+   AUTH HELPERS
 ========================================================== */
 function getStoredAuthToken() {
   if (typeof window === "undefined") return "";
@@ -110,14 +112,15 @@ function clearStoredAuth() {
   localStorage.removeItem(AUTH_USER_KEY);
   sessionStorage.removeItem(AUTH_TOKEN_KEY);
   sessionStorage.removeItem(AUTH_USER_KEY);
+
+  // ✅ dispara evento (mesma aba)
+  window.dispatchEvent(new Event("gp-auth-changed"));
 }
 
 /* ==========================================================
-   APLICAÇÃO PRINCIPAL
+   APP
 ========================================================== */
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-
   // ✅ Página pública (sem login): /criar-senha?token=...
   const isCreatePasswordRoute = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -125,38 +128,55 @@ export default function App() {
     return path === "/criar-senha";
   }, []);
 
-  // ✅ Boot: autentica somente se token existir DE VERDADE
+  // ✅ gatilho para recalcular auth quando o token mudar (mesma aba)
+  const [authVersion, setAuthVersion] = useState(0);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const token = getStoredAuthToken();
-    setIsAuthenticated(Boolean(token && String(token).trim()));
+    function bump() {
+      setAuthVersion((v) => v + 1);
+    }
 
-    // ✅ Se token sumir (ou trocar) em outra aba, reflete aqui
+    // 1) muda em outra aba
     function onStorage(e) {
-      if (e.key === AUTH_TOKEN_KEY || e.key === AUTH_USER_KEY) {
-        const t = getStoredAuthToken();
-        setIsAuthenticated(Boolean(t && String(t).trim()));
-      }
+      if (e.key === AUTH_TOKEN_KEY || e.key === AUTH_USER_KEY) bump();
+    }
+
+    // 2) muda na mesma aba (login/logout)
+    function onAuthChanged() {
+      bump();
+    }
+
+    // 3) quando volta pra aba (às vezes Safari/Chrome “pausa” storage em background)
+    function onFocus() {
+      bump();
     }
 
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("gp-auth-changed", onAuthChanged);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("gp-auth-changed", onAuthChanged);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
   }, []);
 
-  function handleLogin(data) {
-    if (typeof window === "undefined") return;
+  // ✅ derivado: se não tem token AGORA, não está autenticado (ponto final)
+  const tokenNow = useMemo(() => (getStoredAuthToken() || "").trim(), [authVersion]);
+  const isAuthenticated = Boolean(tokenNow);
 
-    // LoginPage já persiste token. Aqui só valida e “liga” a sessão.
-    const token = (data?.token || getStoredAuthToken() || "").trim();
-    if (token) setIsAuthenticated(true);
-    else setIsAuthenticated(false);
+  function handleLogin() {
+    // ✅ LoginPage salva token; aqui só força refresh do estado
+    window.dispatchEvent(new Event("gp-auth-changed"));
   }
 
   function handleLogout() {
-    if (typeof window === "undefined") return;
     clearStoredAuth();
-    setIsAuthenticated(false);
   }
 
   if (isCreatePasswordRoute) return <CreatePasswordPage />;
@@ -166,7 +186,7 @@ export default function App() {
 }
 
 /* ==========================================================
-   MENU LATERAL
+   MENU
 ========================================================== */
 const SECTION_ICONS = {
   atendimento: MessageSquare,
@@ -237,7 +257,7 @@ const MENU = [
 ];
 
 /* ==========================================================
-   SHELL DA PLATAFORMA
+   PLATFORM SHELL
 ========================================================== */
 function PlatformShell({ onLogout }) {
   const [mainSection, setMainSection] = useState("atendimento");
@@ -263,24 +283,30 @@ function PlatformShell({ onLogout }) {
     if (openSection) localStorage.setItem(SIDEBAR_LS_OPEN, openSection);
   }, [openSection]);
 
-  // ✅ Empresa (mock por enquanto)
+  // ✅ Se por qualquer motivo o token sumir, derruba sessão
+  useEffect(() => {
+    const t = (getStoredAuthToken() || "").trim();
+    if (!t) onLogout?.();
+  });
+
+  // ✅ Empresa (mock)
   const companyName = "Grupo GP Participações";
 
   // ✅ Usuário logado
   const [authUser, setAuthUser] = useState(() => getStoredAuthUser());
 
   useEffect(() => {
-    function onStorage(e) {
-      if (e.key === AUTH_USER_KEY || e.key === AUTH_TOKEN_KEY) {
-        setAuthUser(getStoredAuthUser());
-
-        // ✅ Se o token sumir, faz logout (evita UI “meio logada”)
-        const t = getStoredAuthToken();
-        if (!t) onLogout?.();
-      }
+    function sync() {
+      setAuthUser(getStoredAuthUser());
+      const t = (getStoredAuthToken() || "").trim();
+      if (!t) onLogout?.();
     }
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("gp-auth-changed", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("gp-auth-changed", sync);
+      window.removeEventListener("storage", sync);
+    };
   }, [onLogout]);
 
   const userDisplayName =
@@ -341,7 +367,7 @@ function PlatformShell({ onLogout }) {
         </div>
 
         <div className="app-header-right gp-header-actions">
-          {/* Empresa logada (dropdown) */}
+          {/* Empresa */}
           <div className="gp-dd">
             <button
               type="button"
@@ -391,7 +417,7 @@ function PlatformShell({ onLogout }) {
             {!collapsed && <span className="gp-help-text">Ajuda</span>}
           </a>
 
-          {/* Perfil */}
+          {/* User */}
           <div className="gp-dd">
             <button
               type="button"
@@ -451,7 +477,9 @@ function PlatformShell({ onLogout }) {
       <div className="app-body">
         {/* SIDEBAR */}
         <nav
-          className={"app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")}
+          className={
+            "app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")
+          }
           style={{ width: collapsed ? 76 : 320 }}
         >
           <button
@@ -473,7 +501,8 @@ function PlatformShell({ onLogout }) {
                 <button
                   type="button"
                   className={
-                    "sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")
+                    "sidebar-item-header" +
+                    (isActive ? " sidebar-item-header-active" : "")
                   }
                   onClick={() => handleHeaderClick(section.id)}
                   title={collapsed ? section.label : undefined}
@@ -483,11 +512,17 @@ function PlatformShell({ onLogout }) {
                       <SectionIcon size={18} />
                     </span>
 
-                    {!collapsed && <span className="sb-label">{section.label}</span>}
+                    {!collapsed && (
+                      <span className="sb-label">{section.label}</span>
+                    )}
                   </span>
 
                   {!collapsed && (
-                    <span className={"sidebar-item-chevron" + (isOpen ? " open" : "")}>
+                    <span
+                      className={
+                        "sidebar-item-chevron" + (isOpen ? " open" : "")
+                      }
+                    >
                       <ChevronDown size={16} />
                     </span>
                   )}
@@ -504,7 +539,10 @@ function PlatformShell({ onLogout }) {
                         <button
                           type="button"
                           key={item.id}
-                          className={"sidebar-link" + (isItemActive ? " sidebar-link-active" : "")}
+                          className={
+                            "sidebar-link" +
+                            (isItemActive ? " sidebar-link-active" : "")
+                          }
                           onClick={() => handleItemClick(section.id, item.id)}
                         >
                           <span className="sb-sub-ic">
@@ -531,7 +569,7 @@ function PlatformShell({ onLogout }) {
 }
 
 /* ==========================================================
-   RENDER DE SEÇÕES
+   RENDER
 ========================================================== */
 function SectionRenderer({ main, sub, goTo }) {
   if (main === "atendimento" && sub === "conversas") {
@@ -623,9 +661,6 @@ function SectionRenderer({ main, sub, goTo }) {
   );
 }
 
-/* ==========================================================
-   AUXILIARES
-========================================================== */
 function Placeholder({ title, text }) {
   return (
     <div className="page-placeholder">
