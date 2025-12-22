@@ -3,11 +3,13 @@ import express from "express";
 import logger from "../../logger.js";
 import { loadDB, saveDB, ensureArray } from "../../utils/db.js";
 
-import {
-  getChatbotSettingsForAccount,
-  decideRoute
-} from "../../chatbot/rulesEngine.js";
+import { getChatbotSettingsForAccount, decideRoute } from "../../chatbot/rulesEngine.js";
 import { callGenAIBot } from "../../chatbot/botEngine.js";
+
+// ✅ CORE OFICIAL (arquivo único)
+// Este router está em: src/routes/channels/
+// conversations.js está em: src/routes/
+import { getOrCreateChannelConversation, appendMessage } from "../conversations.js";
 
 const router = express.Router();
 
@@ -28,57 +30,9 @@ function ensureDbShape(db) {
       ? db.messagesByConversation
       : {};
   db.settings = db.settings || {
-    tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"]
+    tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"],
   };
   return db;
-}
-
-// ======================================================
-// ✅ Conversations CORE loader (compatível ESM)
-// - evita crash "does not provide an export named ..."
-// ======================================================
-let __convCore = null;
-
-async function getConversationsCore() {
-  if (__convCore) return __convCore;
-
-  const candidates = [
-    // caminho mais comum quando o router está em src/routes/channels/*
-    () => import("../conversations.js"),
-    // fallback (caso você tenha movido conversations para routes raiz)
-    () => import("../conversations/index.js"),
-    // fallback mais amplo
-    () => import("../../routes/conversations.js")
-  ];
-
-  let lastError = null;
-
-  for (const load of candidates) {
-    try {
-      const mod = await load();
-
-      const getOrCreateChannelConversation =
-        mod?.getOrCreateChannelConversation || mod?.default?.getOrCreateChannelConversation;
-
-      const appendMessage = mod?.appendMessage || mod?.default?.appendMessage;
-
-      if (
-        typeof getOrCreateChannelConversation === "function" &&
-        typeof appendMessage === "function"
-      ) {
-        __convCore = { getOrCreateChannelConversation, appendMessage };
-        return __convCore;
-      }
-    } catch (err) {
-      lastError = err;
-    }
-  }
-
-  logger.error(
-    { err: lastError },
-    "❌ Conversations core não encontrado ou exports incompatíveis"
-  );
-  throw new Error("Conversations core não encontrado ou exports incompatíveis");
 }
 
 // ======================================================
@@ -93,6 +47,12 @@ function getWaConfig() {
   return { token, phoneNumberId, apiVersion };
 }
 
+// (não usado neste arquivo hoje, mas deixo para debug rápido)
+function hasWaConfigured() {
+  const { token, phoneNumberId } = getWaConfig();
+  return !!(token && phoneNumberId);
+}
+
 function getPublicApiBaseUrl(req) {
   const envBase = String(process.env.PUBLIC_API_BASE_URL || "")
     .trim()
@@ -100,7 +60,7 @@ function getPublicApiBaseUrl(req) {
   if (envBase) return envBase;
 
   const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http");
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "");
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "localhost");
   return `${proto}://${host}`;
 }
 
@@ -126,6 +86,8 @@ router.get("/", (req, res) => {
 router.post("/", async (req, res, next) => {
   try {
     const body = req.body;
+
+    // WhatsApp Cloud API padrão
     if (body?.object !== "whatsapp_business_account") {
       return res.sendStatus(200);
     }
@@ -136,10 +98,6 @@ router.post("/", async (req, res, next) => {
 
     if (!messages.length) return res.sendStatus(200);
 
-    // ✅ carrega core uma única vez por request
-    const { getOrCreateChannelConversation, appendMessage } =
-      await getConversationsCore();
-
     let db = ensureDbShape(loadDB());
     const publicBase = getPublicApiBaseUrl(req);
 
@@ -148,9 +106,7 @@ router.post("/", async (req, res, next) => {
       if (!waId) continue;
 
       const contactMatch =
-        contacts.find((c) => String(c?.wa_id) === String(waId)) ||
-        contacts[0] ||
-        null;
+        contacts.find((c) => String(c?.wa_id) === String(waId)) || contacts[0] || null;
 
       const profileName = contactMatch?.profile?.name || null;
 
@@ -161,7 +117,7 @@ router.post("/", async (req, res, next) => {
         title: profileName || waId,
         waId,
         phone: waId,
-        currentMode: "bot"
+        currentMode: "bot",
       });
 
       if (!r?.ok) continue;
@@ -174,7 +130,7 @@ router.post("/", async (req, res, next) => {
 
       const type = String(msg.type || "text").toLowerCase();
       let text = "";
-      let payload;
+      let payload = undefined;
 
       // =====================
       // TEXT
@@ -185,6 +141,7 @@ router.post("/", async (req, res, next) => {
 
       // =====================
       // MEDIA (image/video/audio/document/sticker)
+      // - salva mediaId + link proxy (se você tiver rota /media)
       // =====================
       if (["image", "video", "audio", "document", "sticker"].includes(type)) {
         const media = msg[type] || {};
@@ -198,7 +155,7 @@ router.post("/", async (req, res, next) => {
               filename: media.filename,
               animated: media.animated,
               voice: media.voice,
-              link: `${publicBase}/webhook/whatsapp/media/${mediaId}`
+              link: `${publicBase}/webhook/whatsapp/media/${mediaId}`,
             }
           : undefined;
 
@@ -218,9 +175,10 @@ router.post("/", async (req, res, next) => {
             latitude: loc.latitude,
             longitude: loc.longitude,
             name: loc.name,
-            address: loc.address
-          }
+            address: loc.address,
+          },
         };
+
         text =
           loc.name ||
           loc.address ||
@@ -241,7 +199,7 @@ router.post("/", async (req, res, next) => {
         createdAt: tsIso,
         waMessageId: msg.id,
         channel: "whatsapp",
-        source: "whatsapp"
+        source: "whatsapp",
       });
 
       // =====================
@@ -253,19 +211,22 @@ router.post("/", async (req, res, next) => {
       const decision = decideRoute({
         accountSettings,
         conversation: conv,
-        messageText: text
+        messageText: text,
       });
 
+      // Só responde bot para texto (mantido)
       if (decision?.target === "bot" && type === "text") {
         const botResult = await callGenAIBot({
           accountSettings,
           conversation: conv,
           messageText: text,
-          history: []
+          history: [],
         });
 
         const reply = String(botResult?.replyText || "").trim();
         if (reply) {
+          // (Opcional) Aqui você poderia também enviar pro WhatsApp via Graph,
+          // mas estou mantendo comportamento atual: apenas persistir.
           appendMessage(db, conv.id, {
             type: "text",
             from: "bot",
@@ -274,7 +235,7 @@ router.post("/", async (req, res, next) => {
             createdAt: nowIso(),
             isBot: true,
             channel: "whatsapp",
-            source: "whatsapp"
+            source: "whatsapp",
           });
 
           conv.currentMode = "bot";
