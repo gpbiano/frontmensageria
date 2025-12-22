@@ -6,20 +6,15 @@ import {
   logHumanAction,
   closeHumanSession
 } from "./humanHistory.js";
+
+import { loadDB, saveDB } from "../utils/db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { appendMessage } from "../routes/conversations.js";
 
 const router = express.Router();
 
 /**
- * MÓDULO HUMAN
- * -------------
- * Rotas relacionadas ao atendimento humano.
- * Persistência em humanHistory.js / human-data.json
- */
-
-/**
  * Helper padrão para identificar o usuário logado
- * (fonte única de verdade para auditoria)
  */
 function getUserFromReq(req) {
   const u = req.user || {};
@@ -30,7 +25,9 @@ function getUserFromReq(req) {
   };
 }
 
-// Ping simples
+// ======================================================
+// PING
+// ======================================================
 router.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -38,10 +35,9 @@ router.get("/", (req, res) => {
   });
 });
 
-/**
- * GET /api/human/sessions
- * Lista sessões humanas registradas
- */
+// ======================================================
+// LISTAGEM
+// ======================================================
 router.get("/sessions", requireAuth, async (req, res, next) => {
   try {
     const sessions = await listHumanSessions();
@@ -51,10 +47,6 @@ router.get("/sessions", requireAuth, async (req, res, next) => {
   }
 });
 
-/**
- * GET /api/human/actions
- * Lista ações dos atendentes (log de auditoria)
- */
 router.get("/actions", requireAuth, async (req, res, next) => {
   try {
     const actions = await listHumanActions();
@@ -64,21 +56,9 @@ router.get("/actions", requireAuth, async (req, res, next) => {
   }
 });
 
-/**
- * POST /api/human/actions
- * Registra uma ação de atendimento humano.
- *
- * body esperado:
- * {
- *   "conversationId": "conv_123",
- *   "type": "note|takeover|release|tag_change|status_change",
- *   "note": "texto opcional"
- * }
- *
- * ⚠️ IMPORTANTE:
- * O atendente NÃO vem mais do body.
- * Sempre usamos o usuário autenticado (req.user).
- */
+// ======================================================
+// TAKEOVER / AÇÕES HUMANAS
+// ======================================================
 router.post("/actions", requireAuth, async (req, res, next) => {
   try {
     const { conversationId, type, note } = req.body || {};
@@ -90,6 +70,25 @@ router.post("/actions", requireAuth, async (req, res, next) => {
     }
 
     const me = getUserFromReq(req);
+
+    // ==================================================
+    // 🔥 TAKEOVER (humano assume a conversa)
+    // ==================================================
+    if (type === "takeover") {
+      const db = loadDB();
+
+      // mensagem de sistema (não vai pro WhatsApp)
+      appendMessage(db, conversationId, {
+        type: "system",
+        from: "agent",
+        direction: "out",
+        isSystem: true,
+        text: `Atendimento assumido por ${me.name}`,
+        handoff: true // 🔑 promove definitivamente para inbox
+      });
+
+      saveDB(db);
+    }
 
     const action = await logHumanAction({
       conversationId,
@@ -106,10 +105,9 @@ router.post("/actions", requireAuth, async (req, res, next) => {
   }
 });
 
-/**
- * POST /api/human/:conversationId/close
- * Fecha uma sessão humana (fim de atendimento)
- */
+// ======================================================
+// ENCERRAR ATENDIMENTO HUMANO
+// ======================================================
 router.post("/:conversationId/close", requireAuth, async (req, res, next) => {
   try {
     const { conversationId } = req.params;
@@ -124,6 +122,25 @@ router.post("/:conversationId/close", requireAuth, async (req, res, next) => {
     if (!session) {
       return res.status(404).json({ error: "Sessão não encontrada." });
     }
+
+    // 🔒 fecha conversa no core
+    const db = loadDB();
+    appendMessage(db, conversationId, {
+      type: "system",
+      from: "agent",
+      direction: "out",
+      isSystem: true,
+      text: `Atendimento encerrado por ${me.name}`
+    });
+
+    // marca como closed
+    const conv = db.conversations?.find(c => String(c.id) === String(conversationId));
+    if (conv) {
+      conv.status = "closed";
+      conv.closedAt = new Date().toISOString();
+    }
+
+    saveDB(db);
 
     res.json(session);
   } catch (err) {
