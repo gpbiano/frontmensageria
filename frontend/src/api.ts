@@ -50,23 +50,31 @@ function getAuthUser(): any | null {
 }
 
 /**
- * ✅ TenantId:
- * - vem dentro do user salvo no storage (gpLabsAuthUser)
- * - formatos aceitos:
- *   - user.tenantId
- *   - user.tenants[0].tenantId
- *   - user.tenants[0].tenant.id
- *   - user.tenant.id
+ * ✅ Tenant Header (X-Tenant-Id)
+ *
+ * Regra do backend (resolveTenant):
+ * - Se estiver acessando via subdomínio do tenant (ex: gplabs.cliente.gplabs.com.br), resolve por host
+ * - Se estiver acessando via cliente.gplabs.com.br (sem subdomínio de tenant), PRECISA mandar header
+ *
+ * Aceita:
+ * - user.tenant.slug  (preferido)
+ * - user.tenant.id
+ * - user.tenantId
+ * - user.tenants[0].tenant.slug
+ * - user.tenants[0].tenant.id
+ * - user.tenants[0].tenantId
  */
 function getTenantId(): string | null {
   const u = getAuthUser();
   if (!u) return null;
 
   const direct =
-    u.tenantId ||
+    u?.tenant?.slug ||
     u?.tenant?.id ||
-    u?.tenants?.[0]?.tenantId ||
-    u?.tenants?.[0]?.tenant?.id;
+    u?.tenantId ||
+    u?.tenants?.[0]?.tenant?.slug ||
+    u?.tenants?.[0]?.tenant?.id ||
+    u?.tenants?.[0]?.tenantId;
 
   return direct ? String(direct) : null;
 }
@@ -98,7 +106,7 @@ function isUnauthorized(res: Response) {
 /**
  * ✅ Regra:
  * - Não deixar "extra headers" sobrescrever Authorization.
- * - Injeta x-tenant-id automaticamente (resolve "Token sem tenantId").
+ * - Injeta X-Tenant-Id automaticamente (resolve "Tenant não resolvido").
  * - Não sobrescrever Content-Type automaticamente se for FormData.
  * - Merge previsível (HeadersInit pode ser várias formas).
  */
@@ -127,7 +135,7 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
 
   return {
     ...normalized,
-    ...(tenantId && !hasTenantHeader ? { "x-tenant-id": tenantId } : {}),
+    ...(tenantId && !hasTenantHeader ? { "X-Tenant-Id": tenantId } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {})
   };
 }
@@ -189,7 +197,10 @@ function buildQuery(params?: Record<string, any>) {
 // HELPER FETCH (JSON / TEXT / NO CONTENT)
 // ======================================================
 
-async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T = any>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
   // ======================================================
   // ✅ FIX GLOBAL: garante "text" em /messages (evita "text obrigatório")
   // ======================================================
@@ -253,7 +264,6 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
 
     console.error("🔒 API 401:", path, payload || text);
 
-    // só limpa auth depois de logar, pra debug ficar claro
     clearAuth();
 
     throw new Error(
@@ -403,22 +413,31 @@ export function setAuthSession(
   if (data?.user) storage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
 }
 
-export async function login(email: string, password: string): Promise<LoginResponse> {
+export async function login(
+  email: string,
+  password: string
+): Promise<LoginResponse> {
   const data = await request<LoginResponse>("/login", {
     method: "POST",
     body: { email, password }
   });
 
-  // ✅ grava token + user no localStorage (padrão)
-  // (se teu LoginPage já controla rememberMe, chama setAuthSession lá com rememberMe)
+  // ✅ grava token + user nos DOIS storages (padrão do projeto)
+  // ✅ IMPORTANTE: guardar tenant junto no user (pra header X-Tenant-Id)
   if (typeof window !== "undefined") {
-    if ((data as any)?.token) {
-      localStorage.setItem(AUTH_KEY, String((data as any).token));
-      sessionStorage.setItem(AUTH_KEY, String((data as any).token));
+    const token = (data as any)?.token;
+    const user = (data as any)?.user;
+    const tenant = (data as any)?.tenant;
+
+    if (token) {
+      localStorage.setItem(AUTH_KEY, String(token));
+      sessionStorage.setItem(AUTH_KEY, String(token));
     }
-    if ((data as any)?.user) {
-      localStorage.setItem(AUTH_USER_KEY, JSON.stringify((data as any).user));
-      sessionStorage.setItem(AUTH_USER_KEY, JSON.stringify((data as any).user));
+
+    if (user) {
+      const mergedUser = tenant ? { ...user, tenant } : user;
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(mergedUser));
+      sessionStorage.setItem(AUTH_USER_KEY, JSON.stringify(mergedUser));
     }
   }
 
@@ -498,7 +517,10 @@ export async function updateWebchatChannel(payload: {
   );
 }
 
-export async function rotateWebchatKey(): Promise<{ ok: boolean; widgetKey: string }> {
+export async function rotateWebchatKey(): Promise<{
+  ok: boolean;
+  widgetKey: string;
+}> {
   return request<{ ok: boolean; widgetKey: string }>(
     "/settings/channels/webchat/rotate-key",
     { method: "POST" }
@@ -539,7 +561,10 @@ type UsersListResponse =
   | { data: UserRecord[]; total: number }
   | { items: UserRecord[]; total: number };
 
-export async function fetchUsers(): Promise<{ data: UserRecord[]; total: number }> {
+export async function fetchUsers(): Promise<{
+  data: UserRecord[];
+  total: number;
+}> {
   const res = await request<UsersListResponse>("/settings/users");
   const data = "data" in res ? res.data : res.items;
   return {
@@ -570,7 +595,9 @@ export async function updateUser(
   });
 }
 
-export async function deactivateUser(id: number): Promise<{ success: boolean; user: UserRecord }> {
+export async function deactivateUser(
+  id: number
+): Promise<{ success: boolean; user: UserRecord }> {
   return request(`/settings/users/${encodeURIComponent(String(id))}/deactivate`, {
     method: "PATCH"
   });
@@ -578,7 +605,10 @@ export async function deactivateUser(id: number): Promise<{ success: boolean; us
 
 export async function resetUserPassword(
   id: number
-): Promise<{ success: boolean; token?: { id: string; type: string; expiresAt: string } }> {
+): Promise<{
+  success: boolean;
+  token?: { id: string; type: string; expiresAt: string };
+}> {
   return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, {
     method: "POST"
   });
@@ -601,7 +631,9 @@ export interface GroupRecord {
 export async function fetchGroups(params?: {
   includeInactive?: boolean;
 }): Promise<{ items: GroupRecord[]; total: number }> {
-  const qs = buildQuery(params?.includeInactive ? { includeInactive: "true" } : undefined);
+  const qs = buildQuery(
+    params?.includeInactive ? { includeInactive: "true" } : undefined
+  );
   return request(`/settings/groups${qs}`);
 }
 
@@ -623,12 +655,20 @@ export async function updateGroup(
   });
 }
 
-export async function deactivateGroup(id: string): Promise<{ ok: boolean; group: GroupRecord }> {
-  return request(`/settings/groups/${encodeURIComponent(id)}/deactivate`, { method: "PATCH" });
+export async function deactivateGroup(
+  id: string
+): Promise<{ ok: boolean; group: GroupRecord }> {
+  return request(`/settings/groups/${encodeURIComponent(id)}/deactivate`, {
+    method: "PATCH"
+  });
 }
 
-export async function activateGroup(id: string): Promise<{ ok: boolean; group: GroupRecord }> {
-  return request(`/settings/groups/${encodeURIComponent(id)}/activate`, { method: "PATCH" });
+export async function activateGroup(
+  id: string
+): Promise<{ ok: boolean; group: GroupRecord }> {
+  return request(`/settings/groups/${encodeURIComponent(id)}/activate`, {
+    method: "PATCH"
+  });
 }
 
 // ======================================================
@@ -655,7 +695,9 @@ export async function fetchGroupMembers(
   groupId: string,
   params?: { includeInactive?: boolean }
 ): Promise<{ items: GroupMemberItem[]; total: number; group?: GroupRecord }> {
-  const qs = buildQuery(params?.includeInactive ? { includeInactive: "true" } : undefined);
+  const qs = buildQuery(
+    params?.includeInactive ? { includeInactive: "true" } : undefined
+  );
   return request(`/settings/groups/${encodeURIComponent(groupId)}/members${qs}`);
 }
 
@@ -675,7 +717,9 @@ export async function updateGroupMember(
   payload: { role?: GroupMemberRole; isActive?: boolean }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}`,
     { method: "PATCH", body: payload }
   );
 }
@@ -685,7 +729,9 @@ export async function deactivateGroupMember(
   userId: number
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/deactivate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}/deactivate`,
     { method: "PATCH" }
   );
 }
@@ -696,7 +742,9 @@ export async function activateGroupMember(
   payload?: { role?: GroupMemberRole }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/activate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}/activate`,
     { method: "PATCH", body: payload || {} }
   );
 }
@@ -718,7 +766,9 @@ export async function fetchConversations(
   statusOrOpts: ConversationStatus | "all" | FetchConversationsOptions = "open"
 ): Promise<Conversation[]> {
   const opts: FetchConversationsOptions =
-    typeof statusOrOpts === "string" ? { status: statusOrOpts } : statusOrOpts || {};
+    typeof statusOrOpts === "string"
+      ? { status: statusOrOpts }
+      : statusOrOpts || {};
 
   const qs = buildQuery({
     status: opts.status ?? "open",
@@ -732,7 +782,9 @@ export async function fetchConversations(
 }
 
 export async function fetchMessages(conversationId: string): Promise<Message[]> {
-  const data = await request<any>(`/conversations/${encodeURIComponent(conversationId)}/messages`);
+  const data = await request<any>(
+    `/conversations/${encodeURIComponent(conversationId)}/messages`
+  );
   return Array.isArray(data) ? (data as Message[]) : [];
 }
 
@@ -916,7 +968,9 @@ export async function uploadAsset(file: File): Promise<MediaItem> {
   return requestForm("/outbound/assets/upload", form);
 }
 
-export async function deleteAsset(id: string | number): Promise<{ success: boolean }> {
+export async function deleteAsset(
+  id: string | number
+): Promise<{ success: boolean }> {
   return request(`/outbound/assets/${encodeURIComponent(String(id))}`, {
     method: "DELETE"
   });
@@ -979,7 +1033,10 @@ export async function uploadCampaignAudience(campaignId: string, file: File) {
   const fd = new FormData();
   fd.append("file", file);
 
-  return requestForm(`/outbound/campaigns/${encodeURIComponent(campaignId)}/audience`, fd);
+  return requestForm(
+    `/outbound/campaigns/${encodeURIComponent(campaignId)}/audience`,
+    fd
+  );
 }
 
 export async function startCampaign(
@@ -990,19 +1047,25 @@ export async function startCampaign(
   });
 }
 
-export async function pauseCampaign(campaignId: string): Promise<{ success: boolean }> {
+export async function pauseCampaign(
+  campaignId: string
+): Promise<{ success: boolean }> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/pause`, {
     method: "PATCH"
   });
 }
 
-export async function resumeCampaign(campaignId: string): Promise<{ success: boolean }> {
+export async function resumeCampaign(
+  campaignId: string
+): Promise<{ success: boolean }> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/resume`, {
     method: "PATCH"
   });
 }
 
-export async function fetchCampaignById(campaignId: string): Promise<CampaignRecord> {
+export async function fetchCampaignById(
+  campaignId: string
+): Promise<CampaignRecord> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}`);
 }
 
@@ -1072,7 +1135,9 @@ export async function createOptOut(payload: {
 }
 
 export async function deleteOptOut(id: string) {
-  return request(`/outbound/optout/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return request(`/outbound/optout/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
 }
 
 export async function importOptOutCSV(file: File) {
