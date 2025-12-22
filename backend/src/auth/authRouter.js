@@ -14,22 +14,19 @@ const router = express.Router();
 // ======================================================
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new Error("JWT_SECRET não definido no ambiente.");
-  }
+  if (!secret) throw new Error("JWT_SECRET não definido no ambiente.");
   return secret;
 }
-
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 
 // ======================================================
-// Password hashing (PBKDF2)
+// Password hashing/verify (PBKDF2 + compat legacy)
 // ======================================================
 const PBKDF2_ITERS = Number(process.env.PBKDF2_ITERS || 150000);
 const PBKDF2_KEYLEN = 32;
 const PBKDF2_DIGEST = "sha256";
 
-function hashPassword(password) {
+function hashPasswordPBKDF2(password) {
   const salt = crypto.randomBytes(16);
   const hash = crypto.pbkdf2Sync(
     password,
@@ -43,18 +40,20 @@ function hashPassword(password) {
   )}`;
 }
 
-function verifyPassword(password, passwordHash) {
+function verifyPasswordPBKDF2(password, passwordHash) {
   try {
     if (!passwordHash?.startsWith("pbkdf2$")) return false;
-    const [, iters, saltB64, hashB64] = passwordHash.split("$");
+    const parts = passwordHash.split("$");
+    if (parts.length !== 4) return false;
 
-    const salt = Buffer.from(saltB64, "base64");
-    const expected = Buffer.from(hashB64, "base64");
+    const iters = Number(parts[1]);
+    const salt = Buffer.from(parts[2], "base64");
+    const expected = Buffer.from(parts[3], "base64");
 
     const actual = crypto.pbkdf2Sync(
-      password,
+      String(password),
       salt,
-      Number(iters),
+      iters,
       expected.length,
       PBKDF2_DIGEST
     );
@@ -63,6 +62,39 @@ function verifyPassword(password, passwordHash) {
   } catch {
     return false;
   }
+}
+
+// ✅ COMPAT: usa o verificador antigo (o que já batia com teu banco)
+let verifyPasswordLegacy = null;
+try {
+  const legacy = await import("../security/passwords.js");
+  if (typeof legacy.verifyPassword === "function") {
+    verifyPasswordLegacy = legacy.verifyPassword;
+  }
+} catch (e) {
+  logger.warn({ e }, "⚠️ Não consegui importar security/passwords.js");
+}
+
+function verifyAnyPassword(password, passwordHash) {
+  const h = String(passwordHash || "").trim();
+  if (!h) return false;
+
+  // novo padrão
+  if (h.startsWith("pbkdf2$")) {
+    return verifyPasswordPBKDF2(password, h);
+  }
+
+  // compat antigo
+  if (verifyPasswordLegacy) {
+    try {
+      return !!verifyPasswordLegacy(String(password), h);
+    } catch {
+      return false;
+    }
+  }
+
+  // sem fallback inseguro
+  return false;
 }
 
 // ======================================================
@@ -104,8 +136,7 @@ function signUserToken({ user, tenantId, tenantSlug }) {
 async function getUserByEmail(email) {
   return prisma.user.findFirst({
     where: {
-      email: String(email).toLowerCase(),
-      isActive: true
+      email: String(email).toLowerCase().trim()
     },
     select: {
       id: true,
@@ -123,18 +154,16 @@ async function getTenantsForUser(userId) {
     where: { userId: String(userId), isActive: true },
     select: {
       role: true,
-      tenant: {
-        select: { id: true, slug: true, name: true, isActive: true }
-      }
+      tenant: { select: { id: true, slug: true, name: true, isActive: true } }
     }
   });
 
-  return links
-    .filter((l) => l.tenant?.isActive !== false)
+  return (links || [])
+    .filter((l) => l?.tenant?.isActive !== false)
     .map((l) => ({
-      id: l.tenant.id,
-      slug: l.tenant.slug,
-      name: l.tenant.name,
+      id: String(l.tenant.id),
+      slug: String(l.tenant.slug),
+      name: String(l.tenant.name),
       role: l.role
     }));
 }
@@ -150,10 +179,14 @@ router.post("/login", async (req, res) => {
     }
 
     const user = await getUserByEmail(email);
-    if (!user) return res.status(401).json({ error: "Credenciais inválidas." });
+    if (!user || user.isActive === false) {
+      return res.status(401).json({ error: "Credenciais inválidas." });
+    }
 
-    const ok = verifyPassword(String(password), user.passwordHash);
-    if (!ok) return res.status(401).json({ error: "Credenciais inválidas." });
+    const ok = verifyAnyPassword(password, user.passwordHash);
+    if (!ok) {
+      return res.status(401).json({ error: "Credenciais inválidas." });
+    }
 
     const tenants = await getTenantsForUser(user.id);
     if (!tenants.length) {
@@ -169,7 +202,12 @@ router.post("/login", async (req, res) => {
     });
 
     logger.info(
-      { userId: user.id, email: user.email, tenant: chosen.slug },
+      {
+        userId: user.id,
+        email: user.email,
+        tenant: chosen.slug,
+        hashPrefix: String(user.passwordHash || "").slice(0, 12)
+      },
       "✅ Login realizado"
     );
 
@@ -195,15 +233,8 @@ router.get("/auth/me", async (req, res) => {
     const decoded = verifyToken(token);
 
     return res.json({
-      user: {
-        id: decoded.id,
-        email: decoded.email,
-        role: decoded.role
-      },
-      tenant: {
-        id: decoded.tenantId,
-        slug: decoded.tenantSlug
-      }
+      user: { id: decoded.id, email: decoded.email, role: decoded.role },
+      tenant: { id: decoded.tenantId || null, slug: decoded.tenantSlug || null }
     });
   } catch (err) {
     logger.error({ err }, "❌ /auth/me");
@@ -220,15 +251,16 @@ router.post("/auth/select-tenant", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Não autenticado." });
 
     const decoded = verifyToken(token);
+
     const { tenantId } = req.body || {};
-    if (!tenantId) {
-      return res.status(400).json({ error: "tenantId é obrigatório." });
-    }
+    const tid = String(tenantId || "").trim();
+    if (!tid) return res.status(400).json({ error: "tenantId é obrigatório." });
 
     const tenants = await getTenantsForUser(decoded.id);
+
     const chosen =
-      tenants.find((t) => t.id === tenantId) ||
-      tenants.find((t) => t.slug === tenantId);
+      tenants.find((t) => String(t.id) === tid) ||
+      tenants.find((t) => String(t.slug) === tid);
 
     if (!chosen) {
       return res.status(403).json({ error: "Tenant não permitido." });
@@ -252,32 +284,52 @@ router.post("/auth/select-tenant", async (req, res) => {
 
 // ======================================================
 // ✅ POST /auth/set-password
+// (salva em PBKDF2 daqui pra frente)
 // ======================================================
 router.post("/auth/set-password", async (req, res) => {
   try {
     const { token, password } = req.body || {};
-    if (!token || !password || password.length < 8) {
-      return res.status(400).json({ error: "Senha inválida." });
+    const tok = String(token || "").trim();
+    const pwd = String(password || "");
+
+    if (!tok) return res.status(400).json({ error: "Token é obrigatório." });
+    if (!pwd || pwd.length < 8) {
+      return res
+        .status(400)
+        .json({ error: "A senha deve ter no mínimo 8 caracteres." });
     }
 
-    const t = await prisma.passwordToken.findFirst({ where: { id: token } });
-    if (!t || t.used) {
-      return res.status(400).json({ error: "Token inválido." });
-    }
+    const t = await prisma.passwordToken.findFirst({ where: { id: tok } });
+    if (!t) return res.status(404).json({ error: "Token não encontrado." });
+    if (t.used === true)
+      return res.status(400).json({ error: "Token já utilizado." });
+    if (t.expiresAt && new Date(t.expiresAt).getTime() < Date.now())
+      return res.status(400).json({ error: "Token expirado." });
+
+    const user = await prisma.user.findFirst({
+      where: { id: String(t.userId) },
+      select: { id: true, email: true, isActive: true }
+    });
+
+    if (!user) return res.status(404).json({ error: "Usuário não encontrado." });
+    if (user.isActive === false)
+      return res.status(400).json({ error: "Usuário está inativo." });
 
     await prisma.user.update({
-      where: { id: String(t.userId) },
-      data: { passwordHash: hashPassword(password) }
+      where: { id: String(user.id) },
+      data: { passwordHash: hashPasswordPBKDF2(pwd), updatedAt: new Date() }
     });
 
     await prisma.passwordToken.update({
-      where: { id: token },
+      where: { id: tok },
       data: { used: true, usedAt: new Date() }
     });
 
+    logger.info({ userId: user.id, email: user.email }, "🔐 Senha definida");
+
     return res.json({ success: true });
   } catch (err) {
-    logger.error({ err }, "❌ set-password");
+    logger.error({ err }, "❌ Erro ao definir senha");
     return res.status(500).json({ error: "Erro ao definir senha." });
   }
 });
