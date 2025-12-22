@@ -3,7 +3,10 @@ import express from "express";
 import logger from "../../logger.js";
 import { loadDB, saveDB, ensureArray } from "../../utils/db.js";
 
-import { getChatbotSettingsForAccount, decideRoute } from "../../chatbot/rulesEngine.js";
+import {
+  getChatbotSettingsForAccount,
+  decideRoute
+} from "../../chatbot/rulesEngine.js";
 import { callGenAIBot } from "../../chatbot/botEngine.js";
 
 // ✅ CORE OFICIAL (arquivo único)
@@ -29,9 +32,7 @@ function ensureDbShape(db) {
     db.messagesByConversation && typeof db.messagesByConversation === "object"
       ? db.messagesByConversation
       : {};
-  db.settings = db.settings || {
-    tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"],
-  };
+  db.settings = db.settings || { tags: ["Vendas", "Suporte", "Reclamação", "Financeiro"] };
   return db;
 }
 
@@ -47,10 +48,20 @@ function getWaConfig() {
   return { token, phoneNumberId, apiVersion };
 }
 
-// (não usado neste arquivo hoje, mas deixo para debug rápido)
+// (debug rápido)
 function hasWaConfigured() {
   const { token, phoneNumberId } = getWaConfig();
   return !!(token && phoneNumberId);
+}
+
+async function getFetch() {
+  if (globalThis.fetch) return globalThis.fetch;
+  const mod = await import("node-fetch");
+  return mod.default;
+}
+
+function onlyDigits(v) {
+  return String(v || "").replace(/\D/g, "");
 }
 
 function getPublicApiBaseUrl(req) {
@@ -62,6 +73,77 @@ function getPublicApiBaseUrl(req) {
   const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http");
   const host = String(req.headers["x-forwarded-host"] || req.headers.host || "localhost");
   return `${proto}://${host}`;
+}
+
+// ======================================================
+// ✅ SEND (Graph API) — agora envia de verdade pro WhatsApp
+// ======================================================
+async function sendWhatsAppText({ to, body, timeoutMs = 12000 }) {
+  const { token, phoneNumberId, apiVersion } = getWaConfig();
+
+  if (!token || !phoneNumberId) {
+    logger.error(
+      { hasToken: !!token, hasPhoneNumberId: !!phoneNumberId },
+      "❌ WHATSAPP_TOKEN / PHONE_NUMBER_ID ausentes. Não dá pra enviar."
+    );
+    return { ok: false, error: "missing_whatsapp_env" };
+  }
+
+  const toDigits = onlyDigits(to);
+  if (!toDigits) return { ok: false, error: "missing_to" };
+
+  const cleanBody = String(body || "").trim();
+  if (!cleanBody) return { ok: false, error: "missing_body" };
+
+  const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to: toDigits,
+    type: "text",
+    text: { preview_url: false, body: cleanBody }
+  };
+
+  const fetchFn = await getFetch();
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+  try {
+    const resp = await fetchFn(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    });
+
+    const raw = await resp.text().catch(() => "");
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = {};
+    }
+
+    if (!resp.ok) {
+      logger.error({ status: resp.status, data, raw }, "❌ WhatsApp send falhou");
+      return { ok: false, status: resp.status, data, raw };
+    }
+
+    logger.info(
+      { waMessageId: data?.messages?.[0]?.id, to: toDigits },
+      "✅ WhatsApp send OK"
+    );
+    return { ok: true, data };
+  } catch (err) {
+    logger.error({ err }, "❌ WhatsApp send exception");
+    return { ok: false, error: String(err?.message || err) };
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 // ======================================================
@@ -98,6 +180,11 @@ router.post("/", async (req, res, next) => {
 
     if (!messages.length) return res.sendStatus(200);
 
+    // log útil (sem vazar segredo)
+    if (!hasWaConfigured()) {
+      logger.warn("⚠️ WhatsApp ENV não configurado (WHATSAPP_TOKEN / PHONE_NUMBER_ID). Bot vai salvar mas não vai enviar.");
+    }
+
     let db = ensureDbShape(loadDB());
     const publicBase = getPublicApiBaseUrl(req);
 
@@ -117,7 +204,7 @@ router.post("/", async (req, res, next) => {
         title: profileName || waId,
         waId,
         phone: waId,
-        currentMode: "bot",
+        currentMode: "bot"
       });
 
       if (!r?.ok) continue;
@@ -155,14 +242,11 @@ router.post("/", async (req, res, next) => {
               filename: media.filename,
               animated: media.animated,
               voice: media.voice,
-              link: `${publicBase}/webhook/whatsapp/media/${mediaId}`,
+              link: `${publicBase}/webhook/whatsapp/media/${mediaId}`
             }
           : undefined;
 
-        text =
-          media.caption ||
-          media.filename ||
-          `[${type === "sticker" ? "figurinha" : type}]`;
+        text = media.caption || media.filename || `[${type === "sticker" ? "figurinha" : type}]`;
       }
 
       // =====================
@@ -175,8 +259,8 @@ router.post("/", async (req, res, next) => {
             latitude: loc.latitude,
             longitude: loc.longitude,
             name: loc.name,
-            address: loc.address,
-          },
+            address: loc.address
+          }
         };
 
         text =
@@ -199,7 +283,7 @@ router.post("/", async (req, res, next) => {
         createdAt: tsIso,
         waMessageId: msg.id,
         channel: "whatsapp",
-        source: "whatsapp",
+        source: "whatsapp"
       });
 
       // =====================
@@ -211,7 +295,7 @@ router.post("/", async (req, res, next) => {
       const decision = decideRoute({
         accountSettings,
         conversation: conv,
-        messageText: text,
+        messageText: text
       });
 
       // Só responde bot para texto (mantido)
@@ -220,13 +304,22 @@ router.post("/", async (req, res, next) => {
           accountSettings,
           conversation: conv,
           messageText: text,
-          history: [],
+          history: []
         });
 
         const reply = String(botResult?.replyText || "").trim();
+
         if (reply) {
-          // (Opcional) Aqui você poderia também enviar pro WhatsApp via Graph,
-          // mas estou mantendo comportamento atual: apenas persistir.
+          // ✅ envia de verdade pro WhatsApp
+          const sent = await sendWhatsAppText({ to: waId, body: reply });
+
+          const waBotId =
+            sent?.data?.messages?.[0]?.id ||
+            sent?.data?.message_id ||
+            sent?.data?.id ||
+            null;
+
+          // ✅ persiste outbound (com delivery)
           appendMessage(db, conv.id, {
             type: "text",
             from: "bot",
@@ -234,8 +327,19 @@ router.post("/", async (req, res, next) => {
             text: reply,
             createdAt: nowIso(),
             isBot: true,
+            waMessageId: waBotId || undefined,
+            delivery: sent?.ok
+              ? { status: "sent", at: nowIso() }
+              : {
+                  status: "failed",
+                  error:
+                    sent?.raw ||
+                    sent?.error ||
+                    (sent?.data ? JSON.stringify(sent.data) : "send_failed"),
+                  at: nowIso()
+                },
             channel: "whatsapp",
-            source: "whatsapp",
+            source: "whatsapp"
           });
 
           conv.currentMode = "bot";
