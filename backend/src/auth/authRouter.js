@@ -7,21 +7,23 @@ import logger from "../logger.js";
 import prismaMod from "../lib/prisma.js";
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
-// ✅ PRODUÇÃO: sem fallback de secret (evita invalid signature)
+const router = express.Router();
+
+// ======================================================
+// JWT
+// ======================================================
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
-    throw new Error("JWT_SECRET não definido no ambiente (.env.production).");
+    throw new Error("JWT_SECRET não definido no ambiente.");
   }
   return secret;
 }
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
-const router = express.Router();
 
 // ======================================================
-// Password hashing (PBKDF2) — sem deps externas
-// Formato: pbkdf2$<iterations>$<saltBase64>$<hashBase64>
+// Password hashing (PBKDF2)
 // ======================================================
 const PBKDF2_ITERS = Number(process.env.PBKDF2_ITERS || 150000);
 const PBKDF2_KEYLEN = 32;
@@ -43,20 +45,16 @@ function hashPassword(password) {
 
 function verifyPassword(password, passwordHash) {
   try {
-    if (!passwordHash || typeof passwordHash !== "string") return false;
-    if (!passwordHash.startsWith("pbkdf2$")) return false;
+    if (!passwordHash?.startsWith("pbkdf2$")) return false;
+    const [, iters, saltB64, hashB64] = passwordHash.split("$");
 
-    const parts = passwordHash.split("$");
-    if (parts.length !== 4) return false;
-
-    const iters = Number(parts[1]);
-    const salt = Buffer.from(parts[2], "base64");
-    const expected = Buffer.from(parts[3], "base64");
+    const salt = Buffer.from(saltB64, "base64");
+    const expected = Buffer.from(hashB64, "base64");
 
     const actual = crypto.pbkdf2Sync(
       password,
       salt,
-      iters,
+      Number(iters),
       expected.length,
       PBKDF2_DIGEST
     );
@@ -67,14 +65,17 @@ function verifyPassword(password, passwordHash) {
   }
 }
 
+// ======================================================
+// Helpers
+// ======================================================
 function sanitizeUser(u) {
   if (!u) return u;
-  const { password, passwordHash, ...rest } = u;
+  const { passwordHash, ...rest } = u;
   return rest;
 }
 
 function readAuthBearer(req) {
-  const h = String(req.headers.authorization || "").trim();
+  const h = String(req.headers.authorization || "");
   if (!h.toLowerCase().startsWith("bearer ")) return "";
   return h.slice(7).trim();
 }
@@ -84,102 +85,81 @@ function verifyToken(token) {
 }
 
 function signUserToken({ user, tenantId, tenantSlug }) {
-  const payload = {
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    // ✅ sempre exigido pelo core multi-tenant
-    tenantId: String(tenantId)
-  };
-  if (tenantSlug) payload.tenantSlug = String(tenantSlug);
-
-  return jwt.sign(payload, getJwtSecret(), { expiresIn: JWT_EXPIRES_IN });
+  return jwt.sign(
+    {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      tenantId: String(tenantId),
+      tenantSlug: tenantSlug ? String(tenantSlug) : undefined
+    },
+    getJwtSecret(),
+    { expiresIn: JWT_EXPIRES_IN }
+  );
 }
 
+// ======================================================
+// Prisma helpers
+// ======================================================
 async function getUserByEmail(email) {
   return prisma.user.findFirst({
-    where: { email: String(email).toLowerCase() },
+    where: {
+      email: String(email).toLowerCase(),
+      isActive: true
+    },
     select: {
       id: true,
       email: true,
       name: true,
       role: true,
       isActive: true,
-      passwordHash: true,
-      // se existir legacy no schema, não quebra:
-      password: true
+      passwordHash: true
     }
   });
 }
 
 async function getTenantsForUser(userId) {
-  // Pela tua evidência: tabela UserTenant ligando user -> tenant
   const links = await prisma.userTenant.findMany({
-    where: {
-      userId: String(userId),
-      isActive: true
-    },
+    where: { userId: String(userId), isActive: true },
     select: {
       role: true,
-      isActive: true,
       tenant: {
         select: { id: true, slug: true, name: true, isActive: true }
       }
     }
   });
 
-  return (links || [])
-    .filter((l) => l?.tenant?.isActive !== false)
+  return links
+    .filter((l) => l.tenant?.isActive !== false)
     .map((l) => ({
-      id: String(l.tenant.id),
-      slug: String(l.tenant.slug),
-      name: String(l.tenant.name),
+      id: l.tenant.id,
+      slug: l.tenant.slug,
+      name: l.tenant.name,
       role: l.role
     }));
 }
 
 // ======================================================
-// ✅ POST /login
-// Regra: SEMPRE entrar automaticamente no tenant associado.
-// - se tiver 1 tenant: usa ele
-// - se tiver >1 (super admin): usa o primeiro ativo (determinístico)
-// - NUNCA retorna token sem tenantId
+// ✅ POST /login (auto-tenant)
 // ======================================================
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
-
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Informe e-mail e senha para entrar." });
+      return res.status(400).json({ error: "Informe e-mail e senha." });
     }
 
     const user = await getUserByEmail(email);
-    if (!user) return res.status(401).json({ error: "Usuário não encontrado." });
-    if (user.isActive === false)
-      return res.status(403).json({ error: "Usuário está inativo." });
+    if (!user) return res.status(401).json({ error: "Credenciais inválidas." });
 
-    // ✅ Preferência: passwordHash
-    if (user.passwordHash) {
-      const ok = verifyPassword(String(password), user.passwordHash);
-      if (!ok) return res.status(401).json({ error: "Senha incorreta." });
-    } else {
-      // ✅ Compat antiga (se existir coluna password)
-      if (!user.password || String(user.password) !== String(password)) {
-        return res.status(401).json({ error: "Senha incorreta." });
-      }
-    }
+    const ok = verifyPassword(String(password), user.passwordHash);
+    if (!ok) return res.status(401).json({ error: "Credenciais inválidas." });
 
     const tenants = await getTenantsForUser(user.id);
-
     if (!tenants.length) {
-      return res.status(403).json({
-        error: "Usuário não possui tenant associado."
-      });
+      return res.status(403).json({ error: "Usuário sem tenant associado." });
     }
 
-    // ✅ entra automático
     const chosen = tenants[0];
 
     const token = signUserToken({
@@ -190,7 +170,7 @@ router.post("/login", async (req, res) => {
 
     logger.info(
       { userId: user.id, email: user.email, tenant: chosen.slug },
-      "✅ Login realizado (auto-tenant)"
+      "✅ Login realizado"
     );
 
     return res.json({
@@ -206,7 +186,6 @@ router.post("/login", async (req, res) => {
 
 // ======================================================
 // ✅ GET /auth/me
-// (agora apenas informativo — token já vem com tenantId)
 // ======================================================
 router.get("/auth/me", async (req, res) => {
   try {
@@ -214,35 +193,26 @@ router.get("/auth/me", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Não autenticado." });
 
     const decoded = verifyToken(token);
-    const userId = decoded?.id;
-    if (!userId) return res.status(401).json({ error: "Não autenticado." });
 
-    const user = await prisma.user.findFirst({
-      where: { id: String(userId) },
-      select: { id: true, email: true, name: true, role: true, isActive: true }
-    });
-    if (!user || user.isActive === false)
-      return res.status(401).json({ error: "Usuário inválido." });
-
-    // tenant atual vem do token
     return res.json({
-      user,
+      user: {
+        id: decoded.id,
+        email: decoded.email,
+        role: decoded.role
+      },
       tenant: {
-        id: decoded.tenantId || null,
-        slug: decoded.tenantSlug || null
+        id: decoded.tenantId,
+        slug: decoded.tenantSlug
       }
     });
   } catch (err) {
-    logger.error({ err }, "❌ Erro em /auth/me");
+    logger.error({ err }, "❌ /auth/me");
     return res.status(401).json({ error: "Não autenticado." });
   }
 });
 
 // ======================================================
 // ✅ POST /auth/select-tenant
-// Troca de empresa DENTRO da plataforma (super admin).
-// body: { tenantId } (aceita id OU slug)
-// devolve novo token com tenantId
 // ======================================================
 router.post("/auth/select-tenant", async (req, res) => {
   try {
@@ -250,102 +220,64 @@ router.post("/auth/select-tenant", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Não autenticado." });
 
     const decoded = verifyToken(token);
-    const userId = decoded?.id;
-    if (!userId) return res.status(401).json({ error: "Não autenticado." });
-
     const { tenantId } = req.body || {};
-    const tid = String(tenantId || "").trim();
-    if (!tid) return res.status(400).json({ error: "tenantId é obrigatório." });
+    if (!tenantId) {
+      return res.status(400).json({ error: "tenantId é obrigatório." });
+    }
 
-    const user = await prisma.user.findFirst({
-      where: { id: String(userId) },
-      select: { id: true, email: true, name: true, role: true, isActive: true }
-    });
-    if (!user || user.isActive === false)
-      return res.status(401).json({ error: "Usuário inválido." });
-
-    const tenants = await getTenantsForUser(user.id);
-
+    const tenants = await getTenantsForUser(decoded.id);
     const chosen =
-      tenants.find((t) => String(t.id) === tid) ||
-      tenants.find((t) => String(t.slug) === tid);
+      tenants.find((t) => t.id === tenantId) ||
+      tenants.find((t) => t.slug === tenantId);
 
     if (!chosen) {
-      return res
-        .status(403)
-        .json({ error: "Tenant não permitido para este usuário." });
+      return res.status(403).json({ error: "Tenant não permitido." });
     }
 
     const newToken = signUserToken({
-      user,
+      user: decoded,
       tenantId: chosen.id,
       tenantSlug: chosen.slug
     });
 
     return res.json({
       token: newToken,
-      user: sanitizeUser(user),
       tenant: { id: chosen.id, slug: chosen.slug, name: chosen.name }
     });
   } catch (err) {
-    logger.error({ err }, "❌ Erro em /auth/select-tenant");
+    logger.error({ err }, "❌ /auth/select-tenant");
     return res.status(401).json({ error: "Não autenticado." });
   }
 });
 
 // ======================================================
-// ✅ POST /auth/set-password (Prisma-first)
-// body: { token, password }
+// ✅ POST /auth/set-password
 // ======================================================
 router.post("/auth/set-password", async (req, res) => {
   try {
     const { token, password } = req.body || {};
-    const tok = String(token || "").trim();
-    const pwd = String(password || "");
-
-    if (!tok) return res.status(400).json({ error: "Token é obrigatório." });
-    if (!pwd || pwd.length < 8) {
-      return res
-        .status(400)
-        .json({ error: "A senha deve ter no mínimo 8 caracteres." });
+    if (!token || !password || password.length < 8) {
+      return res.status(400).json({ error: "Senha inválida." });
     }
 
-    // ⚠️ Se você ainda não tem PasswordToken no Prisma, este endpoint deve ser removido/ajustado.
-    const t = await prisma.passwordToken.findFirst({ where: { id: tok } });
-
-    if (!t) return res.status(404).json({ error: "Token não encontrado." });
-    if (t.used === true)
-      return res.status(400).json({ error: "Token já utilizado." });
-    if (t.expiresAt && new Date(t.expiresAt).getTime() < Date.now())
-      return res.status(400).json({ error: "Token expirado." });
-
-    const user = await prisma.user.findFirst({
-      where: { id: String(t.userId) },
-      select: { id: true, email: true, isActive: true }
-    });
-
-    if (!user) return res.status(404).json({ error: "Usuário não encontrado." });
-    if (user.isActive === false)
-      return res.status(400).json({ error: "Usuário está inativo." });
+    const t = await prisma.passwordToken.findFirst({ where: { id: token } });
+    if (!t || t.used) {
+      return res.status(400).json({ error: "Token inválido." });
+    }
 
     await prisma.user.update({
-      where: { id: String(user.id) },
-      data: { passwordHash: hashPassword(pwd), updatedAt: new Date() }
+      where: { id: String(t.userId) },
+      data: { passwordHash: hashPassword(password) }
     });
 
     await prisma.passwordToken.update({
-      where: { id: tok },
+      where: { id: token },
       data: { used: true, usedAt: new Date() }
     });
 
-    logger.info(
-      { userId: user.id, email: user.email, tokenType: t.type },
-      "🔐 Senha definida com sucesso"
-    );
-
     return res.json({ success: true });
   } catch (err) {
-    logger.error({ err }, "❌ Erro ao definir senha");
+    logger.error({ err }, "❌ set-password");
     return res.status(500).json({ error: "Erro ao definir senha." });
   }
 });
