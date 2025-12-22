@@ -15,15 +15,15 @@ function nowIso() {
 }
 
 function normalizeRole(role) {
-  // ✅ schema atual: GroupMember.role = "member" | "admin" (mas deixamos flexível)
+  // ✅ schema atual: GroupMember.role = "member" | "admin"
+  // compat antigo: manager/agent -> admin/member
   const v = String(role || "").trim().toLowerCase();
   if (!v) return "member";
   if (v === "admin") return "admin";
   if (v === "member") return "member";
-  // compat antigo (manager/agent) -> mapeia
   if (v === "manager") return "admin";
   if (v === "agent") return "member";
-  return v;
+  return "member";
 }
 
 function getGroupId(req) {
@@ -45,7 +45,7 @@ async function assertGroupInTenant({ tenantId, groupId }) {
 }
 
 async function assertUserExists(userId) {
-  const user = await prisma.user.findFirst({
+  const user = await prisma.user.findUnique({
     where: { id: String(userId) },
     select: { id: true, name: true, email: true, role: true, isActive: true }
   });
@@ -75,7 +75,7 @@ router.get("/", requireAuth, requireRole("admin", "manager"), async (req, res) =
         groupId,
         ...(includeInactive ? {} : { isActive: true })
       },
-      orderBy: { updatedAt: "desc" },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       include: {
         user: { select: { id: true, name: true, email: true, role: true, isActive: true } }
       }
@@ -138,6 +138,9 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
 
     const role = normalizeRole(req.body?.role);
 
+    // ✅ garante que não vai “misturar tenant” em um user de outro tenant via membership
+    // (se no futuro você travar usuário por tenant, coloque a checagem aqui)
+
     const member = await prisma.groupMember.upsert({
       where: {
         tenantId_groupId_userId: {
@@ -159,6 +162,8 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
       }
     });
 
+    // 201 quando cria, 200 quando atualiza (melhor sem quebrar frontend)
+    // Se quiser manter simples, retorna sempre 201 como antes.
     return res.status(201).json({
       success: true,
       member,
@@ -197,6 +202,10 @@ router.patch("/:userId", requireAuth, requireRole("admin", "manager"), async (re
     const data = {};
     if (req.body?.role !== undefined) data.role = normalizeRole(req.body.role);
     if (req.body?.isActive !== undefined) data.isActive = !!req.body.isActive;
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: "no_fields_to_update" });
+    }
 
     const member = await prisma.groupMember.update({
       where: { id: existing.id },
