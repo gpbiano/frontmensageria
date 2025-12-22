@@ -1,469 +1,293 @@
 import express from "express";
-import fetch from "node-fetch";
-import logger from "../logger.js";
+import crypto from "crypto";
+import { loadDB, saveDB, ensureArray } from "../utils/db.js";
 
 const router = express.Router();
 
-function getTenantId(req) {
-  return req.tenant?.id || req.tenantId || null;
+// ======================================================
+// HELPERS
+// ======================================================
+function nowIso() {
+  return new Date().toISOString();
 }
 
-function now() {
-  return new Date();
+function newId(prefix = "id") {
+  return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
 }
 
-function normalizeWaId(v) {
-  const digits = String(v || "").replace(/\D/g, "");
-  return digits || null;
+function ensureDbShape(db) {
+  if (!db || typeof db !== "object") db = {};
+  db.conversations = ensureArray(db.conversations);
+  db.messagesByConversation =
+    db.messagesByConversation && typeof db.messagesByConversation === "object"
+      ? db.messagesByConversation
+      : {};
+  return db;
 }
 
-function safeJson(v, fallback = {}) {
-  if (!v || typeof v !== "object") return fallback;
-  return v;
+function ensureConversationMessages(db, conversationId) {
+  ensureDbShape(db);
+  const key = String(conversationId);
+  if (!Array.isArray(db.messagesByConversation[key])) db.messagesByConversation[key] = [];
+  return db.messagesByConversation[key];
 }
 
-function mergeMeta(base, patch) {
-  const a = safeJson(base, {});
-  const b = safeJson(patch, {});
-  return { ...a, ...b };
+function normalizeConversation(conv) {
+  if (!conv) return conv;
+
+  conv.id = String(conv.id || "");
+  conv.source = String(conv.source || conv.channel || "whatsapp").toLowerCase();
+  conv.channel = String(conv.channel || conv.source || "whatsapp").toLowerCase();
+
+  if (!conv.status) conv.status = "open";
+  conv.status = String(conv.status).toLowerCase() === "closed" ? "closed" : "open";
+
+  if (!conv.createdAt) conv.createdAt = nowIso();
+  if (!conv.updatedAt) conv.updatedAt = conv.createdAt;
+
+  if (!conv.currentMode) conv.currentMode = "bot";
+  if (typeof conv.botAttempts !== "number") conv.botAttempts = Number(conv.botAttempts || 0);
+  if (typeof conv.hadHuman !== "boolean") conv.hadHuman = Boolean(conv.hadHuman);
+
+  if (!conv.peerId) conv.peerId = "";
+
+  if (typeof conv.lastMessagePreview !== "string") conv.lastMessagePreview = "";
+  if (!conv.lastMessageAt) conv.lastMessageAt = null;
+
+  return conv;
 }
 
-/**
- * Envio WhatsApp (texto) - opcional
- * Só roda quando canal === "whatsapp" e houver waId (contact.externalId).
- */
-function getWhatsAppConfig() {
-  const token = String(process.env.WHATSAPP_TOKEN || "").trim();
-  const phoneNumberId = String(
-    process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || ""
-  ).trim();
-  const apiVersion = String(process.env.WHATSAPP_API_VERSION || "v21.0").trim();
-
-  if (!token || !phoneNumberId) return null;
-  return { token, phoneNumberId, apiVersion };
-}
-
-async function sendWhatsAppText({ to, text, timeoutMs = 12000 }) {
-  const cfg = getWhatsAppConfig();
-  if (!cfg) throw new Error("whatsapp_not_configured");
-
-  const { token, phoneNumberId, apiVersion } = cfg;
-  if (!to) throw new Error("whatsapp_invalid_to");
-  if (!text) return { skipped: true };
-
-  const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
-
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "text",
-    text: { preview_url: false, body: text },
-  };
-
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-
+function safeStringify(v) {
   try {
-    const r = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal: ctrl.signal,
-    });
-
-    const raw = await r.text().catch(() => "");
-    if (!r.ok) throw new Error(`wa_send_failed_${r.status}:${raw || "no_details"}`);
-
-    try {
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  } finally {
-    clearTimeout(t);
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
   }
 }
 
-/**
- * Padroniza conversation pro front (parecido com o legado)
- */
-function shapeConversation(row) {
-  const c = row;
-  const contact = c.contact || null;
-  const meta = safeJson(c.metadata, {});
-  const tags = Array.isArray(meta.tags) ? meta.tags : [];
+function normalizeMsg(conv, raw) {
+  const createdAt = raw.createdAt || raw.timestamp || raw.sentAt || nowIso();
+
+  const type = String(raw.type || "text").toLowerCase();
+
+  const extracted =
+    raw?.text?.body ??
+    raw?.text ??
+    raw?.body ??
+    raw?.message ??
+    raw?.content ??
+    raw?.caption ??
+    "";
+
+  const text = typeof extracted === "string" ? extracted : safeStringify(extracted);
+
+  let from = raw.from || raw.sender || raw.author || null;
+  let direction = raw.direction || null;
+
+  if (from === "user" || from === "contact" || from === "visitor") from = "client";
+  if (from === "attendant" || from === "human") from = "agent";
+
+  const isBot = !!(raw.isBot || raw.fromBot || raw.bot === true || from === "bot");
+
+  if (!direction) direction = from === "client" ? "in" : "out";
+  if (!from) from = direction === "in" ? "client" : "agent";
+
+  if (isBot) {
+    from = "bot";
+    direction = "out";
+  }
 
   return {
-    id: c.id,
-    tenantId: c.tenantId,
-    status: c.status,
-    channel: c.channel,
-    source: c.channel, // compat legado
-    subject: c.subject || null,
-    title: contact?.name || contact?.phone || contact?.externalId || "Contato",
-    contact: contact
-      ? {
-          id: contact.id,
-          name: contact.name || null,
-          phone: contact.phone || null,
-          email: contact.email || null,
-          externalId: contact.externalId || null,
-          channel: contact.channel,
-          avatarUrl: contact.avatarUrl || null,
-          metadata: safeJson(contact.metadata, {}),
-        }
-      : null,
-    notes: typeof meta.notes === "string" ? meta.notes : "",
-    tags,
-    lastMessageAt: c.lastMessageAt,
-    createdAt: c.createdAt,
-    updatedAt: c.updatedAt,
-
-    // preview vem do include (lastMessage) ou do metadata
-    lastMessagePreview: c._lastMessagePreview || "",
+    id: raw.id || raw._id || newId("msg"),
+    conversationId: String(raw.conversationId || conv.id),
+    channel: raw.channel || conv.channel || conv.source || "whatsapp",
+    source: raw.source || conv.source || raw.channel || "whatsapp",
+    type,
+    from,
+    direction,
+    isBot,
+    isSystem: !!raw.isSystem,
+    text: String(text || ""),
+    createdAt: typeof createdAt === "number" ? new Date(createdAt).toISOString() : createdAt,
+    senderName: raw.senderName || raw.byName || raw.agentName || undefined,
+    waMessageId: raw.waMessageId || raw.messageId || raw.metaMessageId || undefined,
+    delivery: raw.delivery || undefined,
+    payload: raw.payload || undefined,
+    tenantId: raw.tenantId || conv.tenantId || undefined,
   };
 }
 
-function shapeMessage(m) {
-  const meta = safeJson(m.metadata, {});
-  return {
-    id: m.id,
-    tenantId: m.tenantId,
-    conversationId: m.conversationId,
-    direction: m.direction, // inbound|outbound|internal
-    type: m.type,
-    text: m.text || "",
-    mediaUrl: m.mediaUrl || null,
-    fromName: m.fromName || null,
-    fromId: m.fromId || null,
-    status: m.status, // received|sent|delivered|read|failed
-    metadata: meta,
-    createdAt: m.createdAt,
-    updatedAt: m.updatedAt,
-  };
+function touchConversation(conv, msg) {
+  const at = nowIso();
+  conv.updatedAt = at;
+  conv.lastMessageAt = at;
+
+  const preview = String(msg?.text || "").trim();
+  conv.lastMessagePreview = preview ? preview.slice(0, 120) : (conv.lastMessagePreview || "");
 }
 
-/**
- * GET /conversations
- * query:
- * - status=open|closed|all (default open)
- * - channel=whatsapp|webchat|all
- * - q=texto (busca em contact + subject)
- * - page=1.. (default 1)
- * - pageSize=10..100 (default 20)
- */
-router.get("/", async (req, res) => {
-  const tenantId = getTenantId(req);
-  if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+// ======================================================
+// ✅ CORE EXPORTS (O QUE O WHATSAPP + WEBCHAT PRECISAM)
+// ======================================================
 
-  const prisma = req.prisma; // se você injeta no req, ótimo
-  // fallback: import dinâmico (evita circular)
-  const prismaClient = prisma || (await import("../lib/prisma.js")).default;
+export function getOrCreateChannelConversation(db, payload) {
+  db = ensureDbShape(db);
 
-  const status = String(req.query?.status || "open").toLowerCase();
-  const channel = String(req.query?.channel || req.query?.source || "all").toLowerCase();
-  const q = String(req.query?.q || "").trim();
-  const page = Math.max(1, Number(req.query?.page || 1) || 1);
-  const pageSize = Math.min(100, Math.max(10, Number(req.query?.pageSize || 20) || 20));
-  const skip = (page - 1) * pageSize;
+  const source = String(payload?.source || "").toLowerCase();
+  if (!source) return { ok: false, error: "source obrigatório" };
 
-  const where = { tenantId };
+  const peerId = String(payload?.peerId || "").trim();
+  if (!peerId) return { ok: false, error: "peerId obrigatório" };
 
-  if (status !== "all") where.status = status === "closed" ? "closed" : "open";
-  if (channel !== "all") where.channel = channel;
+  const accountId = payload?.accountId ? String(payload.accountId) : null;
 
-  if (q) {
-    where.OR = [
-      { subject: { contains: q, mode: "insensitive" } },
-      {
-        contact: {
-          OR: [
-            { name: { contains: q, mode: "insensitive" } },
-            { phone: { contains: q, mode: "insensitive" } },
-            { email: { contains: q, mode: "insensitive" } },
-            { externalId: { contains: q, mode: "insensitive" } },
-          ],
-        },
-      },
-    ];
+  let conv = db.conversations.find((c) => {
+    normalizeConversation(c);
+    return (
+      c.status === "open" &&
+      String(c.source || "") === source &&
+      String(c.peerId || "") === peerId &&
+      (accountId ? String(c.accountId || "") === accountId : true)
+    );
+  });
+
+  if (!conv) {
+    const idPrefix =
+      source === "webchat" ? "wc" : source === "whatsapp" ? "wa" : "conv";
+
+    conv = {
+      id: newId(idPrefix),
+      source,
+      channel: source,
+      peerId,
+      title: payload?.title || "Contato",
+      status: "open",
+
+      currentMode: payload?.currentMode || "bot",
+      hadHuman: false,
+      botAttempts: 0,
+
+      assignedGroupId: null,
+      assignedUserId: null,
+
+      tags: [],
+      notes: "",
+
+      accountId: accountId || null,
+      channelId: payload?.channelId ? String(payload.channelId) : null,
+
+      phone: payload?.phone || null,
+      waId: payload?.waId || null,
+      visitorId: payload?.visitorId || null,
+
+      tenantId: payload?.tenantId || null,
+
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      lastMessageAt: null,
+      lastMessagePreview: "",
+    };
+
+    db.conversations.push(conv);
+    ensureConversationMessages(db, conv.id);
   }
 
-  try {
-    const [total, rows] = await Promise.all([
-      prismaClient.conversation.count({ where }),
-      prismaClient.conversation.findMany({
-        where,
-        include: {
-          contact: true,
-          messages: {
-            take: 1,
-            orderBy: { createdAt: "desc" },
-            select: { text: true, type: true },
-          },
-        },
-        orderBy: [{ updatedAt: "desc" }],
-        skip,
-        take: pageSize,
-      }),
-    ]);
+  normalizeConversation(conv);
+  return { ok: true, conversation: conv };
+}
 
-    // injeta preview
-    const shaped = rows.map((c) => {
-      const last = (c.messages || [])[0];
-      const preview =
-        last?.type && last.type !== "text"
-          ? `[${last.type}]`
-          : String(last?.text || "").slice(0, 120);
-      c._lastMessagePreview = preview;
-      return shapeConversation(c);
-    });
+export function appendMessage(db, conversationId, rawMsg) {
+  db = ensureDbShape(db);
 
-    return res.json({
-      data: shaped,
-      total,
-      page,
-      pageSize,
-    });
-  } catch (e) {
-    logger.error({ err: e?.message || e }, "❌ conversations list error");
-    return res.status(500).json({ error: "internal_error" });
+  const id = String(conversationId || "");
+  const conv =
+    db.conversations.find((c) => String(c?.id) === id) ||
+    db.conversations.find((c) => String(c?.sessionId || "") === id) ||
+    null;
+
+  if (!conv) return { ok: false, error: "Conversa não encontrada" };
+
+  normalizeConversation(conv);
+
+  const list = ensureConversationMessages(db, conv.id);
+  const msg = normalizeMsg(conv, { ...rawMsg, conversationId: String(conv.id) });
+
+  // dedupe por id
+  if (msg.id && list.some((m) => String(m.id) === String(msg.id))) {
+    return { ok: true, msg, duplicated: true };
   }
+  // dedupe por waMessageId (quando existir)
+  if (msg.waMessageId && list.some((m) => String(m.waMessageId || "") === String(msg.waMessageId))) {
+    return { ok: true, msg, duplicated: true };
+  }
+
+  list.push(msg);
+
+  // flags de modo
+  if (msg.from === "bot" || msg.isBot) {
+    conv.botAttempts = Number(conv.botAttempts || 0) + 1;
+    conv.currentMode = "bot";
+  }
+  if (msg.from === "agent") {
+    conv.hadHuman = true;
+    conv.currentMode = "human";
+  }
+
+  touchConversation(conv, msg);
+  return { ok: true, msg };
+}
+
+// ======================================================
+// ROUTES (mantém pra painel/histórico)
+// ======================================================
+
+// GET /conversations
+router.get("/", (req, res) => {
+  const db = ensureDbShape(loadDB());
+  const items = ensureArray(db.conversations);
+  items.forEach(normalizeConversation);
+
+  items.sort((a, b) => {
+    const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    return tb - ta;
+  });
+
+  return res.json(items);
 });
 
-/**
- * GET /conversations/:id/messages
- */
-router.get("/:id/messages", async (req, res) => {
-  const tenantId = getTenantId(req);
-  if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+// GET /conversations/:id/messages
+router.get("/:id/messages", (req, res) => {
+  const db = ensureDbShape(loadDB());
+  const id = String(req.params.id);
 
-  const prisma = req.prisma;
-  const prismaClient = prisma || (await import("../lib/prisma.js")).default;
+  const conv = db.conversations.find((c) => String(c?.id) === id) || null;
+  if (!conv) return res.status(404).json({ error: "Conversa não encontrada" });
 
-  const conversationId = String(req.params.id || "").trim();
-  if (!conversationId) return res.status(400).json({ error: "invalid_id" });
+  const list = ensureConversationMessages(db, id).slice();
+  list.sort(
+    (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
+  );
 
-  try {
-    const conv = await prismaClient.conversation.findFirst({
-      where: { id: conversationId, tenantId },
-      select: { id: true },
-    });
-
-    if (!conv) return res.status(404).json({ error: "not_found" });
-
-    const msgs = await prismaClient.message.findMany({
-      where: { tenantId, conversationId },
-      orderBy: { createdAt: "asc" },
-    });
-
-    return res.json(msgs.map(shapeMessage));
-  } catch (e) {
-    logger.error({ err: e?.message || e }, "❌ messages list error");
-    return res.status(500).json({ error: "internal_error" });
-  }
+  return res.json(list);
 });
 
-/**
- * POST /conversations/:id/messages
- * body: { text, type?="text", senderName? }
- * -> cria Message outbound
- * -> se conversation.channel === "whatsapp" tenta enviar via Meta (text)
- */
-router.post("/:id/messages", async (req, res) => {
-  const tenantId = getTenantId(req);
-  if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+// POST /conversations/:id/messages (persistência local apenas)
+router.post("/:id/messages", (req, res) => {
+  const db = ensureDbShape(loadDB());
+  const id = String(req.params.id);
 
-  const prisma = req.prisma;
-  const prismaClient = prisma || (await import("../lib/prisma.js")).default;
+  const r = appendMessage(db, id, {
+    ...req.body,
+    from: req.body?.from || "agent",
+    direction: req.body?.direction || "out",
+    createdAt: nowIso(),
+  });
 
-  const conversationId = String(req.params.id || "").trim();
-  if (!conversationId) return res.status(400).json({ error: "invalid_id" });
+  if (!r?.ok) return res.status(400).json({ error: r.error || "Falha ao salvar" });
 
-  const type = String(req.body?.type || "text").toLowerCase();
-  const text = String(req.body?.text || "").trim();
-  const senderName = String(req.body?.senderName || "Humano").trim();
-
-  if (type !== "text") {
-    return res.status(400).json({
-      error: "type_not_supported_yet",
-      message: "Por enquanto, Prisma-first suporta envio/salvamento de text. (mídia entra no próximo passo)",
-    });
-  }
-
-  if (!text) return res.status(400).json({ error: "text_required" });
-
-  try {
-    const conv = await prismaClient.conversation.findFirst({
-      where: { id: conversationId, tenantId },
-      include: { contact: true },
-    });
-
-    if (!conv) return res.status(404).json({ error: "not_found" });
-    if (String(conv.status) === "closed") return res.status(410).json({ error: "conversation_closed" });
-
-    // cria msg como "sent" (otimista) e ajusta se falhar
-    const created = await prismaClient.message.create({
-      data: {
-        tenantId,
-        conversationId,
-        direction: "outbound",
-        type: "text",
-        text,
-        fromName: senderName,
-        fromId: req.user?.id || null,
-        status: "sent",
-        metadata: {},
-      },
-    });
-
-    // atualiza conversation timestamps
-    await prismaClient.conversation.update({
-      where: { id: conv.id },
-      data: {
-        lastMessageAt: now(),
-        updatedAt: now(),
-      },
-    });
-
-    // tenta enviar para WhatsApp se canal for whatsapp
-    if (String(conv.channel).toLowerCase() === "whatsapp") {
-      const waTo = normalizeWaId(conv.contact?.externalId || conv.contact?.phone);
-      if (waTo) {
-        try {
-          const waRes = await sendWhatsAppText({ to: waTo, text });
-          const waMessageId = waRes?.messages?.[0]?.id || null;
-
-          const patched = await prismaClient.message.update({
-            where: { id: created.id },
-            data: {
-              status: "sent",
-              metadata: {
-                delivery: { channel: "whatsapp", status: "sent", at: new Date().toISOString() },
-                waMessageId,
-                wa: waRes,
-              },
-            },
-          });
-
-          return res.status(201).json(shapeMessage(patched));
-        } catch (err) {
-          const patched = await prismaClient.message.update({
-            where: { id: created.id },
-            data: {
-              status: "failed",
-              metadata: {
-                delivery: {
-                  channel: "whatsapp",
-                  status: "failed",
-                  at: new Date().toISOString(),
-                  error: String(err?.message || err),
-                },
-              },
-            },
-          });
-
-          // responde 201 mesmo falhando envio (mensagem salva)
-          return res.status(201).json(shapeMessage(patched));
-        }
-      }
-    }
-
-    return res.status(201).json(shapeMessage(created));
-  } catch (e) {
-    logger.error({ err: e?.message || e }, "❌ message create error");
-    return res.status(500).json({ error: "internal_error" });
-  }
-});
-
-/**
- * PATCH /conversations/:id/status
- * body: { status: "open"|"closed", tags?: [] }
- */
-router.patch("/:id/status", async (req, res) => {
-  const tenantId = getTenantId(req);
-  if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
-
-  const prisma = req.prisma;
-  const prismaClient = prisma || (await import("../lib/prisma.js")).default;
-
-  const conversationId = String(req.params.id || "").trim();
-  const status = String(req.body?.status || "").toLowerCase();
-
-  if (!["open", "closed"].includes(status)) {
-    return res.status(400).json({ error: "invalid_status" });
-  }
-
-  try {
-    const conv = await prismaClient.conversation.findFirst({
-      where: { id: conversationId, tenantId },
-      include: { contact: true },
-    });
-
-    if (!conv) return res.status(404).json({ error: "not_found" });
-
-    const nextMeta = mergeMeta(conv.metadata, {});
-    if (Array.isArray(req.body?.tags)) nextMeta.tags = req.body.tags;
-
-    const updated = await prismaClient.conversation.update({
-      where: { id: conv.id },
-      data: {
-        status,
-        metadata: nextMeta,
-        updatedAt: now(),
-      },
-      include: { contact: true },
-    });
-
-    // inclui preview básico
-    updated._lastMessagePreview = "";
-
-    return res.json(shapeConversation(updated));
-  } catch (e) {
-    logger.error({ err: e?.message || e }, "❌ conversation status error");
-    return res.status(500).json({ error: "internal_error" });
-  }
-});
-
-/**
- * PATCH /conversations/:id/notes
- * body: { notes: "..." }
- */
-router.patch("/:id/notes", async (req, res) => {
-  const tenantId = getTenantId(req);
-  if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
-
-  const prisma = req.prisma;
-  const prismaClient = prisma || (await import("../lib/prisma.js")).default;
-
-  const conversationId = String(req.params.id || "").trim();
-  const notes = String(req.body?.notes || "");
-
-  try {
-    const conv = await prismaClient.conversation.findFirst({
-      where: { id: conversationId, tenantId },
-      include: { contact: true },
-    });
-
-    if (!conv) return res.status(404).json({ error: "not_found" });
-
-    const nextMeta = mergeMeta(conv.metadata, { notes });
-
-    const updated = await prismaClient.conversation.update({
-      where: { id: conv.id },
-      data: { metadata: nextMeta, updatedAt: now() },
-      include: { contact: true },
-    });
-
-    updated._lastMessagePreview = "";
-    return res.json(shapeConversation(updated));
-  } catch (e) {
-    logger.error({ err: e?.message || e }, "❌ conversation notes error");
-    return res.status(500).json({ error: "internal_error" });
-  }
+  saveDB(db);
+  return res.status(201).json(r.msg);
 });
 
 export default router;
-
