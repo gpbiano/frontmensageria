@@ -1,62 +1,76 @@
-//backend/src/middlewares/requireTenant.js
+// backend/src/middleware/requireAuth.js
 import jwt from "jsonwebtoken";
 import logger from "../logger.js";
+import prismaMod from "../lib/prisma.js";
+
+const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
+
+function getJwtSecret() {
+  const secret = String(process.env.JWT_SECRET || "").trim();
+  if (!secret) throw new Error("JWT_SECRET não definido");
+  return secret;
+}
+
+function readBearer(req) {
+  const h = String(req.headers.authorization || "").trim();
+  if (!h.toLowerCase().startsWith("bearer ")) return "";
+  return h.slice(7).trim();
+}
 
 export function requireAuth(req, res, next) {
   try {
-    const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-
+    const token = readBearer(req);
     if (!token) return res.status(401).json({ error: "Não autenticado." });
 
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      logger.error("❌ JWT_SECRET não definido no ambiente.");
-      return res.status(500).json({ error: "Configuração inválida." });
-    }
+    const decoded = jwt.verify(token, getJwtSecret());
+    if (!decoded?.id) return res.status(401).json({ error: "Token inválido." });
 
-    const payload = jwt.verify(token, secret);
-    req.user = payload;
+    req.user = {
+      id: String(decoded.id),
+      email: decoded.email ? String(decoded.email) : null,
+      role: decoded.role ? String(decoded.role) : null,
+      tenantId: decoded.tenantId ? String(decoded.tenantId) : null,
+      tenantSlug: decoded.tenantSlug ? String(decoded.tenantSlug) : null
+    };
 
     return next();
   } catch (err) {
-    logger.warn({ err }, "⚠️ Token inválido");
+    logger.warn({ err }, "🔒 requireAuth: token inválido");
     return res.status(401).json({ error: "Token inválido." });
   }
 }
 
 /**
- * ✅ trava o tenant do token vs tenant resolvido pelo resolveTenant
- * - se não tiver tenant no token, bloqueia
- * - se tiver tenant resolvido e for diferente, bloqueia
+ * ✅ FIX DEFINITIVO:
+ * - se resolveTenant não achou tenant via host/header
+ * - mas o token tem tenantId
+ * => buscamos no banco e setamos req.tenant
  */
-export function enforceTokenTenant(req, res, next) {
-  const tokenTenantId = req.user?.tenantId || null;
+export async function enforceTokenTenant(req, res, next) {
+  try {
+    // já resolvido por resolveTenant (host/header)
+    if (req.tenant?.id) return next();
 
-  if (!tokenTenantId) {
-    return res.status(401).json({ error: "Token sem tenantId." });
-  }
-
-  // se já resolveu tenant pelo host/header, valida
-  if (req.tenant?.id && req.tenant.id !== tokenTenantId) {
-    return res.status(403).json({ error: "Tenant do token não confere com o tenant atual." });
-  }
-
-  return next();
-}
-
-export function requireRole(roles = []) {
-  const allowed = Array.isArray(roles) ? roles : [roles];
-
-  return (req, res, next) => {
-    const role = req.user?.role;
-
-    if (!allowed.length) return next();
-
-    if (!role || !allowed.includes(role)) {
-      return res.status(403).json({ error: "Sem permissão." });
+    const tenantId = req.user?.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: "tenant_not_resolved" });
     }
 
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: String(tenantId) },
+      select: { id: true, slug: true, isActive: true }
+    });
+
+    if (!tenant || tenant.isActive === false) {
+      return res.status(400).json({ error: "tenant_not_resolved" });
+    }
+
+    req.tenant = tenant;
+    req.tenantSlug = tenant.slug;
+
     return next();
-  };
+  } catch (err) {
+    logger.error({ err }, "❌ enforceTokenTenant error");
+    return res.status(500).json({ error: "internal_error" });
+  }
 }
