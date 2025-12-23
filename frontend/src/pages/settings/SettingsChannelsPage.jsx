@@ -5,7 +5,12 @@ import {
   fetchChannels,
   updateWebchatChannel,
   rotateWebchatKey,
-  fetchWebchatSnippet
+  fetchWebchatSnippet,
+
+  // ✅ NOVO (WhatsApp Embedded Signup)
+  startWhatsAppEmbeddedSignup,
+  finishWhatsAppEmbeddedSignup,
+  disconnectWhatsAppChannel
 } from "../../api";
 
 /**
@@ -16,6 +21,11 @@ import {
  * - PATCH  /settings/channels/webchat
  * - POST   /settings/channels/webchat/rotate-key
  * - GET    /settings/channels/webchat/snippet
+ *
+ * WhatsApp Embedded Signup:
+ * - POST   /settings/channels/whatsapp/start
+ * - POST   /settings/channels/whatsapp/callback
+ * - DELETE /settings/channels/whatsapp
  */
 
 function Pill({ variant, children }) {
@@ -113,6 +123,58 @@ function normalizeOriginLines(text) {
     .map((o) => o.replace(/\/+$/, ""));
 }
 
+// ===============================
+// ✅ WhatsApp Embedded Signup helpers
+// ===============================
+
+function loadFacebookSdk(appId) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (window.FB) return resolve(window.FB);
+
+      // evita inserir duas vezes
+      if (document.getElementById("facebook-jssdk")) {
+        const t0 = Date.now();
+        const timer = setInterval(() => {
+          if (window.FB) {
+            clearInterval(timer);
+            resolve(window.FB);
+          } else if (Date.now() - t0 > 15000) {
+            clearInterval(timer);
+            reject(new Error("FB SDK timeout"));
+          }
+        }, 150);
+        return;
+      }
+
+      window.fbAsyncInit = function () {
+        try {
+          window.FB.init({
+            appId,
+            cookie: true,
+            xfbml: false,
+            version: "v19.0" // ok para embedded signup (podemos subir depois)
+          });
+          resolve(window.FB);
+        } catch (e) {
+          reject(e);
+        }
+      };
+
+      const s = document.createElement("script");
+      s.id = "facebook-jssdk";
+      s.async = true;
+      s.defer = true;
+      s.crossOrigin = "anonymous";
+      s.src = "https://connect.facebook.net/en_US/sdk.js";
+      s.onerror = () => reject(new Error("Falha ao carregar FB SDK"));
+      document.head.appendChild(s);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 export default function SettingsChannelsPage() {
   const [loading, setLoading] = useState(true);
   const [channelsState, setChannelsState] = useState(null);
@@ -127,6 +189,12 @@ export default function SettingsChannelsPage() {
   const [snippetLoading, setSnippetLoading] = useState(false);
   const [snippet, setSnippet] = useState("");
   const [snippetMeta, setSnippetMeta] = useState(null);
+
+  // ✅ WhatsApp state
+  const [waConnecting, setWaConnecting] = useState(false);
+  const [waModalOpen, setWaModalOpen] = useState(false);
+  const [waDebug, setWaDebug] = useState(null);
+  const [waErr, setWaErr] = useState("");
 
   const isDev = useMemo(() => {
     try {
@@ -163,7 +231,6 @@ export default function SettingsChannelsPage() {
     const ch = webchat || {};
     const cfg = ch?.config || {};
 
-    // compat: alguns lugares usavam "title", outros "headerTitle"
     const headerTitle = cfg.headerTitle || cfg.title || "Atendimento";
     const buttonText = cfg.buttonText || "Ajuda";
     const greeting = cfg.greeting || "Olá! Como posso ajudar?";
@@ -217,7 +284,6 @@ export default function SettingsChannelsPage() {
 
     try {
       const cfg = webchatDraft.config || {};
-
       const primaryColor = (cfg.primaryColor || "#34d399").trim();
 
       const payload = {
@@ -225,14 +291,13 @@ export default function SettingsChannelsPage() {
         allowedOrigins: Array.isArray(webchatDraft.allowedOrigins)
           ? webchatDraft.allowedOrigins
           : [],
-        // ✅ backend: config primaryColor + color (compat)
         config: {
           primaryColor,
           color: primaryColor,
           position: cfg.position === "left" ? "left" : "right",
           buttonText: String(cfg.buttonText || "Ajuda"),
           headerTitle: String(cfg.headerTitle || "Atendimento"),
-          title: String(cfg.headerTitle || "Atendimento"), // compat p/ lugares antigos
+          title: String(cfg.headerTitle || "Atendimento"),
           greeting: String(cfg.greeting || "Olá! Como posso ajudar?")
         }
       };
@@ -288,9 +353,15 @@ export default function SettingsChannelsPage() {
   }
 
   const webchatStatusVariant = webchat?.enabled ? "on" : "off";
-  const whatsappVariant = whatsapp?.enabled ? "on" : "off";
 
-  // ✅ EMBED COMPLETO: inclui data-* que o widget usa para personalização
+  // 👇 WhatsApp: se backend mandar status, usamos; senão, caímos no enabled
+  const waIsConnected =
+    whatsapp?.status === "connected" ||
+    whatsapp?.status === "on" ||
+    whatsapp?.enabled === true;
+
+  const whatsappVariant = waIsConnected ? "on" : "off";
+
   function embedFallbackFromDraft() {
     const widgetKey = webchatDraft?.widgetKey || webchat?.widgetKey || "wkey_xxx";
 
@@ -324,6 +395,93 @@ export default function SettingsChannelsPage() {
   }
 
   const embedSnippet = snippet || embedFallbackFromDraft();
+
+  // ===============================
+  // ✅ WhatsApp Embedded Signup actions
+  // ===============================
+
+  async function connectWhatsApp() {
+    setWaErr("");
+    setWaDebug(null);
+    setWaConnecting(true);
+
+    try {
+      // 1) backend assina state e retorna appId/redirect/scopes
+      const start = await startWhatsAppEmbeddedSignup();
+
+      const appId = start?.appId;
+      const state = start?.state;
+      const scopes = start?.scopes || ["whatsapp_business_messaging", "business_management"];
+
+      if (!appId || !state) {
+        throw new Error("Resposta inválida do backend (faltou appId/state).");
+      }
+
+      // 2) carrega FB SDK
+      const FB = await loadFacebookSdk(appId);
+
+      // 3) abre login/flow (Embedded Signup)
+      // Obs: em alguns apps a Meta retorna "code" dentro de authResponse.
+      // Se sua resposta vier diferente, a gente ajusta em 2 minutos pelos logs do waDebug.
+      FB.login(
+        async (response) => {
+          try {
+            if (!response?.authResponse) {
+              throw new Error("Usuário cancelou ou não autorizou.");
+            }
+
+            // alguns fluxos retornam `code`, outros retornam accessToken.
+            // Nosso backend está preparado para receber `code` (recomendado).
+            const code = response.authResponse.code || response.authResponse.accessToken;
+
+            if (!code) {
+              setWaDebug(response);
+              throw new Error("Não recebi code/token do Meta. Veja debug.");
+            }
+
+            // 4) finaliza no backend
+            await finishWhatsAppEmbeddedSignup({ code, state });
+
+            // 5) recarrega status
+            await loadChannels();
+            setToast("WhatsApp conectado com sucesso.");
+            setTimeout(() => setToast(""), 2000);
+          } catch (e) {
+            setWaErr(e?.message || String(e));
+            setWaDebug(response || null);
+          } finally {
+            setWaConnecting(false);
+          }
+        },
+        {
+          scope: scopes.join(","),
+          return_scopes: true
+        }
+      );
+    } catch (e) {
+      setWaErr(e?.message || String(e));
+      setWaConnecting(false);
+    }
+  }
+
+  async function disconnectWhatsApp() {
+    const ok = confirm("Deseja desconectar o WhatsApp deste tenant?");
+    if (!ok) return;
+
+    setWaErr("");
+    setWaConnecting(true);
+
+    try {
+      await disconnectWhatsAppChannel();
+      await loadChannels();
+      setToast("WhatsApp desconectado.");
+      setTimeout(() => setToast(""), 2000);
+    } catch (e) {
+      setWaErr(e?.message || String(e));
+    } finally {
+      setWaConnecting(false);
+    }
+  }
 
   return (
     <div className="settings-page">
@@ -405,12 +563,59 @@ export default function SettingsChannelsPage() {
             <div className="settings-channel-header">
               <span className="settings-channel-title">WhatsApp</span>
               <Pill variant={whatsappVariant}>
-                {whatsappVariant === "on" ? "Ativo" : "Desativado"}
+                {whatsappVariant === "on" ? "Conectado" : "Não conectado"}
               </Pill>
             </div>
+
             <p className="settings-channel-description">
-              Mensagens pela API oficial do WhatsApp Business.
+              Conecte seu WhatsApp Business via Cadastro Incorporado (Meta).
             </p>
+
+            {!!waErr && (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(248,113,113,.35)",
+                  background: "rgba(248,113,113,.10)",
+                  color: "#fecaca",
+                  fontSize: 12
+                }}
+              >
+                {waErr}
+              </div>
+            )}
+
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {!waIsConnected ? (
+                <button
+                  className="settings-primary-btn"
+                  onClick={connectWhatsApp}
+                  disabled={waConnecting}
+                >
+                  {waConnecting ? "Conectando..." : "Conectar WhatsApp"}
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="settings-primary-btn"
+                    onClick={() => setWaModalOpen(true)}
+                    disabled={waConnecting}
+                  >
+                    Detalhes
+                  </button>
+                  <button
+                    className="settings-primary-btn"
+                    style={{ opacity: 0.9 }}
+                    onClick={disconnectWhatsApp}
+                    disabled={waConnecting}
+                  >
+                    {waConnecting ? "..." : "Desconectar"}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Messenger */}
@@ -458,6 +663,64 @@ export default function SettingsChannelsPage() {
         </div>
       </section>
 
+      {/* ✅ Modal WhatsApp (detalhes simples) */}
+      <Modal
+        open={waModalOpen}
+        title="WhatsApp — Detalhes da conexão"
+        onClose={() => setWaModalOpen(false)}
+      >
+        <div style={{ display: "grid", gap: 10, fontSize: 13, opacity: 0.95 }}>
+          <div>
+            <b>Status:</b> {waIsConnected ? "Conectado" : "Não conectado"}
+          </div>
+
+          {!!whatsapp?.config?.businessName && (
+            <div>
+              <b>Empresa:</b> {whatsapp.config.businessName}
+            </div>
+          )}
+
+          {!!whatsapp?.config?.phoneNumber && (
+            <div>
+              <b>Número:</b> {whatsapp.config.phoneNumber}
+            </div>
+          )}
+
+          {!!whatsapp?.config?.phoneNumberId && (
+            <div>
+              <b>phoneNumberId:</b>{" "}
+              <code style={{ opacity: 0.9 }}>{whatsapp.config.phoneNumberId}</code>
+            </div>
+          )}
+
+          {!!whatsapp?.updatedAt && (
+            <div>
+              <b>Atualizado em:</b> {new Date(whatsapp.updatedAt).toLocaleString()}
+            </div>
+          )}
+
+          {!!waDebug && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Debug (FB response)</div>
+              <pre
+                style={{
+                  whiteSpace: "pre-wrap",
+                  background: "rgba(255,255,255,.04)",
+                  border: "1px solid rgba(255,255,255,.10)",
+                  borderRadius: 12,
+                  padding: 12,
+                  fontSize: 12,
+                  overflow: "auto"
+                }}
+              >
+                {JSON.stringify(waDebug, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* WebChat Modal */}
       <Modal
         open={webchatOpen}
         title="Configurar Janela Web (Web Chat)"
@@ -611,9 +874,7 @@ export default function SettingsChannelsPage() {
 
             {/* Allowed Origins */}
             <div>
-              <div style={labelStyle()}>
-                Origens permitidas (uma por linha)
-              </div>
+              <div style={labelStyle()}>Origens permitidas (uma por linha)</div>
               <textarea
                 style={{ ...fieldStyle(), minHeight: 110, resize: "vertical" }}
                 value={(webchatDraft.allowedOrigins || []).join("\n")}

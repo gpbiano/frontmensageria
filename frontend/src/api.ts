@@ -472,7 +472,14 @@ export async function setPasswordWithToken(token: string, password: string) {
 // SETTINGS — CHANNELS (Configurações → Canais)
 // ======================================================
 
-export type ChannelStatus = "connected" | "not_connected" | "soon";
+// ✅ compat: seu front antigo usa "not_connected"
+// ✅ novo backend pode retornar "disconnected" / "disabled"
+export type ChannelStatus =
+  | "connected"
+  | "not_connected"
+  | "disconnected"
+  | "disabled"
+  | "soon";
 
 export interface WebchatChannelConfig {
   primaryColor?: string; // compat front
@@ -480,7 +487,18 @@ export interface WebchatChannelConfig {
   position?: "left" | "right";
   buttonText?: string;
   title?: string;
+  headerTitle?: string; // compat
   greeting?: string;
+}
+
+// ✅ WhatsApp config (pode crescer sem quebrar o front)
+export interface WhatsAppChannelConfig {
+  businessName?: string;
+  phoneNumber?: string;
+  phoneNumberId?: string;
+  wabaId?: string;
+  webhookVerified?: boolean;
+  connectedAt?: string;
 }
 
 export interface WebchatChannelRecord {
@@ -493,8 +511,15 @@ export interface WebchatChannelRecord {
   updatedAt?: string;
 }
 
+export interface WhatsAppChannelRecord {
+  enabled: boolean;
+  status: ChannelStatus;
+  config?: WhatsAppChannelConfig;
+  updatedAt?: string;
+}
+
 export interface ChannelsState {
-  whatsapp?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
+  whatsapp?: WhatsAppChannelRecord;
   webchat?: WebchatChannelRecord;
   messenger?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
   instagram?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
@@ -539,6 +564,33 @@ export async function fetchWebchatSnippet(): Promise<{
   widgetJsUrl?: string;
 }> {
   return request("/settings/channels/webchat/snippet");
+}
+
+// ===============================
+// ✅ WHATSAPP — EMBEDDED SIGNUP
+// ===============================
+
+export async function startWhatsAppEmbeddedSignup(): Promise<{
+  appId: string;
+  redirectUri?: string;
+  state: string;
+  scopes: string[];
+}> {
+  return request("/settings/channels/whatsapp/start", { method: "POST" });
+}
+
+export async function finishWhatsAppEmbeddedSignup(payload: {
+  code: string;
+  state: string;
+}): Promise<{ ok: boolean }> {
+  return request("/settings/channels/whatsapp/callback", {
+    method: "POST",
+    body: payload
+  });
+}
+
+export async function disconnectWhatsAppChannel(): Promise<{ ok: boolean }> {
+  return request("/settings/channels/whatsapp", { method: "DELETE" });
 }
 
 // ======================================================
@@ -609,9 +661,10 @@ export async function resetUserPassword(
   success: boolean;
   token?: { id: string; type: string; expiresAt: string };
 }> {
-  return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, {
-    method: "POST"
-  });
+  return request(
+    `/settings/users/${encodeURIComponent(String(id))}/reset-password`,
+    { method: "POST" }
+  );
 }
 
 // ======================================================
@@ -1200,8 +1253,7 @@ export async function startSmsCampaign(id: string) {
 
 export async function fetchSmsCampaignReport(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, {
-    method: "GET"
-  });
+    method: "GET" });
 }
 
 // ======================================================
@@ -1219,3 +1271,4 @@ export async function downloadConversationHistoryExcel(conversationId: string) {
     `conversation_${conversationId}.xlsx`
   );
 }
+
