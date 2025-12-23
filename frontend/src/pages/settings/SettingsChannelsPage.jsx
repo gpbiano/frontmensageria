@@ -11,7 +11,7 @@ import {
   startWhatsAppEmbeddedSignup,
   finishWhatsAppEmbeddedSignup,
   disconnectWhatsAppChannel
-} from "../api"; // ✅ FIX: SettingsChannelsPage.jsx está em src/settings → api está em src/api
+} from "../../api"; // ✅ FIX: SettingsChannelsPage.jsx está em src/settings → api está em src/api
 
 /**
  * Configurações > Canais
