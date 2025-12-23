@@ -1,10 +1,12 @@
 // backend/src/routes/channels.js
 import express from "express";
 import crypto from "crypto";
-import prisma from "../lib/prisma.js";
+import fetch from "node-fetch";
+import prismaMod from "../lib/prisma.js";
 import { requireAuth, enforceTokenTenant, requireRole } from "../middleware/requireAuth.js";
 import logger from "../logger.js";
-import fetch from "node-fetch";
+
+const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
 
@@ -13,18 +15,6 @@ const CHANNELS = ["whatsapp", "webchat", "messenger", "instagram"];
 // ======================================================
 // Helpers
 // ======================================================
-
-function now() {
-  return new Date();
-}
-
-function newWidgetKey() {
-  return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
-}
-
-function getTenantId(req) {
-  return req.tenant?.id || req.tenantId || null;
-}
 
 function requireEnv(name) {
   const v = String(process.env[name] || "").trim();
@@ -51,16 +41,27 @@ function safeOriginFromReferer(referer) {
   }
 }
 
-function safeFullFromReferer(referer) {
+function safePathFromReferer(referer) {
   try {
-    return String(new URL(String(referer || "")).toString());
+    const u = new URL(String(referer || ""));
+    u.hash = "";
+    u.search = "";
+    return u.toString();
   } catch {
     return "";
   }
 }
 
+function getTenantId(req) {
+  return req.tenant?.id || req.tenantId || null;
+}
+
+function newWidgetKey() {
+  return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
+}
+
 // ======================================================
-// STATE (anti-CSRF para Embedded Signup)
+// STATE (anti-CSRF)
 // ======================================================
 
 function signState(payload) {
@@ -73,7 +74,7 @@ function signState(payload) {
 }
 
 function decodeBase64Compat(state) {
-  // tolera base64url (-/_)
+  // base64url -> base64
   const s = String(state || "").trim().replace(/-/g, "+").replace(/_/g, "/");
   return Buffer.from(s, "base64").toString("utf8");
 }
@@ -91,7 +92,7 @@ function verifyState(state) {
 
   const payload = JSON.parse(raw);
 
-  // opcional: expira state (10 min)
+  // expira em 10 min
   const ts = Number(payload?.ts || 0);
   if (ts && Date.now() - ts > 10 * 60 * 1000) throw new Error("invalid_state");
 
@@ -99,17 +100,16 @@ function verifyState(state) {
 }
 
 // ======================================================
-// Shape (normaliza saída pro frontend)
+// Normalização de saída
+// (SEM allowedOrigins no model — fica tudo dentro de config)
 // ======================================================
 
 function shapeChannel(c) {
   if (!c) return null;
-
   return {
-    enabled: c.enabled,
+    enabled: !!c.enabled,
     status: c.status,
     widgetKey: c.widgetKey || null,
-    allowedOrigins: c.allowedOrigins || [],
     config: c.config || {},
     updatedAt: c.updatedAt
   };
@@ -135,8 +135,10 @@ router.get(
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-      // garante que todos os canais existem
+      // garante que todos os canais existem (SEM allowedOrigins)
       for (const ch of CHANNELS) {
+        const isWebchat = ch === "webchat";
+
         await prisma.channelConfig.upsert({
           where: { tenantId_channel: { tenantId, channel: ch } },
           update: {},
@@ -144,34 +146,207 @@ router.get(
             tenantId,
             channel: ch,
             enabled: false,
-            status: ch === "webchat" ? "disabled" : "disconnected",
-            widgetKey: ch === "webchat" ? newWidgetKey() : null,
-            allowedOrigins: ch === "webchat" ? [] : [],
-            config:
-              ch === "webchat"
-                ? {
-                    primaryColor: "#34d399",
-                    position: "right",
-                    buttonText: "Ajuda",
-                    headerTitle: "Atendimento",
-                    greeting: "Olá! Como posso ajudar?"
-                  }
-                : {}
+            status: isWebchat ? "disabled" : "disconnected",
+            widgetKey: isWebchat ? newWidgetKey() : null,
+            config: isWebchat
+              ? {
+                  primaryColor: "#34d399",
+                  position: "right",
+                  buttonText: "Ajuda",
+                  headerTitle: "Atendimento",
+                  greeting: "Olá! Como posso ajudar?",
+                  // ✅ se quiser, guarde aqui:
+                  allowedOrigins: []
+                }
+              : {}
           }
         });
       }
 
       const channels = await prisma.channelConfig.findMany({ where: { tenantId } });
-      res.json({ channels: shapeChannels(channels) });
+
+      // ✅ Compat: seu front espera { channels: {...} } (e também trata array)
+      return res.json({ channels: shapeChannels(channels) });
     } catch (e) {
       logger.error({ err: e }, "❌ GET /settings/channels");
-      res.status(500).json({ error: "internal_error" });
+      return res.status(500).json({ error: "internal_error" });
     }
   }
 );
 
 // ======================================================
-// POST /settings/channels/whatsapp/start
+// PATCH /settings/channels/webchat
+// (SEM allowedOrigins no model — salva dentro do config)
+// ======================================================
+
+router.patch(
+  "/webchat",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const enabled = req.body?.enabled;
+      const cfg = req.body?.config || {};
+      const sessionTtlSeconds = req.body?.sessionTtlSeconds;
+
+      // allowedOrigins vem do front, mas vai dentro do JSON config
+      const allowedOrigins = Array.isArray(req.body?.allowedOrigins)
+        ? req.body.allowedOrigins
+        : undefined;
+
+      const current = await prisma.channelConfig.findUnique({
+        where: { tenantId_channel: { tenantId, channel: "webchat" } }
+      });
+
+      const mergedConfig = {
+        ...(current?.config || {}),
+        ...(cfg || {})
+      };
+
+      if (allowedOrigins) mergedConfig.allowedOrigins = allowedOrigins;
+      if (typeof sessionTtlSeconds === "number") mergedConfig.sessionTtlSeconds = sessionTtlSeconds;
+
+      const updated = await prisma.channelConfig.upsert({
+        where: { tenantId_channel: { tenantId, channel: "webchat" } },
+        update: {
+          enabled: typeof enabled === "boolean" ? enabled : undefined,
+          status:
+            typeof enabled === "boolean"
+              ? enabled
+                ? "connected"
+                : "disabled"
+              : undefined,
+          config: mergedConfig,
+          updatedAt: new Date()
+        },
+        create: {
+          tenantId,
+          channel: "webchat",
+          enabled: typeof enabled === "boolean" ? enabled : false,
+          status: typeof enabled === "boolean" && enabled ? "connected" : "disabled",
+          widgetKey: newWidgetKey(),
+          config: mergedConfig
+        }
+      });
+
+      return res.json(shapeChannel(updated));
+    } catch (e) {
+      logger.error({ err: e }, "❌ PATCH /settings/channels/webchat");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// ======================================================
+// POST /settings/channels/webchat/rotate-key
+// ======================================================
+
+router.post(
+  "/webchat/rotate-key",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const widgetKey = newWidgetKey();
+
+      const updated = await prisma.channelConfig.upsert({
+        where: { tenantId_channel: { tenantId, channel: "webchat" } },
+        update: { widgetKey, updatedAt: new Date() },
+        create: {
+          tenantId,
+          channel: "webchat",
+          enabled: false,
+          status: "disabled",
+          widgetKey,
+          config: {
+            primaryColor: "#34d399",
+            position: "right",
+            buttonText: "Ajuda",
+            headerTitle: "Atendimento",
+            greeting: "Olá! Como posso ajudar?",
+            allowedOrigins: []
+          }
+        }
+      });
+
+      return res.json({ widgetKey: updated.widgetKey });
+    } catch (e) {
+      logger.error({ err: e }, "❌ POST /settings/channels/webchat/rotate-key");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// ======================================================
+// GET /settings/channels/webchat/snippet
+// (gera snippet com dados do config)
+// ======================================================
+
+router.get(
+  "/webchat/snippet",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const row = await prisma.channelConfig.findUnique({
+        where: { tenantId_channel: { tenantId, channel: "webchat" } }
+      });
+
+      if (!row?.widgetKey) return res.status(404).json({ error: "webchat_not_configured" });
+
+      const cfg = row.config || {};
+      const allowedOrigins = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
+
+      const color = String(cfg.primaryColor || cfg.color || "#34d399");
+      const position = cfg.position === "left" ? "left" : "right";
+      const buttonText = String(cfg.buttonText || "Ajuda");
+      const title = String(cfg.headerTitle || cfg.title || "Atendimento");
+      const greeting = String(cfg.greeting || "Olá! Como posso ajudar?");
+      const apiBase = String(process.env.PUBLIC_API_BASE || "https://api.gplabs.com.br");
+
+      const scriptTag = `<script
+  src="https://widget.gplabs.com.br/widget.js"
+  data-widget-key="${row.widgetKey}"
+  data-api-base="${apiBase}"
+  data-color="${color}"
+  data-position="${position}"
+  data-button-text="${buttonText.replace(/"/g, "&quot;")}"
+  data-title="${title.replace(/"/g, "&quot;")}"
+  data-greeting="${greeting.replace(/"/g, "&quot;")}"
+  async
+></script>`;
+
+      return res.json({
+        ok: true,
+        enabled: !!row.enabled,
+        status: row.status,
+        widgetKey: row.widgetKey,
+        allowedOrigins,
+        scriptTag,
+        widgetJsUrl: "https://widget.gplabs.com.br/widget.js",
+        sessionTtlSeconds: cfg.sessionTtlSeconds || 0
+      });
+    } catch (e) {
+      logger.error({ err: e }, "❌ GET /settings/channels/webchat/snippet");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// ======================================================
+// WHATSAPP Embedded Signup
 // ======================================================
 
 router.post(
@@ -186,7 +361,8 @@ router.post(
 
       const appId = requireEnv("META_APP_ID");
 
-      // ✅ Fonte da verdade (env) + normalização
+      // ✅ use exatamente o que você quer no dialog
+      // (pode ser https://cliente.gplabs.com.br/settings/channels/ por exemplo)
       const envRedirect = String(process.env.META_EMBEDDED_REDIRECT_URI || "").trim();
       const redirectUri = ensureTrailingSlash(envRedirect);
 
@@ -194,7 +370,7 @@ router.post(
 
       logger.info({ tenantId, redirectUri }, "🟢 WhatsApp Embedded Signup start");
 
-      res.json({
+      return res.json({
         appId,
         state,
         redirectUri,
@@ -202,14 +378,10 @@ router.post(
       });
     } catch (e) {
       logger.error({ err: e }, "❌ POST /settings/channels/whatsapp/start");
-      res.status(500).json({ error: e?.message || "internal_error" });
+      return res.status(500).json({ error: e?.message || "internal_error" });
     }
   }
 );
-
-// ======================================================
-// POST /settings/channels/whatsapp/callback
-// ======================================================
 
 async function exchangeCodeForToken({ appId, appSecret, code, redirectUri }) {
   const url =
@@ -232,35 +404,23 @@ function buildRedirectCandidates(req) {
   if (envWithSlash) candidates.push(envWithSlash);
   if (envNoSlash) candidates.push(envNoSlash);
 
-  // referer ajuda MUITO (às vezes o OAuth usa o URL atual)
   const ref = String(req.headers.referer || "");
   const refOrigin = safeOriginFromReferer(ref);
-  const refFull = safeFullFromReferer(ref);
+  const refPath = safePathFromReferer(ref);
 
   if (refOrigin) {
     candidates.push(ensureTrailingSlash(refOrigin));
     candidates.push(stripTrailingSlash(refOrigin));
-  }
-
-  // se o SPA estiver em /settings/channels
-  if (refOrigin) {
     candidates.push(`${stripTrailingSlash(refOrigin)}/settings/channels`);
     candidates.push(`${stripTrailingSlash(refOrigin)}/settings/channels/`);
   }
 
-  if (refFull) {
-    // remove query/hash e tenta como está
-    try {
-      const u = new URL(refFull);
-      u.hash = "";
-      u.search = "";
-      candidates.push(u.toString());
-      candidates.push(stripTrailingSlash(u.toString()));
-      candidates.push(ensureTrailingSlash(u.toString()));
-    } catch {}
+  if (refPath) {
+    candidates.push(refPath);
+    candidates.push(stripTrailingSlash(refPath));
+    candidates.push(ensureTrailingSlash(refPath));
   }
 
-  // dedupe
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
@@ -294,24 +454,17 @@ router.post(
           redirectUri: candidate
         });
 
-        // sucesso
         if (r?.access_token) {
           tokenRes = r;
           usedRedirectUri = candidate;
           break;
         }
 
-        // se não for o erro 36008, não adianta tentar os outros
+        // se não for 36008, não adianta tentar os outros
         const sub = r?.error?.error_subcode;
-        if (sub && Number(sub) !== 36008) {
-          tokenRes = r;
-          usedRedirectUri = candidate;
-          break;
-        }
-
-        // segue tentando se for 36008
         tokenRes = r;
         usedRedirectUri = candidate;
+        if (sub && Number(sub) !== 36008) break;
       }
 
       if (!tokenRes?.access_token) {
@@ -331,11 +484,7 @@ router.post(
         });
       }
 
-      logger.info(
-        { tenantId, redirectUriUsed: usedRedirectUri },
-        "✅ Meta token exchange OK"
-      );
-
+      // ✅ salva no config JSON (sem allowedOrigins no model)
       await prisma.channelConfig.upsert({
         where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
         update: {
@@ -356,7 +505,6 @@ router.post(
           enabled: true,
           status: "connected",
           widgetKey: null,
-          allowedOrigins: [],
           config: {
             accessToken: tokenRes.access_token,
             tokenType: tokenRes.token_type || null,
@@ -375,10 +523,6 @@ router.post(
   }
 );
 
-// ======================================================
-// DELETE /settings/channels/whatsapp
-// ======================================================
-
 router.delete(
   "/whatsapp",
   requireAuth,
@@ -395,14 +539,14 @@ router.delete(
           enabled: false,
           status: "disconnected",
           config: {},
-          updatedAt: now()
+          updatedAt: new Date()
         }
       });
 
-      res.json({ ok: true });
+      return res.json({ ok: true });
     } catch (e) {
       logger.error({ err: e }, "❌ DELETE /settings/channels/whatsapp");
-      res.status(500).json({ error: "internal_error" });
+      return res.status(500).json({ error: "internal_error" });
     }
   }
 );
