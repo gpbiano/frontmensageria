@@ -29,7 +29,6 @@ const ENV = process.env.NODE_ENV || "development";
 const envProdPath = path.join(__dirname, "..", ".env.production");
 const envDevPath = path.join(__dirname, "..", ".env");
 
-// Carrega env de forma previsível
 if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath });
 } else if (fs.existsSync(envDevPath)) {
@@ -41,7 +40,7 @@ if (ENV === "production" && fs.existsSync(envProdPath)) {
 // Base domain (tenant por subdomínio)
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
-// (Opcional, recomendado pro webhook público quando não houver contexto do tenant)
+// Tenant fallback para webhook (opcional)
 process.env.WHATSAPP_DEFAULT_TENANT_ID ||= String(
   process.env.WHATSAPP_DEFAULT_TENANT_ID || ""
 ).trim();
@@ -61,7 +60,6 @@ try {
   const mod = await import("./lib/prisma.js");
   prisma = mod?.prisma || mod?.default || mod;
 
-  // checagem mínima de readiness
   prismaReady = !!(
     prisma?.user &&
     prisma?.tenant &&
@@ -87,27 +85,30 @@ try {
 // ROUTERS
 // ===============================
 
-// ✅ AUTH (LOGIN OFICIAL)
+// 🔐 Auth
 const { default: authRouter } = await import("./auth/authRouter.js");
-
-// 🔐 Password / convite / reset (rotas públicas em /auth/password/*)
 const { default: passwordRouter } = await import("./auth/passwordRouter.js");
 
-// Settings
+// ⚙️ Settings
 const { default: usersRouter } = await import("./settings/usersRouter.js");
 const { default: groupsRouter } = await import("./settings/groupsRouter.js");
-const { default: channelsRouter } = await import("./routes/channels.js");
+const { default: channelsRouter } = await import("./routes/channels.js"); 
+// ⬆️ aqui ficam:
+// - /settings/channels
+// - /settings/channels/whatsapp/start
+// - /settings/channels/whatsapp/callback
+// - /settings/channels/whatsapp (DELETE)
 
-// Chatbot + Humano
+// 🤖 Atendimento
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
 const { default: humanRouter } = await import("./human/humanRouter.js");
 const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
 
-// Webchat + Conversas
+// 💬 Webchat + Conversas
 const { default: webchatRouter } = await import("./routes/webchat.js");
 const { default: conversationsRouter } = await import("./routes/conversations.js");
 
-// Outbound
+// 📤 Outbound
 const { default: outboundRouter } = await import("./outbound/outboundRouter.js");
 const { default: numbersRouter } = await import("./outbound/numbersRouter.js");
 const { default: templatesRouter } = await import("./outbound/templatesRouter.js");
@@ -116,8 +117,11 @@ const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
 const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
-// WhatsApp webhook (público)
-const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
+// 📡 WhatsApp Webhook (EVENTOS / MENSAGENS)
+// ⚠️ NÃO CONFUNDIR COM SETTINGS
+const { default: whatsappRouter } = await import(
+  "./routes/channels/whatsappRouter.js"
+);
 
 // ===============================
 // VARS
@@ -165,7 +169,6 @@ app.use(
   })
 );
 
-// JSON parser global
 app.use(express.json({ limit: "5mb" }));
 
 // ===============================
@@ -182,18 +185,12 @@ function requirePrisma(_req, res, next) {
 const PUBLIC_NO_TENANT_PATHS = [
   "/",
   "/health",
-
-  // ✅ auth/login
   "/login",
   "/auth/login",
   "/auth/select-tenant",
-
-  // ✅ password flow
   "/auth/password",
   "/auth/password/verify",
   "/auth/password/set",
-
-  // ✅ canais públicos
   "/webhook/whatsapp",
   "/webchat"
 ];
@@ -208,11 +205,8 @@ app.use(
 // ===============================
 // 🌍 ROTAS PÚBLICAS
 // ===============================
-
-// Root
 app.get("/", (_req, res) => res.json({ status: "ok" }));
 
-// Health
 app.get("/health", async (_req, res) => {
   let users = 0;
   let tenants = 0;
@@ -226,9 +220,7 @@ app.get("/health", async (_req, res) => {
         where: { channel: "whatsapp", enabled: true }
       });
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
 
   res.json({
     ok: true,
@@ -243,20 +235,15 @@ app.get("/health", async (_req, res) => {
   });
 });
 
-// AUTH (rotas públicas de login)
 app.use("/", authRouter);
-
-// Password / convite / reset (rotas públicas)
 app.use("/auth", passwordRouter);
 
-// WebChat (widget) — público, mas depende do DB
+// 🌐 Widgets / Webhooks públicos
 app.use("/webchat", requirePrisma, webchatRouter);
-
-// WhatsApp Webhook — público, mas depende do DB
 app.use("/webhook/whatsapp", requirePrisma, whatsappRouter);
 
 // ===============================
-// 🔒 MIDDLEWARE GLOBAL (PROTEGIDO)
+// 🔒 MIDDLEWARE GLOBAL
 // ===============================
 app.use(requireAuth);
 app.use(enforceTokenTenant);
@@ -309,7 +296,7 @@ app.use((err, req, res, _next) => {
       err,
       url: req.url,
       method: req.method,
-      tenantId: req.tenant?.id || req.tenantId || req.user?.tenantId || null,
+      tenantId: req.tenant?.id || req.tenantId || null,
       userId: req.user?.id || null
     },
     "❌ Erro não tratado"

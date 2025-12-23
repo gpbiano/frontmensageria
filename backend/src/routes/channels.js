@@ -1,13 +1,21 @@
 import express from "express";
 import crypto from "crypto";
 import prisma from "../lib/prisma.js";
-import { requireAuth, enforceTokenTenant, requireRole } from "../middleware/requireAuth.js";
+import {
+  requireAuth,
+  enforceTokenTenant,
+  requireRole
+} from "../middleware/requireAuth.js";
 import logger from "../logger.js";
 import fetch from "node-fetch";
 
 const router = express.Router();
 
 const CHANNELS = ["whatsapp", "webchat", "messenger", "instagram"];
+
+// ======================================================
+// Helpers
+// ======================================================
 
 function now() {
   return new Date();
@@ -21,10 +29,20 @@ function getTenantId(req) {
   return req.tenant?.id || req.tenantId || null;
 }
 
+function requireEnv(name) {
+  const v = String(process.env[name] || "").trim();
+  if (!v) throw new Error(`${name} não configurado`);
+  return v;
+}
+
+// ======================================================
+// STATE (anti-CSRF para Embedded Signup)
+// ======================================================
+
 function signState(payload) {
   const raw = JSON.stringify(payload);
   const sig = crypto
-    .createHmac("sha256", process.env.JWT_SECRET)
+    .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
   return Buffer.from(`${raw}.${sig}`).toString("base64");
@@ -34,32 +52,42 @@ function verifyState(state) {
   const decoded = Buffer.from(state, "base64").toString("utf8");
   const [raw, sig] = decoded.split(".");
   const expected = crypto
-    .createHmac("sha256", process.env.JWT_SECRET)
+    .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
+
   if (sig !== expected) throw new Error("invalid_state");
   return JSON.parse(raw);
 }
 
-/**
- * Normaliza saída pro frontend
- */
+// ======================================================
+// Shape (normaliza saída pro frontend)
+// ======================================================
+
 function shapeChannel(c) {
+  if (!c) return null;
+
   return {
-    id: c.channel,
-    channel: c.channel,
     enabled: c.enabled,
     status: c.status,
     widgetKey: c.widgetKey || null,
     config: c.config || {},
-    createdAt: c.createdAt,
     updatedAt: c.updatedAt
   };
 }
 
-/**
- * GET /settings/channels
- */
+function shapeChannels(list) {
+  const out = {};
+  for (const c of list) {
+    out[c.channel] = shapeChannel(c);
+  }
+  return out;
+}
+
+// ======================================================
+// GET /settings/channels
+// ======================================================
+
 router.get(
   "/",
   requireAuth,
@@ -68,8 +96,11 @@ router.get(
   async (req, res) => {
     try {
       const tenantId = getTenantId(req);
-      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+      if (!tenantId) {
+        return res.status(400).json({ error: "tenant_not_resolved" });
+      }
 
+      // garante que todos os canais existem
       for (const ch of CHANNELS) {
         await prisma.channelConfig.upsert({
           where: { tenantId_channel: { tenantId, channel: ch } },
@@ -77,38 +108,41 @@ router.get(
           create: {
             tenantId,
             channel: ch,
-            enabled: ch === "whatsapp",
-            status: ch === "whatsapp" ? "disconnected" : "disabled",
+            enabled: false,
+            status: ch === "webchat" ? "disabled" : "disconnected",
             widgetKey: ch === "webchat" ? newWidgetKey() : null,
-            config: ch === "webchat"
-              ? {
-                  primaryColor: "#34d399",
-                  position: "right",
-                  buttonText: "Ajuda",
-                  headerTitle: "Atendimento",
-                  greeting: "Olá! Como posso ajudar?"
-                }
-              : {}
+            config:
+              ch === "webchat"
+                ? {
+                    primaryColor: "#34d399",
+                    position: "right",
+                    buttonText: "Ajuda",
+                    headerTitle: "Atendimento",
+                    greeting: "Olá! Como posso ajudar?"
+                  }
+                : {}
           }
         });
       }
 
       const channels = await prisma.channelConfig.findMany({
-        where: { tenantId },
-        orderBy: { channel: "asc" }
+        where: { tenantId }
       });
 
-      res.json(channels.map(shapeChannel));
+      res.json({
+        channels: shapeChannels(channels)
+      });
     } catch (e) {
-      logger.error(e, "❌ channels list error");
+      logger.error(e, "❌ GET /settings/channels");
       res.status(500).json({ error: "internal_error" });
     }
   }
 );
 
-/**
- * POST /settings/channels/whatsapp/start
- */
+// ======================================================
+// POST /settings/channels/whatsapp/start
+// ======================================================
+
 router.post(
   "/whatsapp/start",
   requireAuth,
@@ -117,6 +151,11 @@ router.post(
   async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "tenant_not_resolved" });
+      }
+
+      const appId = requireEnv("META_APP_ID");
 
       const state = signState({
         tenantId,
@@ -124,21 +163,24 @@ router.post(
       });
 
       res.json({
-        appId: process.env.META_APP_ID,
-        redirectUri: process.env.META_EMBEDDED_REDIRECT_URI,
+        appId,
         state,
-        scopes: ["whatsapp_business_messaging", "business_management"]
+        scopes: [
+          "whatsapp_business_messaging",
+          "business_management"
+        ]
       });
     } catch (e) {
-      logger.error(e, "❌ whatsapp start error");
-      res.status(500).json({ error: "internal_error" });
+      logger.error(e, "❌ POST /whatsapp/start");
+      res.status(500).json({ error: e.message || "internal_error" });
     }
   }
 );
 
-/**
- * POST /settings/channels/whatsapp/callback
- */
+// ======================================================
+// POST /settings/channels/whatsapp/callback
+// ======================================================
+
 router.post(
   "/whatsapp/callback",
   requireAuth,
@@ -147,6 +189,10 @@ router.post(
   async (req, res) => {
     try {
       const { code, state } = req.body;
+      if (!code || !state) {
+        return res.status(400).json({ error: "code_and_state_required" });
+      }
+
       const { tenantId } = verifyState(state);
 
       const tokenRes = await fetch(
@@ -155,23 +201,24 @@ router.post(
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            client_id: process.env.META_APP_ID,
-            client_secret: process.env.META_APP_SECRET,
-            redirect_uri: process.env.META_EMBEDDED_REDIRECT_URI,
+            client_id: requireEnv("META_APP_ID"),
+            client_secret: requireEnv("META_APP_SECRET"),
+            redirect_uri: requireEnv("META_EMBEDDED_REDIRECT_URI"),
             code
           })
         }
-      ).then(r => r.json());
+      ).then((r) => r.json());
 
-      if (!tokenRes.access_token) {
-        throw new Error("token_exchange_failed");
+      if (!tokenRes?.access_token) {
+        logger.error(tokenRes, "❌ Meta token exchange failed");
+        return res.status(400).json({ error: "token_exchange_failed" });
       }
 
       await prisma.channelConfig.update({
         where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
         data: {
-          status: "connected",
           enabled: true,
+          status: "connected",
           config: {
             accessToken: tokenRes.access_token,
             connectedAt: now()
@@ -182,51 +229,40 @@ router.post(
 
       res.json({ ok: true });
     } catch (e) {
-      logger.error(e, "❌ whatsapp callback error");
+      logger.error(e, "❌ POST /whatsapp/callback");
       res.status(500).json({ error: "whatsapp_connect_failed" });
     }
   }
 );
 
-/**
- * GET /settings/channels/whatsapp/status
- */
-router.get(
-  "/whatsapp/status",
-  requireAuth,
-  enforceTokenTenant,
-  requireRole("admin", "manager"),
-  async (req, res) => {
-    const tenantId = getTenantId(req);
-    const ch = await prisma.channelConfig.findUnique({
-      where: { tenantId_channel: { tenantId, channel: "whatsapp" } }
-    });
-    res.json(shapeChannel(ch));
-  }
-);
+// ======================================================
+// DELETE /settings/channels/whatsapp
+// ======================================================
 
-/**
- * DELETE /settings/channels/whatsapp
- */
 router.delete(
   "/whatsapp",
   requireAuth,
   enforceTokenTenant,
   requireRole("admin"),
   async (req, res) => {
-    const tenantId = getTenantId(req);
+    try {
+      const tenantId = getTenantId(req);
 
-    await prisma.channelConfig.update({
-      where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
-      data: {
-        status: "disconnected",
-        enabled: false,
-        config: {},
-        updatedAt: now()
-      }
-    });
+      await prisma.channelConfig.update({
+        where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
+        data: {
+          enabled: false,
+          status: "disconnected",
+          config: {},
+          updatedAt: now()
+        }
+      });
 
-    res.json({ ok: true });
+      res.json({ ok: true });
+    } catch (e) {
+      logger.error(e, "❌ DELETE /whatsapp");
+      res.status(500).json({ error: "internal_error" });
+    }
   }
 );
 
