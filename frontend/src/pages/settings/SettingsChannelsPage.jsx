@@ -437,36 +437,42 @@ export default function SettingsChannelsPage() {
       }
 
       const FB = await loadFacebookSdk(appId);
+FB.login(
+  (response) => {
+    (async () => {
+      try {
+        if (!response?.authResponse) {
+          throw new Error("Usuário cancelou ou não autorizou.");
+        }
 
-      FB.login(
-        async (response) => {
-          try {
-            if (!response?.authResponse) {
-              throw new Error("Usuário cancelou ou não autorizou.");
-            }
+        const code =
+          response.authResponse.code ||
+          response.authResponse.accessToken;
 
-            const code =
-              response.authResponse.code || response.authResponse.accessToken;
+        if (!code) {
+          setWaDebug(response);
+          throw new Error("Não recebi code/token do Meta.");
+        }
 
-            if (!code) {
-              setWaDebug(response);
-              throw new Error("Não recebi code/token do Meta. Veja debug.");
-            }
+        await finishWhatsAppEmbeddedSignup({ code, state });
+        await loadChannels();
 
-            await finishWhatsAppEmbeddedSignup({ code, state });
+        setToast("WhatsApp conectado com sucesso.");
+        setTimeout(() => setToast(""), 2000);
+      } catch (e) {
+        setWaErr(e?.message || String(e));
+        setWaDebug(response || null);
+      } finally {
+        setWaConnecting(false);
+      }
+    })();
+  },
+  {
+    scope: scopes.join(","),
+    return_scopes: true
+  }
+);
 
-            await loadChannels();
-            setToast("WhatsApp conectado com sucesso.");
-            setTimeout(() => setToast(""), 2000);
-          } catch (e) {
-            setWaErr(e?.message || String(e));
-            setWaDebug(response || null);
-          } finally {
-            setWaConnecting(false);
-          }
-        },
-        { scope: scopes.join(","), return_scopes: true }
-      );
     } catch (e) {
       setWaErr(e?.message || String(e));
       setWaConnecting(false);
