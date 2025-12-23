@@ -37,29 +37,51 @@ function requireEnv(name) {
 }
 
 // ======================================================
-// STATE (anti-CSRF para Embedded Signup)
+// STATE (anti-CSRF para Embedded Signup) — FIX DEFINITIVO
 // ======================================================
 
 function signState(payload) {
   const raw = JSON.stringify(payload);
+
   const sig = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
-  return Buffer.from(`${raw}.${sig}`).toString("base64");
+
+  // raw pode conter "." (ex: redirectUri com domínio). Então o separador real
+  // precisa ser recuperado pelo ÚLTIMO ponto no decode.
+  return Buffer.from(`${raw}.${sig}`, "utf8").toString("base64");
 }
 
 function verifyState(state) {
-  const decoded = Buffer.from(state, "base64").toString("utf8");
-  const [raw, sig] = decoded.split(".");
+  let decoded = "";
+  try {
+    decoded = Buffer.from(String(state || ""), "base64").toString("utf8");
+  } catch {
+    throw new Error("invalid_state");
+  }
+
+  // ✅ pega o separador pelo ÚLTIMO "."
+  const idx = decoded.lastIndexOf(".");
+  if (idx <= 0) throw new Error("invalid_state");
+
+  const raw = decoded.slice(0, idx);
+  const sig = decoded.slice(idx + 1);
+
+  if (!raw || !sig) throw new Error("invalid_state");
+
   const expected = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
 
-  if (!raw || !sig) throw new Error("invalid_state");
   if (sig !== expected) throw new Error("invalid_state");
-  return JSON.parse(raw);
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error("invalid_state");
+  }
 }
 
 // ======================================================
