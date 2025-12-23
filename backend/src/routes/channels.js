@@ -176,7 +176,6 @@ router.post(
 // ======================================================
 // POST /settings/channels/whatsapp/callback
 // ======================================================
-
 router.post(
   "/whatsapp/callback",
   requireAuth,
@@ -189,20 +188,18 @@ router.post(
         return res.status(400).json({ error: "missing_code_or_state" });
       }
 
-      const payload = verifyState(state);
-      const tenantId = payload?.tenantId;
-
-      // hard-guard: state precisa bater com o tenant atual
-      const currentTenantId = getTenantId(req);
-      if (!tenantId || !currentTenantId || tenantId !== currentTenantId) {
-        return res.status(400).json({ error: "invalid_state_tenant" });
-      }
-
       const appId = requireEnv("META_APP_ID");
       const appSecret = requireEnv("META_APP_SECRET");
+
+      // ⚠️ Embedded Signup via FB.login: redirect_uri costuma ser o ORIGIN do painel
+      // Ex: https://cliente.gplabs.com.br  (sem path)
       const redirectUri = requireEnv("META_EMBEDDED_REDIRECT_URI");
 
-      // Meta aceita GET com querystring (mais compatível)
+      const parsedState = verifyState(state);
+      const tenantId = String(parsedState?.tenantId || "").trim();
+      if (!tenantId) return res.status(400).json({ error: "invalid_state" });
+
+      // ✅ Meta aceita GET com querystring (bem compatível)
       const url =
         "https://graph.facebook.com/v19.0/oauth/access_token" +
         `?client_id=${encodeURIComponent(appId)}` +
@@ -213,8 +210,20 @@ router.post(
       const tokenRes = await fetch(url, { method: "GET" }).then((r) => r.json());
 
       if (!tokenRes?.access_token) {
-        logger.error({ tokenRes }, "❌ Meta token exchange failed");
-        return res.status(400).json({ error: "token_exchange_failed" });
+        logger.error(
+          {
+            tokenRes,
+            redirectUriUsed: redirectUri,
+            tenantId
+          },
+          "❌ Meta token exchange failed"
+        );
+
+        // quando a Meta retorna erro, geralmente faz sentido ser 400 (problema de request)
+        return res.status(400).json({
+          error: "token_exchange_failed",
+          meta: tokenRes?.error || tokenRes
+        });
       }
 
       await prisma.channelConfig.upsert({
@@ -224,8 +233,8 @@ router.post(
           status: "connected",
           config: {
             accessToken: tokenRes.access_token,
-            tokenType: tokenRes.token_type,
-            expiresIn: tokenRes.expires_in,
+            tokenType: tokenRes.token_type || null,
+            expiresIn: tokenRes.expires_in || null,
             connectedAt: new Date().toISOString()
           },
           updatedAt: new Date()
@@ -238,8 +247,8 @@ router.post(
           widgetKey: null,
           config: {
             accessToken: tokenRes.access_token,
-            tokenType: tokenRes.token_type,
-            expiresIn: tokenRes.expires_in,
+            tokenType: tokenRes.token_type || null,
+            expiresIn: tokenRes.expires_in || null,
             connectedAt: new Date().toISOString()
           }
         }
@@ -252,6 +261,7 @@ router.post(
     }
   }
 );
+
 
 
 // ======================================================
