@@ -11,7 +11,7 @@ import {
   startWhatsAppEmbeddedSignup,
   finishWhatsAppEmbeddedSignup,
   disconnectWhatsAppChannel
-} from "../api"; // ✅ FIX: caminho correto a partir de src/settings
+} from "../../api"; // ✅ FIX: caminho correto a partir de src/settings
 
 /**
  * Configurações > Canais
