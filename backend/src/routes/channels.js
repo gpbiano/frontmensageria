@@ -189,73 +189,37 @@ router.post(
         return res.status(400).json({ error: "missing_code_or_state" });
       }
 
-      // valida state e extrai tenant
-      const parsed = verifyState(String(state));
-      const tenantIdFromState = String(parsed?.tenantId || "").trim();
-      if (!tenantIdFromState) {
-        return res.status(400).json({ error: "invalid_state" });
+      const payload = verifyState(state);
+      const tenantId = payload?.tenantId;
+
+      // hard-guard: state precisa bater com o tenant atual
+      const currentTenantId = getTenantId(req);
+      if (!tenantId || !currentTenantId || tenantId !== currentTenantId) {
+        return res.status(400).json({ error: "invalid_state_tenant" });
       }
 
-      // segurança extra: state precisa bater com o tenant resolvido/autorizado
-      const tenantIdReq = getTenantId(req);
-      if (!tenantIdReq) {
-        return res.status(400).json({ error: "tenant_not_resolved" });
-      }
-      if (String(tenantIdReq) !== tenantIdFromState) {
-        return res.status(403).json({ error: "state_tenant_mismatch" });
-      }
-
-      // exige envs essenciais
       const appId = requireEnv("META_APP_ID");
       const appSecret = requireEnv("META_APP_SECRET");
       const redirectUri = requireEnv("META_EMBEDDED_REDIRECT_URI");
 
-      // Meta exige x-www-form-urlencoded (NÃO JSON)
-      const params = new URLSearchParams({
-        client_id: appId,
-        client_secret: appSecret,
-        redirect_uri: redirectUri,
-        code: String(code)
-      });
+      // Meta aceita GET com querystring (mais compatível)
+      const url =
+        "https://graph.facebook.com/v19.0/oauth/access_token" +
+        `?client_id=${encodeURIComponent(appId)}` +
+        `&client_secret=${encodeURIComponent(appSecret)}` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+        `&code=${encodeURIComponent(code)}`;
 
-      const tokenRes = await fetch(
-        "https://graph.facebook.com/v19.0/oauth/access_token",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: params.toString()
-        }
-      ).then((r) => r.json());
+      const tokenRes = await fetch(url, { method: "GET" }).then((r) => r.json());
 
       if (!tokenRes?.access_token) {
         logger.error({ tokenRes }, "❌ Meta token exchange failed");
         return res.status(400).json({ error: "token_exchange_failed" });
       }
 
-      // garante que o registro existe (se alguém chamar callback antes do GET /channels)
       await prisma.channelConfig.upsert({
-        where: {
-          tenantId_channel: { tenantId: tenantIdFromState, channel: "whatsapp" }
-        },
-        update: {},
-        create: {
-          tenantId: tenantIdFromState,
-          channel: "whatsapp",
-          enabled: false,
-          status: "disconnected",
-          widgetKey: null,
-          config: {}
-        }
-      });
-
-      await prisma.channelConfig.update({
-        where: {
-          tenantId_channel: {
-            tenantId: tenantIdFromState,
-            channel: "whatsapp"
-          }
-        },
-        data: {
+        where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
+        update: {
           enabled: true,
           status: "connected",
           config: {
@@ -264,17 +228,31 @@ router.post(
             expiresIn: tokenRes.expires_in,
             connectedAt: new Date().toISOString()
           },
-          updatedAt: now()
+          updatedAt: new Date()
+        },
+        create: {
+          tenantId,
+          channel: "whatsapp",
+          enabled: true,
+          status: "connected",
+          widgetKey: null,
+          config: {
+            accessToken: tokenRes.access_token,
+            tokenType: tokenRes.token_type,
+            expiresIn: tokenRes.expires_in,
+            connectedAt: new Date().toISOString()
+          }
         }
       });
 
-      res.json({ ok: true });
+      return res.json({ ok: true });
     } catch (e) {
-      logger.error({ err: e }, "❌ POST /settings/channels/whatsapp/callback");
-      res.status(500).json({ error: "whatsapp_connect_failed" });
+      logger.error({ err: e }, "❌ whatsapp callback error");
+      return res.status(500).json({ error: "whatsapp_connect_failed" });
     }
   }
 );
+
 
 // ======================================================
 // DELETE /settings/channels/whatsapp

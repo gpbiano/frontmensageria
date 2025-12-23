@@ -440,45 +440,41 @@ async function connectWhatsApp() {
 
     // 3) abre login/flow (Embedded Signup)
     // ⚠️ IMPORTANTE: callback NÃO pode ser async (FB SDK reclama)
-    FB.login(
-      function (response) {
-        (async () => {
-          try {
-            if (!response?.authResponse) {
-              throw new Error("Usuário cancelou ou não autorizou.");
-            }
-
-            // alguns fluxos retornam `code`, outros retornam accessToken.
-            const code =
-              response.authResponse.code || response.authResponse.accessToken;
-
-            if (!code) {
-              setWaDebug(response || null);
-              throw new Error("Não recebi code/token do Meta. Veja debug.");
-            }
-
-            // 4) finaliza no backend
-            await finishWhatsAppEmbeddedSignup({ code, state });
-
-            // 5) recarrega status
-            await loadChannels();
-
-            setToast("WhatsApp conectado com sucesso.");
-            setTimeout(() => setToast(""), 2000);
-          } catch (e) {
-            setWaErr(e?.message || String(e));
-            // evita setar objetos gigantes/cíclicos
-            setWaDebug(response ? { ...response, authResponse: response.authResponse } : null);
-          } finally {
-            setWaConnecting(false);
-          }
-        })();
-      },
-      {
-        scope: scopes.join(","),
-        return_scopes: true
+FB.login(
+  async (response) => {
+    try {
+      if (!response?.authResponse) {
+        throw new Error("Usuário cancelou ou não autorizou.");
       }
-    );
+
+      const code = response.authResponse.code;
+
+      if (!code) {
+        setWaDebug(response);
+        throw new Error(
+          "Meta não retornou 'code'. Verifique se o FB.login está com response_type='code'."
+        );
+      }
+
+      await finishWhatsAppEmbeddedSignup({ code, state });
+
+      await loadChannels();
+      setToast("WhatsApp conectado com sucesso.");
+      setTimeout(() => setToast(""), 2000);
+    } catch (e) {
+      setWaErr(e?.message || String(e));
+      setWaDebug(response || null);
+    } finally {
+      setWaConnecting(false);
+    }
+  },
+  {
+    scope: scopes.join(","),
+    return_scopes: true,
+    response_type: "code",
+    override_default_response_type: true
+  }
+);
   } catch (e) {
     setWaErr(e?.message || String(e));
     setWaConnecting(false);
