@@ -467,50 +467,46 @@ export default function SettingsChannelsPage() {
       // 2) carrega FB SDK
       const FB = await loadFacebookSdk(appId);
 
-      // 3) abre login/flow (Embedded Signup)
-      // ⚠️ callback NÃO pode ser async (senão dá “asyncfunction, not function”)
-      FB.login(
-        (response) => {
-          (async () => {
-            try {
-              setWaDebug(response || null);
-
-              if (!response?.authResponse) {
-                throw new Error("Usuário cancelou ou não autorizou.");
-              }
-
-              const code = response.authResponse.code;
-              if (!code) {
-                throw new Error(
-                  "Meta não retornou 'code'. Verifique response_type='code'."
-                );
-              }
-
-              await finishWhatsAppEmbeddedSignup({ code, state });
-              await loadChannels();
-
-              if (!mountedRef.current) return;
-              setToast("WhatsApp conectado com sucesso.");
-              setTimeout(() => mountedRef.current && setToast(""), 2000);
-            } catch (e) {
-              if (!mountedRef.current) return;
-              setWaErr(e?.message || String(e));
-            } finally {
-              if (!mountedRef.current) return;
-              setWaConnecting(false);
-            }
-          })();
-        },
-        {
-          scope: scopes.join(","),
-          return_scopes: true,
-          response_type: "code",
-          override_default_response_type: true,
-
-          // 🔑 ESSENCIAL: sempre usar o redirectUri do backend
-          redirect_uri: redirectUri
+// 3) abre login/flow (Embedded Signup)
+// ⚠️ callback NÃO pode ser async
+FB.login(
+  (response) => {
+    (async () => {
+      try {
+        if (!response?.authResponse) {
+          throw new Error("Usuário cancelou ou não autorizou.");
         }
-      );
+
+        const code = response.authResponse.code;
+        if (!code) {
+          throw new Error(
+            "Meta não retornou 'code'. Verifique response_type='code'."
+          );
+        }
+
+        await finishWhatsAppEmbeddedSignup({ code, state });
+        await loadChannels();
+
+        setToast("WhatsApp conectado com sucesso.");
+        setTimeout(() => setToast(""), 2000);
+      } catch (e) {
+        setWaErr(e?.message || String(e));
+      } finally {
+        setWaConnecting(false);
+      }
+    })();
+  },
+  {
+    scope: scopes.join(","),
+    return_scopes: true,
+    response_type: "code",
+    override_default_response_type: true,
+
+    // ✅ ESSENCIAL: usar exatamente o mesmo redirect_uri do backend
+    redirect_uri: start?.redirectUri || "https://cliente.gplabs.com.br"
+  }
+);
+
     } catch (e) {
       if (!mountedRef.current) return;
       setWaErr(e?.message || String(e));
