@@ -441,32 +441,33 @@ async function connectWhatsApp() {
     // 3) abre login/flow (Embedded Signup)
     // ⚠️ IMPORTANTE: callback NÃO pode ser async (FB SDK reclama)
 FB.login(
-  async (response) => {
-    try {
-      if (!response?.authResponse) {
-        throw new Error("Usuário cancelou ou não autorizou.");
+  (response) => {
+    (async () => {
+      try {
+        if (!response?.authResponse) {
+          throw new Error("Usuário cancelou ou não autorizou.");
+        }
+
+        const code = response.authResponse.code;
+        if (!code) {
+          setWaDebug(response);
+          throw new Error(
+            "Meta não retornou 'code'. Verifique response_type='code' e override_default_response_type=true."
+          );
+        }
+
+        await finishWhatsAppEmbeddedSignup({ code, state });
+
+        await loadChannels();
+        setToast("WhatsApp conectado com sucesso.");
+        setTimeout(() => setToast(""), 2000);
+      } catch (e) {
+        setWaErr(e?.message || String(e));
+        setWaDebug(response || null);
+      } finally {
+        setWaConnecting(false);
       }
-
-      const code = response.authResponse.code;
-
-      if (!code) {
-        setWaDebug(response);
-        throw new Error(
-          "Meta não retornou 'code'. Verifique se o FB.login está com response_type='code'."
-        );
-      }
-
-      await finishWhatsAppEmbeddedSignup({ code, state });
-
-      await loadChannels();
-      setToast("WhatsApp conectado com sucesso.");
-      setTimeout(() => setToast(""), 2000);
-    } catch (e) {
-      setWaErr(e?.message || String(e));
-      setWaDebug(response || null);
-    } finally {
-      setWaConnecting(false);
-    }
+    })();
   },
   {
     scope: scopes.join(","),
