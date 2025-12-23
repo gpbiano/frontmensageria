@@ -176,6 +176,17 @@ function loadFacebookSdk(appId) {
   });
 }
 
+/**
+ * ✅ Normaliza redirectUri para bater 100% com o backend
+ * Regra: remove trailing slash (exceto se for só "https://dominio/")
+ * Ex: https://cliente.gplabs.com.br/  -> https://cliente.gplabs.com.br
+ */
+function normalizeRedirectUri(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+  return raw.replace(/\/+$/, "");
+}
+
 function normalizeChannelStatus(raw) {
   const s = String(raw || "").toLowerCase();
   if (!s) return "not_connected";
@@ -449,11 +460,13 @@ export default function SettingsChannelsPage() {
       // 1) backend assina state e retorna appId/scopes/redirectUri
       const start = await startWhatsAppEmbeddedSignup();
 
-      const appId = start?.appId;
-      const state = start?.state;
-      const redirectUri = start?.redirectUri; // ✅ vem do backend
+      const appId = String(start?.appId || "").trim();
+      const state = String(start?.state || "").trim();
       const scopes =
         start?.scopes || ["whatsapp_business_messaging", "business_management"];
+
+      // ✅ ÚNICA FONTE DA VERDADE
+      const redirectUri = normalizeRedirectUri(start?.redirectUri);
 
       if (!appId || !state) {
         throw new Error("Resposta inválida do backend (faltou appId/state).");
@@ -467,46 +480,51 @@ export default function SettingsChannelsPage() {
       // 2) carrega FB SDK
       const FB = await loadFacebookSdk(appId);
 
-// 3) abre login/flow (Embedded Signup)
-// ⚠️ callback NÃO pode ser async
-FB.login(
-  (response) => {
-    (async () => {
-      try {
-        if (!response?.authResponse) {
-          throw new Error("Usuário cancelou ou não autorizou.");
+      // 3) abre login/flow (Embedded Signup)
+      // ⚠️ callback NÃO pode ser async (senão dá “asyncfunction, not function”)
+      FB.login(
+        (response) => {
+          (async () => {
+            try {
+              // debug útil: guarda start + response
+              if (mountedRef.current) setWaDebug({ start, response });
+
+              if (!response?.authResponse) {
+                throw new Error("Usuário cancelou ou não autorizou.");
+              }
+
+              const code = response?.authResponse?.code;
+              if (!code) {
+                throw new Error(
+                  "Meta não retornou 'code'. Verifique response_type='code'."
+                );
+              }
+
+              await finishWhatsAppEmbeddedSignup({ code, state });
+              await loadChannels();
+
+              if (!mountedRef.current) return;
+              setToast("WhatsApp conectado com sucesso.");
+              setTimeout(() => mountedRef.current && setToast(""), 2000);
+            } catch (e) {
+              if (!mountedRef.current) return;
+              setWaErr(e?.message || String(e));
+            } finally {
+              if (!mountedRef.current) return;
+              setWaConnecting(false);
+            }
+          })();
+        },
+        {
+          scope: scopes.join(","),
+          return_scopes: true,
+          response_type: "code",
+          override_default_response_type: true,
+
+          // ✅ CRÍTICO: tem que ser idêntico ao redirectUri usado no token exchange
+          redirect_uri: redirectUri
         }
-
-        const code = response.authResponse.code;
-        if (!code) {
-          throw new Error(
-            "Meta não retornou 'code'. Verifique response_type='code'."
-          );
-        }
-
-        await finishWhatsAppEmbeddedSignup({ code, state });
-        await loadChannels();
-
-        setToast("WhatsApp conectado com sucesso.");
-        setTimeout(() => setToast(""), 2000);
-      } catch (e) {
-        setWaErr(e?.message || String(e));
-      } finally {
-        setWaConnecting(false);
-      }
-    })();
-  },
-  {
-    scope: scopes.join(","),
-    return_scopes: true,
-    response_type: "code",
-    override_default_response_type: true,
-
-    // ✅ ESSENCIAL: usar exatamente o mesmo redirect_uri do backend
-    redirect_uri: start?.redirectUri || "https://cliente.gplabs.com.br"
-  }
-);
-
+      );
     } catch (e) {
       if (!mountedRef.current) return;
       setWaErr(e?.message || String(e));
@@ -751,7 +769,7 @@ FB.login(
 
           {!!waDebug && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Debug (FB response)</div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Debug</div>
               <pre
                 style={{
                   whiteSpace: "pre-wrap",
@@ -811,11 +829,7 @@ FB.login(
               <div>
                 <div style={labelStyle()}>Chave do widget (widgetKey)</div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    style={fieldStyle()}
-                    value={webchatDraft.widgetKey || ""}
-                    readOnly
-                  />
+                  <input style={fieldStyle()} value={webchatDraft.widgetKey || ""} readOnly />
                   <button
                     className="settings-primary-btn"
                     onClick={() => copy(webchatDraft.widgetKey || "")}
@@ -1028,7 +1042,11 @@ FB.login(
               >
                 Cancelar
               </button>
-              <button className="settings-primary-btn" onClick={saveWebchat} disabled={saving}>
+              <button
+                className="settings-primary-btn"
+                onClick={saveWebchat}
+                disabled={saving}
+              >
                 {saving ? "Salvando..." : "Salvar"}
               </button>
             </div>
