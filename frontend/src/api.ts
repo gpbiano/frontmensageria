@@ -53,8 +53,8 @@ function getAuthUser(): any | null {
  * ✅ Tenant Header (X-Tenant-Id)
  *
  * Regra do backend (resolveTenant):
- * - Se estiver acessando via subdomínio do tenant (ex: gplabs.cliente.gplabs.com.br), resolve por host
- * - Se estiver acessando via cliente.gplabs.com.br (sem subdomínio de tenant), PRECISA mandar header
+ * - Se estiver acessando via subdomínio do tenant, resolve por host
+ * - Se estiver acessando via cliente.gplabs.com.br (sem subdomínio), PRECISA mandar header
  *
  * Aceita:
  * - user.tenant.slug  (preferido)
@@ -83,9 +83,7 @@ function getToken(): string | null {
   if (typeof window === "undefined") return null;
 
   // 🔐 prioridade: localStorage → sessionStorage
-  const token =
-    localStorage.getItem(AUTH_KEY) || sessionStorage.getItem(AUTH_KEY);
-
+  const token = localStorage.getItem(AUTH_KEY) || sessionStorage.getItem(AUTH_KEY);
   return token ? String(token) : null;
 }
 
@@ -108,7 +106,7 @@ function isUnauthorized(res: Response) {
  * - Não deixar "extra headers" sobrescrever Authorization.
  * - Injeta X-Tenant-Id automaticamente (resolve "Tenant não resolvido").
  * - Não sobrescrever Content-Type automaticamente se for FormData.
- * - Merge previsível (HeadersInit pode ser várias formas).
+ * - Merge previsível.
  */
 function buildHeaders(extra?: HeadersInit): HeadersInit {
   const token = getToken();
@@ -197,14 +195,11 @@ function buildQuery(params?: Record<string, any>) {
 // HELPER FETCH (JSON / TEXT / NO CONTENT)
 // ======================================================
 
-async function request<T = any>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
+async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   // ======================================================
   // ✅ FIX GLOBAL: garante "text" em /messages (evita "text obrigatório")
   // ======================================================
-  let effectiveBody: any = options.body;
+  let effectiveBody: any = (options as any).body;
 
   const isMessagesEndpoint = /\/messages(\?|$)/.test(path);
 
@@ -221,9 +216,7 @@ async function request<T = any>(
       null;
 
     const hasText =
-      b.text !== undefined &&
-      b.text !== null &&
-      String(b.text).trim() !== "";
+      b.text !== undefined && b.text !== null && String(b.text).trim() !== "";
 
     if (!hasText && candidate !== null && String(candidate).trim() !== "") {
       effectiveBody = { ...b, text: String(candidate).trim() };
@@ -241,7 +234,6 @@ async function request<T = any>(
   const shouldSetJson =
     hasBody &&
     isPlainObject(effectiveBody) &&
-    // se alguém já mandou Content-Type no header, respeita
     !new Headers(options.headers || {}).has("Content-Type");
 
   const headers = buildHeaders({
@@ -251,13 +243,11 @@ async function request<T = any>(
 
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
-    // ✅ importante: se no futuro o backend usar cookie, isso não quebra
     credentials: "include",
     headers,
     body
   });
 
-  // ✅ 401: limpa token (sessão inválida)
   if (isUnauthorized(res)) {
     const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
@@ -280,10 +270,8 @@ async function request<T = any>(
     throw buildApiError(res.status, path, payload, text);
   }
 
-  // ✅ suporte a 204 No Content
   if (res.status === 204) return null as T;
 
-  // ✅ tenta JSON, se não der, devolve texto
   const json = await safeReadJson<T>(res);
   if (json !== null) return json;
 
@@ -304,13 +292,14 @@ async function requestForm<T = any>(
     ...options,
     credentials: "include",
     method: options.method || "POST",
-    headers: buildHeaders(options.headers), // NÃO seta Content-Type aqui (boundary)
+    headers: buildHeaders(options.headers),
     body: formData
   });
 
   if (isUnauthorized(res)) {
     const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
+
     console.error("🔒 API FORM 401:", path, payload || text);
 
     clearAuth();
@@ -356,6 +345,7 @@ async function downloadBlob(path: string, filename: string) {
   if (isUnauthorized(res)) {
     const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
+
     console.error("🔒 DOWNLOAD 401:", path, payload || text);
 
     clearAuth();
@@ -413,10 +403,7 @@ export function setAuthSession(
   if (data?.user) storage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
 }
 
-export async function login(
-  email: string,
-  password: string
-): Promise<LoginResponse> {
+export async function login(email: string, password: string): Promise<LoginResponse> {
   const data = await request<LoginResponse>("/login", {
     method: "POST",
     body: { email, password }
@@ -472,8 +459,6 @@ export async function setPasswordWithToken(token: string, password: string) {
 // SETTINGS — CHANNELS (Configurações → Canais)
 // ======================================================
 
-// ✅ compat: seu front antigo usa "not_connected"
-// ✅ novo backend pode retornar "disconnected" / "disabled"
 export type ChannelStatus =
   | "connected"
   | "not_connected"
@@ -525,31 +510,55 @@ export interface ChannelsState {
   instagram?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
 }
 
+/**
+ * ✅ Compat com backend atual:
+ * - pode retornar ARRAY: [{ channel: "whatsapp", ... }, ...]
+ * - ou objeto: { channels: {...} }
+ * - ou objeto: {...}
+ */
 export async function fetchChannels(): Promise<ChannelsState> {
-  const res = await request<{ channels: ChannelsState }>("/settings/channels");
-  return (res?.channels || {}) as ChannelsState;
+  const res = await request<any>("/settings/channels");
+
+  // backend atual (seu channels.js): retorna array
+  if (Array.isArray(res)) {
+    const out: ChannelsState = {};
+    for (const item of res) {
+      const ch = String(item?.channel || item?.id || "").toLowerCase();
+      if (!ch) continue;
+      (out as any)[ch] = item;
+    }
+    return out;
+  }
+
+  // compat: { channels: {...} }
+  if (res && typeof res === "object" && res.channels && typeof res.channels === "object") {
+    return res.channels as ChannelsState;
+  }
+
+  // fallback: já veio como objeto final
+  return (res || {}) as ChannelsState;
 }
 
+/**
+ * ✅ Alinhado com backend atual:
+ * channels.js retorna o objeto do canal atualizado (não {ok, webchat})
+ */
 export async function updateWebchatChannel(payload: {
   enabled?: boolean;
   allowedOrigins?: string[];
   config?: WebchatChannelConfig;
   sessionTtlSeconds?: number;
-}): Promise<{ ok: boolean; webchat: WebchatChannelRecord }> {
-  return request<{ ok: boolean; webchat: WebchatChannelRecord }>(
-    "/settings/channels/webchat",
-    { method: "PATCH", body: payload }
-  );
+}): Promise<WebchatChannelRecord> {
+  return request<WebchatChannelRecord>("/settings/channels/webchat", {
+    method: "PATCH",
+    body: payload
+  });
 }
 
-export async function rotateWebchatKey(): Promise<{
-  ok: boolean;
-  widgetKey: string;
-}> {
-  return request<{ ok: boolean; widgetKey: string }>(
-    "/settings/channels/webchat/rotate-key",
-    { method: "POST" }
-  );
+export async function rotateWebchatKey(): Promise<{ widgetKey: string }> {
+  return request<{ widgetKey: string }>("/settings/channels/webchat/rotate-key", {
+    method: "POST"
+  });
 }
 
 export async function fetchWebchatSnippet(): Promise<{
@@ -567,7 +576,7 @@ export async function fetchWebchatSnippet(): Promise<{
 }
 
 // ===============================
-// ✅ WHATSAPP — EMBEDDED SIGNUP
+// ✅ WHATSAPP — EMBEDDED SIGNUP (stubs p/ quando o backend ficar pronto)
 // ===============================
 
 export async function startWhatsAppEmbeddedSignup(): Promise<{
@@ -613,12 +622,10 @@ type UsersListResponse =
   | { data: UserRecord[]; total: number }
   | { items: UserRecord[]; total: number };
 
-export async function fetchUsers(): Promise<{
-  data: UserRecord[];
-  total: number;
-}> {
+export async function fetchUsers(): Promise<{ data: UserRecord[]; total: number }> {
   const res = await request<UsersListResponse>("/settings/users");
-  const data = "data" in res ? res.data : res.items;
+  const data = "data" in res ? res.data : (res as any).items;
+
   return {
     data: Array.isArray(data) ? data : [],
     total: (res as any).total ?? (Array.isArray(data) ? data.length : 0)
@@ -647,24 +654,19 @@ export async function updateUser(
   });
 }
 
-export async function deactivateUser(
-  id: number
-): Promise<{ success: boolean; user: UserRecord }> {
+export async function deactivateUser(id: number): Promise<{ success: boolean; user: UserRecord }> {
   return request(`/settings/users/${encodeURIComponent(String(id))}/deactivate`, {
     method: "PATCH"
   });
 }
 
-export async function resetUserPassword(
-  id: number
-): Promise<{
+export async function resetUserPassword(id: number): Promise<{
   success: boolean;
   token?: { id: string; type: string; expiresAt: string };
 }> {
-  return request(
-    `/settings/users/${encodeURIComponent(String(id))}/reset-password`,
-    { method: "POST" }
-  );
+  return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, {
+    method: "POST"
+  });
 }
 
 // ======================================================
@@ -684,9 +686,7 @@ export interface GroupRecord {
 export async function fetchGroups(params?: {
   includeInactive?: boolean;
 }): Promise<{ items: GroupRecord[]; total: number }> {
-  const qs = buildQuery(
-    params?.includeInactive ? { includeInactive: "true" } : undefined
-  );
+  const qs = buildQuery(params?.includeInactive ? { includeInactive: "true" } : undefined);
   return request(`/settings/groups${qs}`);
 }
 
@@ -708,17 +708,13 @@ export async function updateGroup(
   });
 }
 
-export async function deactivateGroup(
-  id: string
-): Promise<{ ok: boolean; group: GroupRecord }> {
+export async function deactivateGroup(id: string): Promise<{ ok: boolean; group: GroupRecord }> {
   return request(`/settings/groups/${encodeURIComponent(id)}/deactivate`, {
     method: "PATCH"
   });
 }
 
-export async function activateGroup(
-  id: string
-): Promise<{ ok: boolean; group: GroupRecord }> {
+export async function activateGroup(id: string): Promise<{ ok: boolean; group: GroupRecord }> {
   return request(`/settings/groups/${encodeURIComponent(id)}/activate`, {
     method: "PATCH"
   });
@@ -748,9 +744,7 @@ export async function fetchGroupMembers(
   groupId: string,
   params?: { includeInactive?: boolean }
 ): Promise<{ items: GroupMemberItem[]; total: number; group?: GroupRecord }> {
-  const qs = buildQuery(
-    params?.includeInactive ? { includeInactive: "true" } : undefined
-  );
+  const qs = buildQuery(params?.includeInactive ? { includeInactive: "true" } : undefined);
   return request(`/settings/groups/${encodeURIComponent(groupId)}/members${qs}`);
 }
 
@@ -770,9 +764,7 @@ export async function updateGroupMember(
   payload: { role?: GroupMemberRole; isActive?: boolean }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
-      String(userId)
-    )}`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}`,
     { method: "PATCH", body: payload }
   );
 }
@@ -782,9 +774,7 @@ export async function deactivateGroupMember(
   userId: number
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
-      String(userId)
-    )}/deactivate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/deactivate`,
     { method: "PATCH" }
   );
 }
@@ -795,9 +785,7 @@ export async function activateGroupMember(
   payload?: { role?: GroupMemberRole }
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
-      String(userId)
-    )}/activate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/activate`,
     { method: "PATCH", body: payload || {} }
   );
 }
@@ -819,9 +807,7 @@ export async function fetchConversations(
   statusOrOpts: ConversationStatus | "all" | FetchConversationsOptions = "open"
 ): Promise<Conversation[]> {
   const opts: FetchConversationsOptions =
-    typeof statusOrOpts === "string"
-      ? { status: statusOrOpts }
-      : statusOrOpts || {};
+    typeof statusOrOpts === "string" ? { status: statusOrOpts } : statusOrOpts || {};
 
   const qs = buildQuery({
     status: opts.status ?? "open",
@@ -835,14 +821,12 @@ export async function fetchConversations(
 }
 
 export async function fetchMessages(conversationId: string): Promise<Message[]> {
-  const data = await request<any>(
-    `/conversations/${encodeURIComponent(conversationId)}/messages`
-  );
+  const data = await request<any>(`/conversations/${encodeURIComponent(conversationId)}/messages`);
   return Array.isArray(data) ? (data as Message[]) : [];
 }
 
 /**
- * ✅ IMPORTANTE (p/ seu erro "text obrigatório"):
+ * ✅ IMPORTANTE:
  * O backend valida "text" como obrigatório para mensagens de texto.
  * Então SEMPRE enviamos "text".
  */
@@ -1021,9 +1005,7 @@ export async function uploadAsset(file: File): Promise<MediaItem> {
   return requestForm("/outbound/assets/upload", form);
 }
 
-export async function deleteAsset(
-  id: string | number
-): Promise<{ success: boolean }> {
+export async function deleteAsset(id: string | number): Promise<{ success: boolean }> {
   return request(`/outbound/assets/${encodeURIComponent(String(id))}`, {
     method: "DELETE"
   });
@@ -1086,10 +1068,7 @@ export async function uploadCampaignAudience(campaignId: string, file: File) {
   const fd = new FormData();
   fd.append("file", file);
 
-  return requestForm(
-    `/outbound/campaigns/${encodeURIComponent(campaignId)}/audience`,
-    fd
-  );
+  return requestForm(`/outbound/campaigns/${encodeURIComponent(campaignId)}/audience`, fd);
 }
 
 export async function startCampaign(
@@ -1100,25 +1079,19 @@ export async function startCampaign(
   });
 }
 
-export async function pauseCampaign(
-  campaignId: string
-): Promise<{ success: boolean }> {
+export async function pauseCampaign(campaignId: string): Promise<{ success: boolean }> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/pause`, {
     method: "PATCH"
   });
 }
 
-export async function resumeCampaign(
-  campaignId: string
-): Promise<{ success: boolean }> {
+export async function resumeCampaign(campaignId: string): Promise<{ success: boolean }> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/resume`, {
     method: "PATCH"
   });
 }
 
-export async function fetchCampaignById(
-  campaignId: string
-): Promise<CampaignRecord> {
+export async function fetchCampaignById(campaignId: string): Promise<CampaignRecord> {
   return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}`);
 }
 
@@ -1253,7 +1226,8 @@ export async function startSmsCampaign(id: string) {
 
 export async function fetchSmsCampaignReport(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, {
-    method: "GET" });
+    method: "GET"
+  });
 }
 
 // ======================================================
@@ -1271,4 +1245,5 @@ export async function downloadConversationHistoryExcel(conversationId: string) {
     `conversation_${conversationId}.xlsx`
   );
 }
+
 

@@ -7,11 +7,11 @@ import {
   rotateWebchatKey,
   fetchWebchatSnippet,
 
-  // ✅ NOVO (WhatsApp Embedded Signup)
+  // ✅ WhatsApp Embedded Signup
   startWhatsAppEmbeddedSignup,
   finishWhatsAppEmbeddedSignup,
   disconnectWhatsAppChannel
-} from "../../api";
+} from "../api"; // ✅ FIX: caminho correto a partir de src/settings
 
 /**
  * Configurações > Canais
@@ -132,7 +132,6 @@ function loadFacebookSdk(appId) {
     try {
       if (window.FB) return resolve(window.FB);
 
-      // evita inserir duas vezes
       if (document.getElementById("facebook-jssdk")) {
         const t0 = Date.now();
         const timer = setInterval(() => {
@@ -153,7 +152,7 @@ function loadFacebookSdk(appId) {
             appId,
             cookie: true,
             xfbml: false,
-            version: "v19.0" // ok para embedded signup (podemos subir depois)
+            version: "v19.0"
           });
           resolve(window.FB);
         } catch (e) {
@@ -173,6 +172,16 @@ function loadFacebookSdk(appId) {
       reject(e);
     }
   });
+}
+
+function normalizeChannelStatus(raw) {
+  const s = String(raw || "").toLowerCase();
+  if (!s) return "not_connected";
+  if (s === "connected" || s === "on") return "connected";
+  if (s === "disabled") return "disabled";
+  if (s === "disconnected") return "disconnected";
+  if (s === "not_connected") return "not_connected";
+  return s;
 }
 
 export default function SettingsChannelsPage() {
@@ -225,6 +234,7 @@ export default function SettingsChannelsPage() {
 
   useEffect(() => {
     loadChannels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function openWebchatConfig() {
@@ -354,13 +364,20 @@ export default function SettingsChannelsPage() {
 
   const webchatStatusVariant = webchat?.enabled ? "on" : "off";
 
-  // 👇 WhatsApp: se backend mandar status, usamos; senão, caímos no enabled
+  // ===============================
+  // ✅ WhatsApp status (mais robusto)
+  // ===============================
+  const waStatus = normalizeChannelStatus(whatsapp?.status);
   const waIsConnected =
-    whatsapp?.status === "connected" ||
-    whatsapp?.status === "on" ||
-    whatsapp?.enabled === true;
+    waStatus === "connected" || whatsapp?.enabled === true;
 
   const whatsappVariant = waIsConnected ? "on" : "off";
+
+  function whatsappLabel() {
+    if (waIsConnected) return "Conectado";
+    if (waStatus === "disabled") return "Desativado";
+    return "Não conectado";
+  }
 
   function embedFallbackFromDraft() {
     const widgetKey = webchatDraft?.widgetKey || webchat?.widgetKey || "wkey_xxx";
@@ -406,23 +423,21 @@ export default function SettingsChannelsPage() {
     setWaConnecting(true);
 
     try {
-      // 1) backend assina state e retorna appId/redirect/scopes
       const start = await startWhatsAppEmbeddedSignup();
 
       const appId = start?.appId;
       const state = start?.state;
-      const scopes = start?.scopes || ["whatsapp_business_messaging", "business_management"];
+      const scopes = start?.scopes || [
+        "whatsapp_business_messaging",
+        "business_management"
+      ];
 
       if (!appId || !state) {
         throw new Error("Resposta inválida do backend (faltou appId/state).");
       }
 
-      // 2) carrega FB SDK
       const FB = await loadFacebookSdk(appId);
 
-      // 3) abre login/flow (Embedded Signup)
-      // Obs: em alguns apps a Meta retorna "code" dentro de authResponse.
-      // Se sua resposta vier diferente, a gente ajusta em 2 minutos pelos logs do waDebug.
       FB.login(
         async (response) => {
           try {
@@ -430,19 +445,16 @@ export default function SettingsChannelsPage() {
               throw new Error("Usuário cancelou ou não autorizou.");
             }
 
-            // alguns fluxos retornam `code`, outros retornam accessToken.
-            // Nosso backend está preparado para receber `code` (recomendado).
-            const code = response.authResponse.code || response.authResponse.accessToken;
+            const code =
+              response.authResponse.code || response.authResponse.accessToken;
 
             if (!code) {
               setWaDebug(response);
               throw new Error("Não recebi code/token do Meta. Veja debug.");
             }
 
-            // 4) finaliza no backend
             await finishWhatsAppEmbeddedSignup({ code, state });
 
-            // 5) recarrega status
             await loadChannels();
             setToast("WhatsApp conectado com sucesso.");
             setTimeout(() => setToast(""), 2000);
@@ -453,10 +465,7 @@ export default function SettingsChannelsPage() {
             setWaConnecting(false);
           }
         },
-        {
-          scope: scopes.join(","),
-          return_scopes: true
-        }
+        { scope: scopes.join(","), return_scopes: true }
       );
     } catch (e) {
       setWaErr(e?.message || String(e));
@@ -539,9 +548,7 @@ export default function SettingsChannelsPage() {
             title="Configurar Web Chat"
           >
             <div className="settings-channel-header">
-              <span className="settings-channel-title">
-                Janela Web (Web Chat)
-              </span>
+              <span className="settings-channel-title">Janela Web (Web Chat)</span>
               <Pill variant={webchatStatusVariant}>
                 {webchat?.enabled ? "Ativo" : "Desativado"}
               </Pill>
@@ -562,9 +569,7 @@ export default function SettingsChannelsPage() {
           <div className="settings-channel-card">
             <div className="settings-channel-header">
               <span className="settings-channel-title">WhatsApp</span>
-              <Pill variant={whatsappVariant}>
-                {whatsappVariant === "on" ? "Conectado" : "Não conectado"}
-              </Pill>
+              <Pill variant={whatsappVariant}>{whatsappLabel()}</Pill>
             </div>
 
             <p className="settings-channel-description">
@@ -671,7 +676,7 @@ export default function SettingsChannelsPage() {
       >
         <div style={{ display: "grid", gap: 10, fontSize: 13, opacity: 0.95 }}>
           <div>
-            <b>Status:</b> {waIsConnected ? "Conectado" : "Não conectado"}
+            <b>Status:</b> {waIsConnected ? "Conectado" : whatsappLabel()}
           </div>
 
           {!!whatsapp?.config?.businessName && (
@@ -701,7 +706,9 @@ export default function SettingsChannelsPage() {
 
           {!!waDebug && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Debug (FB response)</div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                Debug (FB response)
+              </div>
               <pre
                 style={{
                   whiteSpace: "pre-wrap",
@@ -935,10 +942,7 @@ export default function SettingsChannelsPage() {
               />
 
               <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                <button
-                  className="settings-primary-btn"
-                  onClick={() => copy(embedSnippet)}
-                >
+                <button className="settings-primary-btn" onClick={() => copy(embedSnippet)}>
                   Copiar embed
                 </button>
                 <button
