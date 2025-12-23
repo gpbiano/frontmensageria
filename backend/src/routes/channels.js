@@ -56,6 +56,7 @@ function verifyState(state) {
     .update(raw)
     .digest("hex");
 
+  if (!raw || !sig) throw new Error("invalid_state");
   if (sig !== expected) throw new Error("invalid_state");
   return JSON.parse(raw);
 }
@@ -129,11 +130,9 @@ router.get(
         where: { tenantId }
       });
 
-      res.json({
-        channels: shapeChannels(channels)
-      });
+      res.json({ channels: shapeChannels(channels) });
     } catch (e) {
-      logger.error(e, "❌ GET /settings/channels");
+      logger.error({ err: e }, "❌ GET /settings/channels");
       res.status(500).json({ error: "internal_error" });
     }
   }
@@ -165,14 +164,11 @@ router.post(
       res.json({
         appId,
         state,
-        scopes: [
-          "whatsapp_business_messaging",
-          "business_management"
-        ]
+        scopes: ["whatsapp_business_messaging", "business_management"]
       });
     } catch (e) {
-      logger.error(e, "❌ POST /whatsapp/start");
-      res.status(500).json({ error: e.message || "internal_error" });
+      logger.error({ err: e }, "❌ POST /settings/channels/whatsapp/start");
+      res.status(500).json({ error: e?.message || "internal_error" });
     }
   }
 );
@@ -188,40 +184,85 @@ router.post(
   requireRole("admin"),
   async (req, res) => {
     try {
-      const { code, state } = req.body;
+      const { code, state } = req.body || {};
       if (!code || !state) {
-        return res.status(400).json({ error: "code_and_state_required" });
+        return res.status(400).json({ error: "missing_code_or_state" });
       }
 
-      const { tenantId } = verifyState(state);
+      // valida state e extrai tenant
+      const parsed = verifyState(String(state));
+      const tenantIdFromState = String(parsed?.tenantId || "").trim();
+      if (!tenantIdFromState) {
+        return res.status(400).json({ error: "invalid_state" });
+      }
+
+      // segurança extra: state precisa bater com o tenant resolvido/autorizado
+      const tenantIdReq = getTenantId(req);
+      if (!tenantIdReq) {
+        return res.status(400).json({ error: "tenant_not_resolved" });
+      }
+      if (String(tenantIdReq) !== tenantIdFromState) {
+        return res.status(403).json({ error: "state_tenant_mismatch" });
+      }
+
+      // exige envs essenciais
+      const appId = requireEnv("META_APP_ID");
+      const appSecret = requireEnv("META_APP_SECRET");
+      const redirectUri = requireEnv("META_EMBEDDED_REDIRECT_URI");
+
+      // Meta exige x-www-form-urlencoded (NÃO JSON)
+      const params = new URLSearchParams({
+        client_id: appId,
+        client_secret: appSecret,
+        redirect_uri: redirectUri,
+        code: String(code)
+      });
 
       const tokenRes = await fetch(
         "https://graph.facebook.com/v19.0/oauth/access_token",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            client_id: requireEnv("META_APP_ID"),
-            client_secret: requireEnv("META_APP_SECRET"),
-            redirect_uri: requireEnv("META_EMBEDDED_REDIRECT_URI"),
-            code
-          })
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString()
         }
       ).then((r) => r.json());
 
       if (!tokenRes?.access_token) {
-        logger.error(tokenRes, "❌ Meta token exchange failed");
+        logger.error({ tokenRes }, "❌ Meta token exchange failed");
         return res.status(400).json({ error: "token_exchange_failed" });
       }
 
+      // garante que o registro existe (se alguém chamar callback antes do GET /channels)
+      await prisma.channelConfig.upsert({
+        where: {
+          tenantId_channel: { tenantId: tenantIdFromState, channel: "whatsapp" }
+        },
+        update: {},
+        create: {
+          tenantId: tenantIdFromState,
+          channel: "whatsapp",
+          enabled: false,
+          status: "disconnected",
+          widgetKey: null,
+          config: {}
+        }
+      });
+
       await prisma.channelConfig.update({
-        where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
+        where: {
+          tenantId_channel: {
+            tenantId: tenantIdFromState,
+            channel: "whatsapp"
+          }
+        },
         data: {
           enabled: true,
           status: "connected",
           config: {
             accessToken: tokenRes.access_token,
-            connectedAt: now()
+            tokenType: tokenRes.token_type,
+            expiresIn: tokenRes.expires_in,
+            connectedAt: new Date().toISOString()
           },
           updatedAt: now()
         }
@@ -229,7 +270,7 @@ router.post(
 
       res.json({ ok: true });
     } catch (e) {
-      logger.error(e, "❌ POST /whatsapp/callback");
+      logger.error({ err: e }, "❌ POST /settings/channels/whatsapp/callback");
       res.status(500).json({ error: "whatsapp_connect_failed" });
     }
   }
@@ -247,6 +288,9 @@ router.delete(
   async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "tenant_not_resolved" });
+      }
 
       await prisma.channelConfig.update({
         where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
@@ -260,7 +304,7 @@ router.delete(
 
       res.json({ ok: true });
     } catch (e) {
-      logger.error(e, "❌ DELETE /whatsapp");
+      logger.error({ err: e }, "❌ DELETE /settings/channels/whatsapp");
       res.status(500).json({ error: "internal_error" });
     }
   }
