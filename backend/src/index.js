@@ -19,7 +19,7 @@ import { requireTenant } from "./middleware/requireTenant.js";
 import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
 
 // ===============================
-// PATHS + ENV LOAD
+// PATHS + ENV LOAD (FIX DEFINITIVO)
 // ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,12 +29,18 @@ const ENV = process.env.NODE_ENV || "development";
 const envProdPath = path.join(__dirname, "..", ".env.production");
 const envDevPath = path.join(__dirname, "..", ".env");
 
+/**
+ * ✅ FIX DEFINITIVO:
+ * Em produção, força .env.production sobrescrever qualquer ENV injetada pelo PM2/system.
+ * Isso evita regressão do META_EMBEDDED_REDIRECT_URI e outros.
+ */
 if (ENV === "production" && fs.existsSync(envProdPath)) {
-  dotenv.config({ path: envProdPath });
+  dotenv.config({ path: envProdPath, override: true });
 } else if (fs.existsSync(envDevPath)) {
-  dotenv.config({ path: envDevPath });
+  dotenv.config({ path: envDevPath, override: false });
 } else if (fs.existsSync(envProdPath)) {
-  dotenv.config({ path: envProdPath });
+  // fallback (caso dev sem .env)
+  dotenv.config({ path: envProdPath, override: false });
 }
 
 // Base domain (tenant por subdomínio)
@@ -49,6 +55,16 @@ process.env.WHATSAPP_DEFAULT_TENANT_ID ||= String(
 // LOGGER
 // ===============================
 const { default: logger } = await import("./logger.js");
+
+// 🔎 Log rápido do env efetivo (pode remover depois)
+logger.info(
+  {
+    ENV,
+    TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN,
+    META_EMBEDDED_REDIRECT_URI: process.env.META_EMBEDDED_REDIRECT_URI || null
+  },
+  "🧩 Env carregado"
+);
 
 // ===============================
 // PRISMA
@@ -92,7 +108,7 @@ const { default: passwordRouter } = await import("./auth/passwordRouter.js");
 // ⚙️ Settings
 const { default: usersRouter } = await import("./settings/usersRouter.js");
 const { default: groupsRouter } = await import("./settings/groupsRouter.js");
-const { default: channelsRouter } = await import("./routes/channels.js"); 
+const { default: channelsRouter } = await import("./routes/channels.js");
 // ⬆️ aqui ficam:
 // - /settings/channels
 // - /settings/channels/whatsapp/start
