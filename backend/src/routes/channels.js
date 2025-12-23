@@ -1,3 +1,4 @@
+// backend/src/routes/settingsChannelsRouter.js
 import express from "express";
 import crypto from "crypto";
 import prisma from "../lib/prisma.js";
@@ -140,6 +141,7 @@ router.get(
 
 // ======================================================
 // POST /settings/channels/whatsapp/start
+// ✅ FIX DEFINITIVO: backend é fonte única do redirect_uri
 // ======================================================
 
 router.post(
@@ -155,14 +157,22 @@ router.post(
       }
 
       const appId = requireEnv("META_APP_ID");
+      const redirectUri = requireEnv("META_EMBEDDED_REDIRECT_URI");
 
       const state = signState({
         tenantId,
+        redirectUri, // 🔐 garante igualdade do fluxo inteiro
         ts: Date.now()
       });
 
+      logger.info(
+        { tenantId, redirectUri },
+        "🟢 WhatsApp Embedded Signup start"
+      );
+
       res.json({
         appId,
+        redirectUri,
         state,
         scopes: ["whatsapp_business_messaging", "business_management"]
       });
@@ -175,7 +185,9 @@ router.post(
 
 // ======================================================
 // POST /settings/channels/whatsapp/callback
+// ✅ FIX DEFINITIVO: valida redirect_uri do state vs env
 // ======================================================
+
 router.post(
   "/whatsapp/callback",
   requireAuth,
@@ -190,14 +202,28 @@ router.post(
 
       const appId = requireEnv("META_APP_ID");
       const appSecret = requireEnv("META_APP_SECRET");
-
-      // ⚠️ Embedded Signup via FB.login: redirect_uri costuma ser o ORIGIN do painel
-      // Ex: https://cliente.gplabs.com.br  (sem path)
-      const redirectUri = requireEnv("META_EMBEDDED_REDIRECT_URI");
+      const redirectUriEnv = requireEnv("META_EMBEDDED_REDIRECT_URI");
 
       const parsedState = verifyState(state);
       const tenantId = String(parsedState?.tenantId || "").trim();
+      const redirectUriFromState = String(parsedState?.redirectUri || "").trim();
+
       if (!tenantId) return res.status(400).json({ error: "invalid_state" });
+
+      // 🔒 blindagem anti-mismatch / anti-fallback
+      if (redirectUriFromState !== redirectUriEnv) {
+        logger.error(
+          {
+            tenantId,
+            redirectUriFromState,
+            redirectUriEnv
+          },
+          "❌ redirect_uri mismatch detected"
+        );
+        return res.status(400).json({ error: "redirect_uri_mismatch" });
+      }
+
+      const redirectUri = redirectUriEnv;
 
       // ✅ Meta aceita GET com querystring (bem compatível)
       const url =
@@ -219,7 +245,6 @@ router.post(
           "❌ Meta token exchange failed"
         );
 
-        // quando a Meta retorna erro, geralmente faz sentido ser 400 (problema de request)
         return res.status(400).json({
           error: "token_exchange_failed",
           meta: tokenRes?.error || tokenRes
@@ -261,8 +286,6 @@ router.post(
     }
   }
 );
-
-
 
 // ======================================================
 // DELETE /settings/channels/whatsapp
