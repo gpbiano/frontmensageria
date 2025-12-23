@@ -500,7 +500,8 @@ export default function SettingsChannelsPage() {
           scope: scopes.join(","),
           return_scopes: true,
           response_type: "code",
-          override_default_response_type: true
+          override_default_response_type: true,
+          redirect_uri: start.redirectUri
         }
       );
     } catch (e) {
