@@ -277,11 +277,6 @@ export default function LoginPage({ onLogin }) {
             )}
           </button>
         </form>
-
-        <div className="login-footer">
-          Ambiente: <strong>{import.meta.env.MODE}</strong> · API:{" "}
-          <code>{API_BASE}</code>
-        </div>
       </div>
     </div>
   );
