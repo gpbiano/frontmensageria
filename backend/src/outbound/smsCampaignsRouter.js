@@ -8,46 +8,55 @@ import logger from "../logger.js";
 import { requireAuth, requireRole } from "../middleware/requireAuth.js";
 
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
-
 const router = express.Router();
 
-/* =========================
- * Helpers
- * ========================= */
-
+function resolveModel(names) {
+  for (const n of names) if (prisma?.[n]) return prisma[n];
+  return null;
+}
+function modelHasField(modelName, field) {
+  try {
+    const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
+    return !!m?.fields?.some((f) => f.name === field);
+  } catch {
+    return true;
+  }
+}
 function getTenantId(req) {
   const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
   return tid ? String(tid) : null;
 }
-
-function assertPrisma(res) {
+function assertPrisma(res, model, candidates) {
   if (!prisma || typeof prisma.$queryRaw !== "function") {
     res.status(503).json({ ok: false, error: "prisma_not_ready" });
     return false;
   }
-  // precisamos do model que vamos usar
-  if (!prisma.outboundCampaign) {
-    res.status(503).json({ ok: false, error: "prisma_not_ready" });
+  if (!model) {
+    res.status(503).json({ ok: false, error: "prisma_model_missing", details: { expectedAnyOf: candidates } });
     return false;
   }
   return true;
 }
 
-/* =========================
- * Routes
- * ========================= */
+const MODEL_CANDIDATES = ["outboundCampaign", "OutboundCampaign", "campaign", "Campaign"];
 
-// LISTAR
 router.get("/", requireAuth, async (req, res) => {
+  const model = resolveModel(MODEL_CANDIDATES);
+  const modelName = model ? model._model || model.name || "unknown" : null;
+
   try {
-    if (!assertPrisma(res)) return;
+    if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
 
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    const items = await prisma.outboundCampaign.findMany({
-      where: { tenantId, channel: "sms" },
-      orderBy: { createdAt: "desc" }
+    const where = {};
+    if (modelHasField(modelName, "tenantId")) where.tenantId = tenantId;
+    if (modelHasField(modelName, "channel")) where.channel = "sms";
+
+    const items = await model.findMany({
+      where,
+      orderBy: modelHasField(modelName, "createdAt") ? { createdAt: "desc" } : undefined
     });
 
     return res.json({ ok: true, items });
@@ -57,10 +66,12 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
-// CRIAR
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  const model = resolveModel(MODEL_CANDIDATES);
+  const modelName = model ? model._model || model.name || "unknown" : null;
+
   try {
-    if (!assertPrisma(res)) return;
+    if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
 
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
@@ -72,16 +83,14 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     if (!name) return res.status(400).json({ ok: false, error: "name_required" });
     if (!message.trim()) return res.status(400).json({ ok: false, error: "message_required" });
 
-    const item = await prisma.outboundCampaign.create({
-      data: {
-        tenantId,
-        channel: "sms",
-        name,
-        status: "draft",
-        // ✅ MVP: persistimos message em metadata (sem quebrar schema)
-        metadata: { ...metadata, message }
-      }
-    });
+    const data = {};
+    if (modelHasField(modelName, "tenantId")) data.tenantId = tenantId;
+    if (modelHasField(modelName, "channel")) data.channel = "sms";
+    if (modelHasField(modelName, "name")) data.name = name;
+    if (modelHasField(modelName, "status")) data.status = "draft";
+    if (modelHasField(modelName, "metadata")) data.metadata = { ...metadata, message };
+
+    const item = await model.create({ data });
 
     return res.status(201).json({ ok: true, item });
   } catch (err) {
