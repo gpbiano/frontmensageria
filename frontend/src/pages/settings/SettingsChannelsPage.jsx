@@ -417,67 +417,74 @@ export default function SettingsChannelsPage() {
   // ✅ WhatsApp Embedded Signup actions
   // ===============================
 
-  async function connectWhatsApp() {
-    setWaErr("");
-    setWaDebug(null);
-    setWaConnecting(true);
+async function connectWhatsApp() {
+  setWaErr("");
+  setWaDebug(null);
+  setWaConnecting(true);
 
-    try {
-      const start = await startWhatsAppEmbeddedSignup();
+  try {
+    // 1) backend assina state e retorna appId/redirect/scopes
+    const start = await startWhatsAppEmbeddedSignup();
 
-      const appId = start?.appId;
-      const state = start?.state;
-      const scopes = start?.scopes || [
-        "whatsapp_business_messaging",
-        "business_management"
-      ];
+    const appId = start?.appId;
+    const state = start?.state;
+    const scopes =
+      start?.scopes || ["whatsapp_business_messaging", "business_management"];
 
-      if (!appId || !state) {
-        throw new Error("Resposta inválida do backend (faltou appId/state).");
-      }
-
-      const FB = await loadFacebookSdk(appId);
-FB.login(
-  (response) => {
-    (async () => {
-      try {
-        if (!response?.authResponse) {
-          throw new Error("Usuário cancelou ou não autorizou.");
-        }
-
-        const code =
-          response.authResponse.code ||
-          response.authResponse.accessToken;
-
-        if (!code) {
-          setWaDebug(response);
-          throw new Error("Não recebi code/token do Meta.");
-        }
-
-        await finishWhatsAppEmbeddedSignup({ code, state });
-        await loadChannels();
-
-        setToast("WhatsApp conectado com sucesso.");
-        setTimeout(() => setToast(""), 2000);
-      } catch (e) {
-        setWaErr(e?.message || String(e));
-        setWaDebug(response || null);
-      } finally {
-        setWaConnecting(false);
-      }
-    })();
-  },
-  {
-    scope: scopes.join(","),
-    return_scopes: true
-  }
-);
-
-    } catch (e) {
-      setWaErr(e?.message || String(e));
-      setWaConnecting(false);
+    if (!appId || !state) {
+      throw new Error("Resposta inválida do backend (faltou appId/state).");
     }
+
+    // 2) carrega FB SDK
+    const FB = await loadFacebookSdk(appId);
+
+    // 3) abre login/flow (Embedded Signup)
+    // ⚠️ IMPORTANTE: callback NÃO pode ser async (FB SDK reclama)
+    FB.login(
+      function (response) {
+        (async () => {
+          try {
+            if (!response?.authResponse) {
+              throw new Error("Usuário cancelou ou não autorizou.");
+            }
+
+            // alguns fluxos retornam `code`, outros retornam accessToken.
+            const code =
+              response.authResponse.code || response.authResponse.accessToken;
+
+            if (!code) {
+              setWaDebug(response || null);
+              throw new Error("Não recebi code/token do Meta. Veja debug.");
+            }
+
+            // 4) finaliza no backend
+            await finishWhatsAppEmbeddedSignup({ code, state });
+
+            // 5) recarrega status
+            await loadChannels();
+
+            setToast("WhatsApp conectado com sucesso.");
+            setTimeout(() => setToast(""), 2000);
+          } catch (e) {
+            setWaErr(e?.message || String(e));
+            // evita setar objetos gigantes/cíclicos
+            setWaDebug(response ? { ...response, authResponse: response.authResponse } : null);
+          } finally {
+            setWaConnecting(false);
+          }
+        })();
+      },
+      {
+        scope: scopes.join(","),
+        return_scopes: true
+      }
+    );
+  } catch (e) {
+    setWaErr(e?.message || String(e));
+    setWaConnecting(false);
   }
+}
+
 
   async function disconnectWhatsApp() {
     const ok = confirm("Deseja desconectar o WhatsApp deste tenant?");
