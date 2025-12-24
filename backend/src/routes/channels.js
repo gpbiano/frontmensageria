@@ -10,6 +10,7 @@ const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 const router = express.Router();
 
 const CHANNELS = ["whatsapp", "webchat", "messenger", "instagram"];
+const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION || "v21.0").trim();
 
 // ======================================================
 // Helpers
@@ -79,11 +80,22 @@ function verifyState(state) {
 // ======================================================
 function shapeChannel(c) {
   if (!c) return null;
+  const cfg = c.config && typeof c.config === "object" ? c.config : {};
   return {
     enabled: !!c.enabled,
     status: c.status,
     widgetKey: c.widgetKey || null,
-    config: c.config || {},
+
+    // ✅ colunas first-class (não vazar token)
+    pageId: c.pageId || null,
+    phoneNumberId: c.phoneNumberId || null,
+    wabaId: c.wabaId || null,
+    displayName: c.displayName || null,
+    displayPhoneNumber: c.displayPhoneNumber || null,
+    hasAccessToken: !!c.accessToken,
+
+    // config
+    config: cfg,
     updatedAt: c.updatedAt
   };
 }
@@ -100,15 +112,50 @@ function shapeChannels(list) {
 function normalizeRedirectUri(input) {
   const raw = String(input || "").trim();
   if (!raw) return "";
-  // remove trailing slash (mantém idêntico entre start/callback)
   return raw.replace(/\/+$/, "");
 }
 
 function getMetaOAuthRedirectUri() {
-  // ✅ ÚNICA fonte: env (normalize p/ evitar mismatch com / no final)
   const v = normalizeRedirectUri(process.env.META_OAUTH_REDIRECT_URI);
   if (!v) throw new Error("META_OAUTH_REDIRECT_URI não configurado");
   return v;
+}
+
+// ======================================================
+// Graph helpers
+// ======================================================
+async function graphGetJson(url, accessToken) {
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const raw = await resp.text().catch(() => "");
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = { raw };
+  }
+  return { ok: resp.ok, status: resp.status, data, raw };
+}
+
+async function graphPostJson(url, accessToken, bodyObj = {}) {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(bodyObj)
+  });
+  const raw = await resp.text().catch(() => "");
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = { raw };
+  }
+  return { ok: resp.ok, status: resp.status, data, raw };
 }
 
 // ======================================================
@@ -326,6 +373,201 @@ router.get(
 );
 
 // ======================================================
+// ✅ MESSENGER — Produto (self-service multi-tenant)
+// ======================================================
+
+// POST /settings/channels/messenger/pages
+// Body: { userAccessToken: string }
+// Retorna páginas do usuário (Graph: /me/accounts)
+router.post(
+  "/messenger/pages",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const userAccessToken = String(req.body?.userAccessToken || "").trim();
+      if (!userAccessToken) return res.status(400).json({ error: "userAccessToken_required" });
+
+      const url =
+        `https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts` +
+        `?fields=id,name,access_token` +
+        `&access_token=${encodeURIComponent(userAccessToken)}`;
+
+      const r = await fetch(url, { method: "GET" });
+      const j = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        logger.warn({ status: r.status, meta: j?.error || j }, "❌ Messenger pages list failed");
+        return res.status(400).json({ error: "meta_list_pages_failed", meta: j?.error || j });
+      }
+
+      const data = Array.isArray(j.data) ? j.data : [];
+      return res.json({
+        pages: data.map((p) => ({
+          id: String(p?.id || ""),
+          name: String(p?.name || ""),
+          // ⚠️ Admin/manager only. Front usa este token imediatamente para /connect.
+          pageAccessToken: String(p?.access_token || "")
+        }))
+      });
+    } catch (e) {
+      logger.error({ err: e }, "❌ POST /settings/channels/messenger/pages");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// POST /settings/channels/messenger/connect
+// Body: { pageId, pageAccessToken, subscribedFields?: string[] }
+router.post(
+  "/messenger/connect",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const pageId = String(req.body?.pageId || "").trim();
+      const pageAccessToken = String(req.body?.pageAccessToken || "").trim();
+
+      const subscribedFields = Array.isArray(req.body?.subscribedFields)
+        ? req.body.subscribedFields.map(String).map((s) => s.trim()).filter(Boolean)
+        : ["messages", "messaging_postbacks"];
+
+      if (!pageId) return res.status(400).json({ error: "pageId_required" });
+      if (!pageAccessToken) return res.status(400).json({ error: "pageAccessToken_required" });
+
+      // 1) valida token (garante que pertence à página e tem permissão)
+      const validateUrl =
+        `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}` +
+        `?fields=id,name` +
+        `&access_token=${encodeURIComponent(pageAccessToken)}`;
+
+      const v = await fetch(validateUrl, { method: "GET" });
+      const vj = await v.json().catch(() => ({}));
+
+      if (!v.ok || !vj?.id) {
+        logger.warn({ status: v.status, meta: vj?.error || vj, tenantId, pageId }, "❌ Messenger connect validate failed");
+        return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
+      }
+
+      const displayName = String(vj?.name || "Facebook Page").trim();
+
+      // 2) inscreve o app na página (subscribed_apps) — essencial p/ receber eventos
+      const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
+        pageId
+      )}/subscribed_apps`;
+
+      const subRes = await graphPostJson(subUrl, pageAccessToken, {
+        subscribed_fields: subscribedFields
+      });
+
+      if (!subRes.ok) {
+        logger.warn({ status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId }, "❌ Messenger subscribe failed");
+        return res.status(400).json({
+          error: "meta_subscribe_failed",
+          meta: subRes.data?.error || subRes.data
+        });
+      }
+
+      // 3) salva no ChannelConfig (colunas first-class + config auxiliar)
+      const current = await prisma.channelConfig.findUnique({
+        where: { tenantId_channel: { tenantId, channel: "messenger" } }
+      });
+
+      const mergedConfig = {
+        ...(current?.config || {}),
+        subscribedFields,
+        connectedAt: new Date().toISOString(),
+        graphVersion: META_GRAPH_VERSION
+      };
+
+      const updated = await prisma.channelConfig.upsert({
+        where: { tenantId_channel: { tenantId, channel: "messenger" } },
+        update: {
+          enabled: true,
+          status: "connected",
+          pageId,
+          accessToken: pageAccessToken,
+          displayName,
+          config: mergedConfig,
+          updatedAt: new Date()
+        },
+        create: {
+          tenantId,
+          channel: "messenger",
+          enabled: true,
+          status: "connected",
+          widgetKey: null,
+          pageId,
+          accessToken: pageAccessToken,
+          displayName,
+          config: mergedConfig
+        }
+      });
+
+      return res.json({ ok: true, messenger: shapeChannel(updated) });
+    } catch (e) {
+      logger.error({ err: e }, "❌ POST /settings/channels/messenger/connect");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// DELETE /settings/channels/messenger (disconnect)
+router.delete(
+  "/messenger",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const current = await prisma.channelConfig.findUnique({
+        where: { tenantId_channel: { tenantId, channel: "messenger" } }
+      });
+
+      const updated = await prisma.channelConfig.upsert({
+        where: { tenantId_channel: { tenantId, channel: "messenger" } },
+        update: {
+          enabled: false,
+          status: "disconnected",
+          pageId: null,
+          accessToken: null,
+          displayName: null,
+          config: {
+            ...(current?.config || {}),
+            disconnectedAt: new Date().toISOString()
+          },
+          updatedAt: new Date()
+        },
+        create: {
+          tenantId,
+          channel: "messenger",
+          enabled: false,
+          status: "disconnected",
+          widgetKey: null,
+          pageId: null,
+          accessToken: null,
+          displayName: null,
+          config: { disconnectedAt: new Date().toISOString() }
+        }
+      });
+
+      return res.json({ ok: true, messenger: shapeChannel(updated) });
+    } catch (e) {
+      logger.error({ err: e }, "❌ DELETE /settings/channels/messenger");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// ======================================================
 // WHATSAPP Embedded Signup
 // ======================================================
 router.post(
@@ -368,23 +610,7 @@ async function exchangeCodeForToken({ appId, appSecret, code, redirectUri }) {
   return fetch(url, { method: "GET" }).then((r) => r.json());
 }
 
-async function graphGetJson(url, accessToken) {
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
-  const raw = await resp.text().catch(() => "");
-  let data = {};
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    data = { raw };
-  }
-  return { ok: resp.ok, status: resp.status, data, raw };
-}
-
 async function fetchWabaAndPhoneNumber({ accessToken }) {
-  // ✅ preferir BUSINESS_ID do env; se não tiver, não bloqueia conexão
   const businessId = optionalEnv("META_BUSINESS_ID");
   if (!businessId) return { ok: false, reason: "META_BUSINESS_ID_not_set" };
 
@@ -459,13 +685,9 @@ router.post(
         });
       }
 
-      // ✅ Sync IDs (WABA + Phone Number) — best effort
       const sync = await fetchWabaAndPhoneNumber({ accessToken: tokenRes.access_token });
       if (!sync.ok) {
-        logger.warn(
-          { sync },
-          "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)"
-        );
+        logger.warn({ sync }, "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)");
       } else {
         logger.info(
           {
@@ -477,7 +699,6 @@ router.post(
         );
       }
 
-      // ✅ mantém compatibilidade + adiciona campos novos
       const newConfig = {
         accessToken: tokenRes.access_token,
         tokenType: tokenRes.token_type || null,
@@ -485,7 +706,6 @@ router.post(
         redirectUriUsed: redirectUri,
         connectedAt: new Date().toISOString(),
 
-        // ids úteis pro runtime do webhook/router
         businessId: sync.ok ? sync.businessId : null,
         wabaId: sync.ok ? sync.wabaId : null,
         phoneNumberId: sync.ok ? sync.phoneNumberId : null,
@@ -494,11 +714,19 @@ router.post(
         apiVersion: "v19.0"
       };
 
+      // ✅ mantém compatibilidade + adiciona colunas novas (se existirem no schema)
       await prisma.channelConfig.upsert({
         where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
         update: {
           enabled: true,
           status: "connected",
+          // colunas novas (não quebram se já estiverem no schema)
+          accessToken: tokenRes.access_token,
+          wabaId: sync.ok ? sync.wabaId : null,
+          phoneNumberId: sync.ok ? sync.phoneNumberId : null,
+          displayPhoneNumber: sync.ok ? sync.displayPhoneNumber : null,
+          displayName: sync.ok ? sync.verifiedName : null,
+          // mantém config
           config: newConfig,
           updatedAt: new Date()
         },
@@ -508,6 +736,11 @@ router.post(
           enabled: true,
           status: "connected",
           widgetKey: null,
+          accessToken: tokenRes.access_token,
+          wabaId: sync.ok ? sync.wabaId : null,
+          phoneNumberId: sync.ok ? sync.phoneNumberId : null,
+          displayPhoneNumber: sync.ok ? sync.displayPhoneNumber : null,
+          displayName: sync.ok ? sync.verifiedName : null,
           config: newConfig
         }
       });
@@ -546,6 +779,11 @@ router.delete(
         data: {
           enabled: false,
           status: "disconnected",
+          accessToken: null,
+          wabaId: null,
+          phoneNumberId: null,
+          displayPhoneNumber: null,
+          displayName: null,
           config: {},
           updatedAt: new Date()
         }

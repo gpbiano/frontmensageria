@@ -10,7 +10,12 @@ import {
   // ✅ WhatsApp Embedded Signup
   startWhatsAppEmbeddedSignup,
   finishWhatsAppEmbeddedSignup,
-  disconnectWhatsAppChannel
+  disconnectWhatsAppChannel,
+
+  // ✅ Messenger (Settings UI)
+  listMessengerPages,
+  connectMessengerChannel,
+  disconnectMessengerChannel
 } from "../../api"; // SettingsChannelsPage.jsx está em src/settings → api está em src/api
 
 /**
@@ -26,6 +31,11 @@ import {
  * - POST   /settings/channels/whatsapp/start
  * - POST   /settings/channels/whatsapp/callback
  * - DELETE /settings/channels/whatsapp
+ *
+ * Messenger (self-service):
+ * - POST   /settings/channels/messenger/pages
+ * - POST   /settings/channels/messenger/connect
+ * - DELETE /settings/channels/messenger
  */
 
 function Pill({ variant, children }) {
@@ -134,21 +144,21 @@ function normalizeChannelStatus(raw) {
 }
 
 function unwrapChannelsResponse(data) {
-  // aceita:
-  // - { channels: { webchat: {...}, whatsapp: {...} } }
-  // - { webchat: {...}, whatsapp: {...} }
-  // - { channels: [...] } (se um dia vier array)
   if (!data) return {};
   if (data.channels && typeof data.channels === "object" && !Array.isArray(data.channels)) {
     return data.channels;
   }
-  if (data.webchat || data.whatsapp) return data;
+  if (data.webchat || data.whatsapp || data.messenger) return data;
   if (data.channels && Array.isArray(data.channels)) {
     const out = {};
     for (const row of data.channels) out[row.channel] = row;
     return out;
   }
   return data;
+}
+
+function safeArr(x) {
+  return Array.isArray(x) ? x : [];
 }
 
 export default function SettingsChannelsPage() {
@@ -174,6 +184,15 @@ export default function SettingsChannelsPage() {
   const [waDebug, setWaDebug] = useState(null);
   const [waErr, setWaErr] = useState("");
 
+  // ✅ Messenger state
+  const [msModalOpen, setMsModalOpen] = useState(false);
+  const [msConnecting, setMsConnecting] = useState(false);
+  const [msErr, setMsErr] = useState("");
+  const [msUserToken, setMsUserToken] = useState("");
+  const [msPages, setMsPages] = useState([]);
+  const [msSelectedPageId, setMsSelectedPageId] = useState("");
+  const [msSubFields, setMsSubFields] = useState("messages,messaging_postbacks");
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -194,6 +213,7 @@ export default function SettingsChannelsPage() {
 
   const webchat = channelsState?.webchat || null;
   const whatsapp = channelsState?.whatsapp || null;
+  const messenger = channelsState?.messenger || null;
 
   async function loadChannels() {
     setLoading(true);
@@ -228,7 +248,6 @@ export default function SettingsChannelsPage() {
     const position = cfg.position === "left" ? "left" : "right";
     const primaryColor = cfg.primaryColor || cfg.color || "#34d399";
 
-    // ✅ allowedOrigins vive no config (backend)
     const allowedOriginsFromCfg = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
 
     setWebchatDraft({
@@ -406,8 +425,6 @@ export default function SettingsChannelsPage() {
 
   // ===============================
   // ✅ WhatsApp Embedded Signup actions (FIX DEFINITIVO)
-  // - NÃO usa FB.login()
-  // - Abre o dialog/oauth diretamente
   // ===============================
   async function connectWhatsApp() {
     setWaErr("");
@@ -427,7 +444,6 @@ export default function SettingsChannelsPage() {
         throw new Error("Resposta inválida do backend (appId/state/redirectUri).");
       }
 
-      // ✅ OAuth dialog (usa EXACT redirect_uri do backend)
       const params = new URLSearchParams({
         client_id: String(appId),
         redirect_uri: redirectUri,
@@ -436,7 +452,6 @@ export default function SettingsChannelsPage() {
         scope: scopes.join(",")
       });
 
-      // ⚠️ NÃO usar FB.login aqui (gera code incompatível -> 36008)
       window.location.href = `https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
@@ -445,16 +460,12 @@ export default function SettingsChannelsPage() {
     }
   }
 
-  // ✅ Se você fizer o redirect para /settings/channels,
-  // podemos finalizar automaticamente lendo ?code&state (opcional).
-  // Mantém o "finishWhatsAppEmbeddedSignup" para o caso do seu backend exigir POST.
   useEffect(() => {
     try {
       const url = new URL(window.location.href);
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
 
-      // quando o Meta retorna erro, ele costuma vir com error/error_message
       const err = url.searchParams.get("error");
       const errDesc =
         url.searchParams.get("error_description") || url.searchParams.get("error_message");
@@ -472,7 +483,6 @@ export default function SettingsChannelsPage() {
           await finishWhatsAppEmbeddedSignup({ code, state });
           await loadChannels();
 
-          // limpa querystring pra não repetir ao recarregar
           url.searchParams.delete("code");
           url.searchParams.delete("state");
           url.searchParams.delete("error");
@@ -517,6 +527,115 @@ export default function SettingsChannelsPage() {
     } finally {
       if (!mountedRef.current) return;
       setWaConnecting(false);
+    }
+  }
+
+  // ===============================
+  // ✅ Messenger actions (self-service)
+  // ===============================
+  const msStatus = normalizeChannelStatus(messenger?.status);
+  const msIsConnected = msStatus === "connected" || messenger?.enabled === true;
+  const messengerVariant = msIsConnected ? "on" : "off";
+
+  function messengerLabel() {
+    if (msIsConnected) return "Conectado";
+    if (msStatus === "disabled") return "Desativado";
+    if (msStatus === "disconnected") return "Desconectado";
+    return "Não conectado";
+  }
+
+  function openMessengerModal() {
+    setMsErr("");
+    setMsPages([]);
+    setMsSelectedPageId("");
+    setMsUserToken("");
+    setMsSubFields("messages,messaging_postbacks");
+    setMsModalOpen(true);
+  }
+
+  async function loadMessengerPages() {
+    setMsErr("");
+    setMsConnecting(true);
+    try {
+      const token = String(msUserToken || "").trim();
+      if (!token) throw new Error("Cole o User Access Token (curto) para listar páginas.");
+
+      const res = await listMessengerPages({ userAccessToken: token });
+      const pages = safeArr(res?.pages).filter((p) => p?.id && p?.pageAccessToken);
+
+      if (!mountedRef.current) return;
+
+      setMsPages(pages);
+      if (pages.length === 1) setMsSelectedPageId(String(pages[0].id));
+      if (!pages.length) setMsErr("Nenhuma página retornada. Verifique permissões do token.");
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setMsErr(e?.message || String(e));
+      setMsPages([]);
+    } finally {
+      if (!mountedRef.current) return;
+      setMsConnecting(false);
+    }
+  }
+
+  async function connectMessenger() {
+    setMsErr("");
+    setMsConnecting(true);
+
+    try {
+      const pageId = String(msSelectedPageId || "").trim();
+      if (!pageId) throw new Error("Selecione uma página.");
+
+      const selected = msPages.find((p) => String(p.id) === pageId);
+      const pageAccessToken = String(selected?.pageAccessToken || "").trim();
+      if (!pageAccessToken) throw new Error("Token da página ausente (recarregue as páginas).");
+
+      const subscribedFields = String(msSubFields || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      await connectMessengerChannel({
+        pageId,
+        pageAccessToken,
+        subscribedFields
+      });
+
+      await loadChannels();
+
+      if (!mountedRef.current) return;
+      setToast("Messenger conectado com sucesso.");
+      setTimeout(() => mountedRef.current && setToast(""), 2000);
+      setMsModalOpen(false);
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setMsErr(e?.message || String(e));
+    } finally {
+      if (!mountedRef.current) return;
+      setMsConnecting(false);
+    }
+  }
+
+  async function disconnectMessenger() {
+    const ok = confirm("Deseja desconectar o Messenger deste tenant?");
+    if (!ok) return;
+
+    setMsErr("");
+    setMsConnecting(true);
+
+    try {
+      await disconnectMessengerChannel();
+      await loadChannels();
+
+      if (!mountedRef.current) return;
+      setToast("Messenger desconectado.");
+      setTimeout(() => mountedRef.current && setToast(""), 2000);
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setMsErr(e?.message || String(e));
+    } finally {
+      if (!mountedRef.current) return;
+      setMsConnecting(false);
     }
   }
 
@@ -652,14 +771,73 @@ export default function SettingsChannelsPage() {
           </div>
 
           {/* Messenger */}
-          <div className="settings-channel-card" style={{ opacity: 0.8 }}>
+          <div className="settings-channel-card">
             <div className="settings-channel-header">
               <span className="settings-channel-title">Messenger</span>
-              <Pill variant="soon">Em breve</Pill>
+              <Pill variant={messengerVariant}>{messengerLabel()}</Pill>
             </div>
+
             <p className="settings-channel-description">
               Integração com a caixa de mensagens da sua página do Facebook.
             </p>
+
+            {!!msErr && (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(248,113,113,.35)",
+                  background: "rgba(248,113,113,.10)",
+                  color: "#fecaca",
+                  fontSize: 12
+                }}
+              >
+                {msErr}
+              </div>
+            )}
+
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {!msIsConnected ? (
+                <button
+                  className="settings-primary-btn"
+                  onClick={openMessengerModal}
+                  disabled={msConnecting}
+                >
+                  {msConnecting ? "..." : "Conectar Messenger"}
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="settings-primary-btn"
+                    onClick={openMessengerModal}
+                    disabled={msConnecting}
+                  >
+                    Detalhes
+                  </button>
+                  <button
+                    className="settings-primary-btn"
+                    style={{ opacity: 0.9 }}
+                    onClick={disconnectMessenger}
+                    disabled={msConnecting}
+                  >
+                    {msConnecting ? "..." : "Desconectar"}
+                  </button>
+                </>
+              )}
+            </div>
+
+            {msIsConnected && (messenger?.displayName || messenger?.pageId) && (
+              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.9 }}>
+                <div>
+                  <b>Página:</b> {messenger?.displayName || "—"}
+                </div>
+                <div>
+                  <b>pageId:</b>{" "}
+                  <code style={{ opacity: 0.9 }}>{messenger?.pageId || "—"}</code>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Instagram */}
@@ -707,25 +885,6 @@ export default function SettingsChannelsPage() {
             <b>Status:</b> {waIsConnected ? "Conectado" : whatsappLabel()}
           </div>
 
-          {!!whatsapp?.config?.businessName && (
-            <div>
-              <b>Empresa:</b> {whatsapp.config.businessName}
-            </div>
-          )}
-
-          {!!whatsapp?.config?.phoneNumber && (
-            <div>
-              <b>Número:</b> {whatsapp.config.phoneNumber}
-            </div>
-          )}
-
-          {!!whatsapp?.config?.phoneNumberId && (
-            <div>
-              <b>phoneNumberId:</b>{" "}
-              <code style={{ opacity: 0.9 }}>{whatsapp.config.phoneNumberId}</code>
-            </div>
-          )}
-
           {!!whatsapp?.updatedAt && (
             <div>
               <b>Atualizado em:</b> {new Date(whatsapp.updatedAt).toLocaleString()}
@@ -748,6 +907,131 @@ export default function SettingsChannelsPage() {
               >
                 {JSON.stringify(waDebug, null, 2)}
               </pre>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* ✅ Modal Messenger */}
+      <Modal
+        open={msModalOpen}
+        title={msIsConnected ? "Messenger — Detalhes" : "Conectar Messenger"}
+        onClose={() => setMsModalOpen(false)}
+      >
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.9 }}>
+            <div>
+              <b>Status:</b> {msIsConnected ? "Conectado" : messengerLabel()}
+            </div>
+            {msIsConnected && (
+              <>
+                <div style={{ marginTop: 6 }}>
+                  <b>Página:</b> {messenger?.displayName || "—"}
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  <b>pageId:</b> <code>{messenger?.pageId || "—"}</code>
+                </div>
+              </>
+            )}
+          </div>
+
+          {!msIsConnected && (
+            <>
+              <div>
+                <div style={labelStyle()}>User Access Token (curto) — para listar páginas</div>
+                <input
+                  style={fieldStyle()}
+                  value={msUserToken}
+                  onChange={(e) => setMsUserToken(e.target.value)}
+                  placeholder="Cole aqui o token do usuário (Meta)"
+                />
+                <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    className="settings-primary-btn"
+                    onClick={loadMessengerPages}
+                    disabled={msConnecting}
+                  >
+                    {msConnecting ? "Carregando..." : "Listar páginas"}
+                  </button>
+                </div>
+                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+                  Dica: gere o token no Graph API Explorer com permissões adequadas (padrão do seu app).
+                </div>
+              </div>
+
+              <div>
+                <div style={labelStyle()}>Página</div>
+                <select
+                  style={fieldStyle()}
+                  value={msSelectedPageId}
+                  onChange={(e) => setMsSelectedPageId(e.target.value)}
+                  disabled={!msPages.length}
+                >
+                  <option value="">Selecione…</option>
+                  {msPages.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <div style={labelStyle()}>Eventos (subscribed_fields)</div>
+                <input
+                  style={fieldStyle()}
+                  value={msSubFields}
+                  onChange={(e) => setMsSubFields(e.target.value)}
+                  placeholder="messages,messaging_postbacks"
+                />
+              </div>
+
+              {!!msErr && (
+                <div
+                  style={{
+                    marginTop: 2,
+                    padding: "10px 12px",
+                    borderRadius: 12,
+                    border: "1px solid rgba(248,113,113,.35)",
+                    background: "rgba(248,113,113,.10)",
+                    color: "#fecaca",
+                    fontSize: 12
+                  }}
+                >
+                  {msErr}
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  className="settings-primary-btn"
+                  style={{ opacity: 0.85 }}
+                  onClick={() => setMsModalOpen(false)}
+                  disabled={msConnecting}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="settings-primary-btn"
+                  onClick={connectMessenger}
+                  disabled={msConnecting || !msSelectedPageId}
+                >
+                  {msConnecting ? "Conectando..." : "Conectar"}
+                </button>
+              </div>
+            </>
+          )}
+
+          {msIsConnected && (
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                className="settings-primary-btn"
+                style={{ opacity: 0.9 }}
+                onClick={disconnectMessenger}
+                disabled={msConnecting}
+              >
+                {msConnecting ? "..." : "Desconectar"}
+              </button>
             </div>
           )}
         </div>
