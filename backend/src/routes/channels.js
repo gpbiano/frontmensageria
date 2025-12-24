@@ -28,40 +28,74 @@ function newWidgetKey() {
   return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
-function stripTrailingSlash(url) {
-  return String(url || "").replace(/\/+$/, "");
+// ======================================================
+// STATE (anti-CSRF) — BASE64URL (sem + e /)
+// ======================================================
+function toBase64Url(b64) {
+  return String(b64).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-// ======================================================
-// STATE (anti-CSRF)
-// ======================================================
+function fromBase64Any(input) {
+  // Aceita base64 e base64url e tolera " " no lugar de "+"
+  let s = String(input || "").trim();
+  if (!s) return "";
+
+  s = s.replace(/ /g, "+"); // caso algum caminho tenha trocado + por espaço
+  s = s.replace(/-/g, "+").replace(/_/g, "/"); // base64url -> base64
+
+  // repõe padding
+  const pad = s.length % 4;
+  if (pad === 2) s += "==";
+  else if (pad === 3) s += "=";
+  else if (pad === 1) {
+    // inválido, mas vamos tentar mesmo assim
+    s += "===";
+  }
+
+  try {
+    return Buffer.from(s, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
 function signState(payload) {
   const raw = JSON.stringify(payload);
+
   const sig = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
-  return Buffer.from(`${raw}.${sig}`).toString("base64");
-}
 
-function decodeBase64Compat(state) {
-  const s = String(state || "").trim().replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(s, "base64").toString("utf8");
+  const token = Buffer.from(`${raw}.${sig}`).toString("base64");
+  return toBase64Url(token);
 }
 
 function verifyState(state) {
-  const decoded = decodeBase64Compat(state);
-  const [raw, sig] = decoded.split(".");
+  const decoded = fromBase64Any(state);
+  const idx = decoded.lastIndexOf(".");
+  if (idx <= 0) throw new Error("invalid_state");
+
+  const raw = decoded.slice(0, idx);
+  const sig = decoded.slice(idx + 1);
+
+  if (!raw || !sig) throw new Error("invalid_state");
+
   const expected = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
 
-  if (!raw || !sig) throw new Error("invalid_state");
-  if (sig !== expected) throw new Error("invalid_state");
+  // timing-safe compare
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    throw new Error("invalid_state");
+  }
 
   const payload = JSON.parse(raw);
 
+  // expira em 10 min
   const ts = Number(payload?.ts || 0);
   if (ts && Date.now() - ts > 10 * 60 * 1000) throw new Error("invalid_state");
 
@@ -69,27 +103,15 @@ function verifyState(state) {
 }
 
 // ======================================================
-// Normalização de saída (compat com o front)
-// - allowedOrigins fica dentro de config no banco
-// - mas devolvemos também allowedOrigins no root (pro front)
+// Normalização de saída
 // ======================================================
 function shapeChannel(c) {
   if (!c) return null;
-
-  const cfg = c.config || {};
-  const allowedOrigins = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
-
   return {
     enabled: !!c.enabled,
     status: c.status,
     widgetKey: c.widgetKey || null,
-
-    // ✅ compat: seu front usa webchat.allowedOrigins
-    allowedOrigins,
-
-    // ✅ sempre existe
-    config: cfg,
-
+    config: c.config || {},
     updatedAt: c.updatedAt
   };
 }
@@ -102,22 +124,11 @@ function shapeChannels(list) {
 
 // ======================================================
 // Redirect URI (SINGLE SOURCE OF TRUTH)
-// ✅ SEM fallback do facebook
-// ✅ padroniza sem trailing slash para evitar mismatch
 // ======================================================
 function getMetaOAuthRedirectUri() {
-  // Use a SUA env real (mantive seu nome, mas sem fallback perigoso)
-  // Se você preferir, pode renomear para META_EMBEDDED_REDIRECT_URI,
-  // mas aqui vamos respeitar META_OAUTH_REDIRECT_URI.
-  const raw = String(process.env.META_OAUTH_REDIRECT_URI || "").trim();
-
-  if (!raw) {
-    // 👇 importante: sem fallback aqui, porque causa erro 191
-    throw new Error("META_OAUTH_REDIRECT_URI não configurado");
-  }
-
-  // padroniza sem slash final (start e callback idênticos)
-  return stripTrailingSlash(raw);
+  const v = String(process.env.META_OAUTH_REDIRECT_URI || "").trim();
+  if (!v) throw new Error("META_OAUTH_REDIRECT_URI não configurado");
+  return v;
 }
 
 // ======================================================
@@ -152,7 +163,6 @@ router.get(
                   buttonText: "Ajuda",
                   headerTitle: "Atendimento",
                   greeting: "Olá! Como posso ajudar?",
-                  // ✅ fica no JSON config
                   allowedOrigins: []
                 }
               : {}
@@ -160,10 +170,8 @@ router.get(
         });
       }
 
-      const rows = await prisma.channelConfig.findMany({ where: { tenantId } });
-
-      // ✅ retorno compat com o front: { channels: { webchat:..., whatsapp:... } }
-      return res.json({ channels: shapeChannels(rows) });
+      const channels = await prisma.channelConfig.findMany({ where: { tenantId } });
+      return res.json({ channels: shapeChannels(channels) });
     } catch (e) {
       logger.error({ err: e }, "❌ GET /settings/channels");
       return res.status(500).json({ error: "internal_error" });
@@ -201,7 +209,6 @@ router.patch(
         ...(cfg || {})
       };
 
-      // ✅ sempre guarda allowedOrigins dentro de config
       if (allowedOrigins) mergedConfig.allowedOrigins = allowedOrigins;
       if (typeof sessionTtlSeconds === "number") mergedConfig.sessionTtlSeconds = sessionTtlSeconds;
 
@@ -353,8 +360,7 @@ router.post(
       const appId = requireEnv("META_APP_ID");
       const redirectUri = getMetaOAuthRedirectUri();
 
-      // ✅ guarda redirectUri no state (callback usa o MESMO)
-      const state = signState({ tenantId, ts: Date.now(), redirectUri });
+      const state = signState({ tenantId, ts: Date.now() });
 
       logger.info({ tenantId, redirectUri }, "🟢 WhatsApp Embedded Signup start");
 
@@ -395,19 +401,20 @@ router.post(
       const appId = requireEnv("META_APP_ID");
       const appSecret = requireEnv("META_APP_SECRET");
 
-      const parsedState = verifyState(state);
+      let parsedState;
+      try {
+        parsedState = verifyState(state);
+      } catch (e) {
+        // ✅ inválido = 400 (não 500)
+        return res.status(400).json({ error: "invalid_state" });
+      }
+
       const tenantId = String(parsedState?.tenantId || "").trim();
-      const redirectUri = String(parsedState?.redirectUri || "").trim();
+      if (!tenantId) return res.status(400).json({ error: "invalid_state" });
 
-      if (!tenantId || !redirectUri) return res.status(400).json({ error: "invalid_state" });
+      const redirectUri = getMetaOAuthRedirectUri();
 
-      logger.info(
-        {
-          tenantId,
-          redirectUri
-        },
-        "🟡 WhatsApp callback: exchanging code"
-      );
+      logger.info({ tenantId, redirectUri }, "🟡 WhatsApp callback: exchanging code");
 
       const tokenRes = await exchangeCodeForToken({
         appId,
