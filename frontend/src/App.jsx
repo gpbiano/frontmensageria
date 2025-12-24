@@ -75,8 +75,7 @@ const SIDEBAR_LS_COLLAPSED = "gp.sidebar.collapsed";
 const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
 
 // ✅ Help Portal
-const HELP_PORTAL_URL =
-  "https://gplabs.atlassian.net/servicedesk/customer/portals";
+const HELP_PORTAL_URL = "https://gplabs.atlassian.net/servicedesk/customer/portals";
 
 /* ==========================================================
    AUTH HELPERS
@@ -287,7 +286,7 @@ function PlatformShell({ onLogout }) {
   useEffect(() => {
     const t = (getStoredAuthToken() || "").trim();
     if (!t) onLogout?.();
-  });
+  }, [onLogout]);
 
   // ✅ Empresa (mock)
   const companyName = "Grupo GP Participações";
@@ -439,9 +438,7 @@ function PlatformShell({ onLogout }) {
 
                 <div className="gp-dd-item is-muted">
                   {userDisplayName}
-                  <div className="gp-dd-sub">
-                    {userEmail ? userEmail : "Perfil do usuário"}
-                  </div>
+                  <div className="gp-dd-sub">{userEmail ? userEmail : "Perfil do usuário"}</div>
                 </div>
 
                 <div className="gp-dd-sep" />
@@ -477,9 +474,7 @@ function PlatformShell({ onLogout }) {
       <div className="app-body">
         {/* SIDEBAR */}
         <nav
-          className={
-            "app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")
-          }
+          className={"app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")}
           style={{ width: collapsed ? 76 : 320 }}
         >
           <button
@@ -501,8 +496,7 @@ function PlatformShell({ onLogout }) {
                 <button
                   type="button"
                   className={
-                    "sidebar-item-header" +
-                    (isActive ? " sidebar-item-header-active" : "")
+                    "sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")
                   }
                   onClick={() => handleHeaderClick(section.id)}
                   title={collapsed ? section.label : undefined}
@@ -512,17 +506,11 @@ function PlatformShell({ onLogout }) {
                       <SectionIcon size={18} />
                     </span>
 
-                    {!collapsed && (
-                      <span className="sb-label">{section.label}</span>
-                    )}
+                    {!collapsed && <span className="sb-label">{section.label}</span>}
                   </span>
 
                   {!collapsed && (
-                    <span
-                      className={
-                        "sidebar-item-chevron" + (isOpen ? " open" : "")
-                      }
-                    >
+                    <span className={"sidebar-item-chevron" + (isOpen ? " open" : "")}>
                       <ChevronDown size={16} />
                     </span>
                   )}
@@ -539,10 +527,7 @@ function PlatformShell({ onLogout }) {
                         <button
                           type="button"
                           key={item.id}
-                          className={
-                            "sidebar-link" +
-                            (isItemActive ? " sidebar-link-active" : "")
-                          }
+                          className={"sidebar-link" + (isItemActive ? " sidebar-link-active" : "")}
                           onClick={() => handleItemClick(section.id, item.id)}
                         >
                           <span className="sb-sub-ic">
@@ -613,9 +598,27 @@ function SectionRenderer({ main, sub, goTo }) {
   }
 
   if (main === "campanhas") {
-    if (sub === "reportes") return <div className="page-full"><CampaignsAnalyticsPage /></div>;
-    if (sub === "campanhas") return <div className="page-full"><CampaignsLegacyPage /></div>;
-    if (sub === "sms") return <div className="page-full"><SmsCampaignsPage /></div>;
+    if (sub === "reportes")
+      return (
+        <div className="page-full">
+          <CampaignsAnalyticsPage />
+        </div>
+      );
+
+    if (sub === "campanhas")
+      return (
+        <div className="page-full">
+          <CampaignsLegacyPage />
+        </div>
+      );
+
+    if (sub === "sms")
+      return (
+        <div className="page-full">
+          <SmsCampaignsPage />
+        </div>
+      );
+
     if (sub === "nova") {
       return (
         <div className="page-full">
@@ -633,17 +636,57 @@ function SectionRenderer({ main, sub, goTo }) {
         </div>
       );
     }
-    if (sub === "templates") return <div className="page-full"><TemplatesPage /></div>;
-    if (sub === "numeros") return <div className="page-full"><NumbersPage /></div>;
-    if (sub === "arquivos") return <div className="page-full"><AssetsPage /></div>;
-    if (sub === "optout") return <div className="page-full"><OptOutPage /></div>;
 
-    return <Placeholder title={`Campanhas · ${subSectionLabel(sub)}`} text="Seção em construção." />;
+    if (sub === "templates")
+      return (
+        <div className="page-full">
+          <TemplatesPage />
+        </div>
+      );
+
+    if (sub === "numeros")
+      return (
+        <div className="page-full">
+          <NumbersPage />
+        </div>
+      );
+
+    if (sub === "arquivos")
+      return (
+        <div className="page-full">
+          <AssetsPage />
+        </div>
+      );
+
+    if (sub === "optout")
+      return (
+        <div className="page-full">
+          <OptOutPage />
+        </div>
+      );
+
+    return (
+      <Placeholder
+        title={`Campanhas · ${subSectionLabel(sub)}`}
+        text="Seção em construção."
+      />
+    );
   }
 
   if (main === "configuracoes") {
-    if (sub === "canais") return <div className="page-full"><SettingsChannelsPage /></div>;
-    if (sub === "usuarios") return <div className="page-full"><SettingsUsersPage /></div>;
+    if (sub === "canais")
+      return (
+        <div className="page-full">
+          <SettingsChannelsPage />
+        </div>
+      );
+
+    if (sub === "usuarios")
+      return (
+        <div className="page-full">
+          <SettingsUsersPage />
+        </div>
+      );
 
     return (
       <Placeholder
