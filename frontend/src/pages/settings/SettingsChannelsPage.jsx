@@ -123,57 +123,6 @@ function normalizeOriginLines(text) {
     .map((o) => o.replace(/\/+$/, ""));
 }
 
-// ===============================
-// ✅ WhatsApp Embedded Signup helpers
-// ===============================
-
-function loadFacebookSdk(appId) {
-  return new Promise((resolve, reject) => {
-    try {
-      if (window.FB) return resolve(window.FB);
-
-      if (document.getElementById("facebook-jssdk")) {
-        const t0 = Date.now();
-        const timer = setInterval(() => {
-          if (window.FB) {
-            clearInterval(timer);
-            resolve(window.FB);
-          } else if (Date.now() - t0 > 15000) {
-            clearInterval(timer);
-            reject(new Error("FB SDK timeout"));
-          }
-        }, 150);
-        return;
-      }
-
-      window.fbAsyncInit = function () {
-        try {
-          window.FB.init({
-            appId,
-            cookie: true,
-            xfbml: false,
-            version: "v19.0"
-          });
-          resolve(window.FB);
-        } catch (e) {
-          reject(e);
-        }
-      };
-
-      const s = document.createElement("script");
-      s.id = "facebook-jssdk";
-      s.async = true;
-      s.defer = true;
-      s.crossOrigin = "anonymous";
-      s.src = "https://connect.facebook.net/en_US/sdk.js";
-      s.onerror = () => reject(new Error("Falha ao carregar FB SDK"));
-      document.head.appendChild(s);
-    } catch (e) {
-      reject(e);
-    }
-  });
-}
-
 function normalizeChannelStatus(raw) {
   const s = String(raw || "").toLowerCase();
   if (!s) return "not_connected";
@@ -279,7 +228,7 @@ export default function SettingsChannelsPage() {
     const position = cfg.position === "left" ? "left" : "right";
     const primaryColor = cfg.primaryColor || cfg.color || "#34d399";
 
-    // ✅ allowedOrigins agora vive no config (backend)
+    // ✅ allowedOrigins vive no config (backend)
     const allowedOriginsFromCfg = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
 
     setWebchatDraft({
@@ -456,9 +405,10 @@ export default function SettingsChannelsPage() {
   const embedSnippet = snippet || embedFallbackFromDraft();
 
   // ===============================
-  // ✅ WhatsApp Embedded Signup actions
+  // ✅ WhatsApp Embedded Signup actions (FIX DEFINITIVO)
+  // - NÃO usa FB.login()
+  // - Abre o dialog/oauth diretamente
   // ===============================
-
   async function connectWhatsApp() {
     setWaErr("");
     setWaDebug(null);
@@ -469,11 +419,7 @@ export default function SettingsChannelsPage() {
 
       const appId = start?.appId;
       const state = start?.state;
-
-      // ⚠️ NÃO normalize / NÃO inventa candidate:
-      // usa exatamente o que backend retornou
       const redirectUri = String(start?.redirectUri || "").trim();
-
       const scopes =
         start?.scopes || ["whatsapp_business_messaging", "business_management"];
 
@@ -481,53 +427,75 @@ export default function SettingsChannelsPage() {
         throw new Error("Resposta inválida do backend (appId/state/redirectUri).");
       }
 
-      const FB = await loadFacebookSdk(appId);
+      // ✅ OAuth dialog (usa EXACT redirect_uri do backend)
+      const params = new URLSearchParams({
+        client_id: String(appId),
+        redirect_uri: redirectUri,
+        state: String(state),
+        response_type: "code",
+        scope: scopes.join(",")
+      });
 
-      FB.login(
-        (response) => {
-          (async () => {
-            try {
-              if (!response?.authResponse) {
-                throw new Error("Usuário cancelou ou não autorizou.");
-              }
-
-              const code = response.authResponse.code;
-              if (!code) {
-                throw new Error("Meta não retornou 'code'.");
-              }
-
-              await finishWhatsAppEmbeddedSignup({ code, state });
-              await loadChannels();
-
-              if (!mountedRef.current) return;
-              setToast("WhatsApp conectado com sucesso.");
-              setTimeout(() => mountedRef.current && setToast(""), 2000);
-            } catch (e) {
-              if (!mountedRef.current) return;
-              setWaErr(e?.message || String(e));
-              setWaDebug(response || null);
-            } finally {
-              if (!mountedRef.current) return;
-              setWaConnecting(false);
-            }
-          })();
-        },
-        {
-          scope: scopes.join(","),
-          return_scopes: true,
-          response_type: "code",
-          override_default_response_type: true,
-
-          // ✅ TEM que ser idêntico ao backend
-          redirect_uri: redirectUri
-        }
-      );
+      // ⚠️ NÃO usar FB.login aqui (gera code incompatível -> 36008)
+      window.location.href = `https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
       setWaErr(e?.message || String(e));
       setWaConnecting(false);
     }
   }
+
+  // ✅ Se você fizer o redirect para /settings/channels,
+  // podemos finalizar automaticamente lendo ?code&state (opcional).
+  // Mantém o "finishWhatsAppEmbeddedSignup" para o caso do seu backend exigir POST.
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+      const state = url.searchParams.get("state");
+
+      // quando o Meta retorna erro, ele costuma vir com error/error_message
+      const err = url.searchParams.get("error");
+      const errDesc =
+        url.searchParams.get("error_description") || url.searchParams.get("error_message");
+
+      if (err && !waErr) {
+        setWaErr(String(errDesc || err));
+        return;
+      }
+
+      if (!code || !state) return;
+
+      (async () => {
+        try {
+          setWaConnecting(true);
+          await finishWhatsAppEmbeddedSignup({ code, state });
+          await loadChannels();
+
+          // limpa querystring pra não repetir ao recarregar
+          url.searchParams.delete("code");
+          url.searchParams.delete("state");
+          url.searchParams.delete("error");
+          url.searchParams.delete("error_description");
+          url.searchParams.delete("error_message");
+          window.history.replaceState({}, "", url.toString());
+
+          if (!mountedRef.current) return;
+          setToast("WhatsApp conectado com sucesso.");
+          setTimeout(() => mountedRef.current && setToast(""), 2000);
+        } catch (e) {
+          if (!mountedRef.current) return;
+          setWaErr(e?.message || String(e));
+        } finally {
+          if (!mountedRef.current) return;
+          setWaConnecting(false);
+        }
+      })();
+    } catch {
+      // ignora
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function disconnectWhatsApp() {
     const ok = confirm("Deseja desconectar o WhatsApp deste tenant?");
