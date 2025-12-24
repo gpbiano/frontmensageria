@@ -23,7 +23,7 @@ const HANDOFF_MESSAGE = String(
     "Aguarde um momento, vou te transferir para um atendente humano."
 ).trim();
 
-const META_APP_SECRET = String(process.env.META_APP_SECRET || "").trim(); // usado p/ assinatura do webhook
+const META_APP_SECRET = String(process.env.META_APP_SECRET || "").trim(); // assinatura do webhook (opcional)
 const DEFAULT_API_VERSION = String(process.env.WHATSAPP_API_VERSION || "v22.0").trim();
 
 function nowIso() {
@@ -97,7 +97,8 @@ async function getWaConfigForTenant(tenantId) {
     const cfg = row?.config || {};
     const token = String(cfg.accessToken || "").trim();
     const phoneNumberId = String(cfg.phoneNumberId || "").trim();
-    const apiVersion = String(cfg.apiVersion || DEFAULT_API_VERSION).trim() || DEFAULT_API_VERSION;
+    const apiVersion =
+      String(cfg.apiVersion || DEFAULT_API_VERSION).trim() || DEFAULT_API_VERSION;
 
     if (token && phoneNumberId) {
       return { ok: true, source: "db", token, phoneNumberId, apiVersion };
@@ -120,7 +121,13 @@ async function getWaConfigForTenant(tenantId) {
     };
   }
 
-  return { ok: false, source: "none", token: "", phoneNumberId: "", apiVersion: DEFAULT_API_VERSION };
+  return {
+    ok: false,
+    source: "none",
+    token: "",
+    phoneNumberId: "",
+    apiVersion: DEFAULT_API_VERSION
+  };
 }
 
 function hasSignatureHeader(req) {
@@ -132,27 +139,24 @@ function verifyWebhookSignature(req) {
   // Se não houver secret, não bloqueia (mas loga)
   if (!META_APP_SECRET) return { ok: true, skipped: true };
 
-  // Se Meta não enviar assinatura (depende do setup), não bloqueia mas loga
+  // Se Meta não enviar assinatura, não bloqueia mas loga
   if (!hasSignatureHeader(req)) return { ok: true, skipped: true };
 
   const signatureHeader = String(req.headers["x-hub-signature-256"] || "").trim();
   const expectedPrefix = "sha256=";
 
-  // Precisa do raw body
+  // Precisa do raw body (você deve configurar o express para salvar rawBody no webhook)
   const rawBody =
     req.rawBody ||
     req.bodyRaw ||
     (typeof req.body === "string" ? req.body : null) ||
     null;
 
-  if (!rawBody) {
-    return { ok: false, error: "missing_raw_body_for_signature" };
-  }
+  if (!rawBody) return { ok: false, error: "missing_raw_body_for_signature" };
 
   const hmac = crypto.createHmac("sha256", META_APP_SECRET).update(rawBody).digest("hex");
   const expected = `${expectedPrefix}${hmac}`;
 
-  // timingSafeEqual
   const a = Buffer.from(signatureHeader);
   const b = Buffer.from(expected);
   const sameLen = a.length === b.length;
@@ -169,7 +173,12 @@ async function sendWhatsAppText({ tenantId, to, body, timeoutMs = 12000 }) {
 
   if (!wa.ok || !wa.token || !wa.phoneNumberId) {
     logger.error(
-      { tenantId, source: wa.source, hasToken: !!wa.token, hasPhoneNumberId: !!wa.phoneNumberId },
+      {
+        tenantId,
+        source: wa.source,
+        hasToken: !!wa.token,
+        hasPhoneNumberId: !!wa.phoneNumberId
+      },
       "❌ WA token/phoneNumberId ausentes (DB/ENV). Não dá pra enviar."
     );
     return { ok: false, error: "missing_whatsapp_config" };
@@ -294,7 +303,6 @@ router.get("/media/:mediaId", async (req, res) => {
       return res.status(502).json({ error: "media_download_failed", status: binResp.status });
     }
 
-    // tenta repassar content-type
     const ct = binResp.headers.get("content-type") || meta?.mime_type || "application/octet-stream";
     res.setHeader("Content-Type", ct);
 
@@ -311,7 +319,6 @@ router.get("/media/:mediaId", async (req, res) => {
 // ======================================================
 router.post("/", async (req, res, next) => {
   try {
-    // ✅ segurança: valida assinatura se possível
     const sig = verifyWebhookSignature(req);
     if (!sig.ok) {
       logger.warn({ err: sig.error }, "⚠️ Webhook signature inválida");
@@ -361,9 +368,7 @@ router.post("/", async (req, res, next) => {
       if (!waId) continue;
 
       // ✅ Anti-loop (defensivo)
-      if (msg.from === value?.metadata?.display_phone_number) {
-        continue;
-      }
+      if (msg.from === value?.metadata?.display_phone_number) continue;
 
       const contactMatch =
         contacts.find((c) => String(c?.wa_id) === String(waId)) || contacts[0] || null;
@@ -461,8 +466,7 @@ router.post("/", async (req, res, next) => {
       });
 
       // ==================================================
-      // 🔒 REGRA TRADICIONAL:
-      // Se já está em handoff/humano -> NÃO responde bot
+      // 🔒 Se já está em handoff/humano -> NÃO responde bot
       // ==================================================
       const isAlreadyHandoff =
         conv?.handoffActive === true ||
@@ -495,10 +499,7 @@ router.post("/", async (req, res, next) => {
         const sent = await sendWhatsAppText({ tenantId, to: waId, body: HANDOFF_MESSAGE });
 
         const waBotId =
-          sent?.data?.messages?.[0]?.id ||
-          sent?.data?.message_id ||
-          sent?.data?.id ||
-          null;
+          sent?.data?.messages?.[0]?.id || sent?.data?.message_id || sent?.data?.id || null;
 
         await appendMessage(conv.id, {
           type: "text",
@@ -543,10 +544,7 @@ router.post("/", async (req, res, next) => {
       const sent = await sendWhatsAppText({ tenantId, to: waId, body: reply });
 
       const waBotId =
-        sent?.data?.messages?.[0]?.id ||
-        sent?.data?.message_id ||
-        sent?.data?.id ||
-        null;
+        sent?.data?.messages?.[0]?.id || sent?.data?.message_id || sent?.data?.id || null;
 
       await appendMessage(conv.id, {
         type: "text",

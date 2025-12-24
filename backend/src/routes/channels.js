@@ -20,6 +20,11 @@ function requireEnv(name) {
   return v;
 }
 
+function optionalEnv(name) {
+  const v = String(process.env[name] || "").trim();
+  return v || "";
+}
+
 function getTenantId(req) {
   return req.tenant?.id || req.tenantId || null;
 }
@@ -29,73 +34,40 @@ function newWidgetKey() {
 }
 
 // ======================================================
-// STATE (anti-CSRF) — BASE64URL (sem + e /)
+// STATE (anti-CSRF)
 // ======================================================
-function toBase64Url(b64) {
-  return String(b64).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-function fromBase64Any(input) {
-  // Aceita base64 e base64url e tolera " " no lugar de "+"
-  let s = String(input || "").trim();
-  if (!s) return "";
-
-  s = s.replace(/ /g, "+"); // caso algum caminho tenha trocado + por espaço
-  s = s.replace(/-/g, "+").replace(/_/g, "/"); // base64url -> base64
-
-  // repõe padding
-  const pad = s.length % 4;
-  if (pad === 2) s += "==";
-  else if (pad === 3) s += "=";
-  else if (pad === 1) {
-    // inválido, mas vamos tentar mesmo assim
-    s += "===";
-  }
-
-  try {
-    return Buffer.from(s, "base64").toString("utf8");
-  } catch {
-    return "";
-  }
-}
-
 function signState(payload) {
   const raw = JSON.stringify(payload);
-
   const sig = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
+  return Buffer.from(`${raw}.${sig}`).toString("base64");
+}
 
-  const token = Buffer.from(`${raw}.${sig}`).toString("base64");
-  return toBase64Url(token);
+function decodeBase64Compat(state) {
+  const s = String(state || "").trim().replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(s, "base64").toString("utf8");
 }
 
 function verifyState(state) {
-  const decoded = fromBase64Any(state);
-  const idx = decoded.lastIndexOf(".");
-  if (idx <= 0) throw new Error("invalid_state");
-
-  const raw = decoded.slice(0, idx);
-  const sig = decoded.slice(idx + 1);
-
-  if (!raw || !sig) throw new Error("invalid_state");
-
+  const decoded = decodeBase64Compat(state);
+  const [raw, sig] = decoded.split(".");
   const expected = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
 
-  // timing-safe compare
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+  if (!raw || !sig) throw new Error("invalid_state");
+  if (sig !== expected) throw new Error("invalid_state");
+
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
     throw new Error("invalid_state");
   }
 
-  const payload = JSON.parse(raw);
-
-  // expira em 10 min
   const ts = Number(payload?.ts || 0);
   if (ts && Date.now() - ts > 10 * 60 * 1000) throw new Error("invalid_state");
 
@@ -125,8 +97,16 @@ function shapeChannels(list) {
 // ======================================================
 // Redirect URI (SINGLE SOURCE OF TRUTH)
 // ======================================================
+function normalizeRedirectUri(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+  // remove trailing slash (mantém idêntico entre start/callback)
+  return raw.replace(/\/+$/, "");
+}
+
 function getMetaOAuthRedirectUri() {
-  const v = String(process.env.META_OAUTH_REDIRECT_URI || "").trim();
+  // ✅ ÚNICA fonte: env (normalize p/ evitar mismatch com / no final)
+  const v = normalizeRedirectUri(process.env.META_OAUTH_REDIRECT_URI);
   if (!v) throw new Error("META_OAUTH_REDIRECT_URI não configurado");
   return v;
 }
@@ -144,6 +124,7 @@ router.get(
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
+      // garante que existem linhas para os canais
       for (const ch of CHANNELS) {
         const isWebchat = ch === "webchat";
 
@@ -359,7 +340,6 @@ router.post(
 
       const appId = requireEnv("META_APP_ID");
       const redirectUri = getMetaOAuthRedirectUri();
-
       const state = signState({ tenantId, ts: Date.now() });
 
       logger.info({ tenantId, redirectUri }, "🟢 WhatsApp Embedded Signup start");
@@ -388,6 +368,50 @@ async function exchangeCodeForToken({ appId, appSecret, code, redirectUri }) {
   return fetch(url, { method: "GET" }).then((r) => r.json());
 }
 
+async function graphGetJson(url, accessToken) {
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const raw = await resp.text().catch(() => "");
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = { raw };
+  }
+  return { ok: resp.ok, status: resp.status, data, raw };
+}
+
+async function fetchWabaAndPhoneNumber({ accessToken }) {
+  // ✅ preferir BUSINESS_ID do env; se não tiver, não bloqueia conexão
+  const businessId = optionalEnv("META_BUSINESS_ID");
+  if (!businessId) return { ok: false, reason: "META_BUSINESS_ID_not_set" };
+
+  const wabasUrl = `https://graph.facebook.com/v19.0/${encodeURIComponent(
+    businessId
+  )}/owned_whatsapp_business_accounts?fields=id,name`;
+
+  const wabasRes = await graphGetJson(wabasUrl, accessToken);
+  if (!wabasRes.ok) return { ok: false, step: "owned_wabas", ...wabasRes };
+
+  const wabaId = wabasRes.data?.data?.[0]?.id || null;
+  if (!wabaId) return { ok: false, step: "owned_wabas_empty", data: wabasRes.data };
+
+  const phonesUrl = `https://graph.facebook.com/v19.0/${encodeURIComponent(
+    wabaId
+  )}/phone_numbers?fields=id,display_phone_number,verified_name`;
+
+  const phonesRes = await graphGetJson(phonesUrl, accessToken);
+  if (!phonesRes.ok) return { ok: false, step: "phone_numbers", ...phonesRes };
+
+  const phoneNumberId = phonesRes.data?.data?.[0]?.id || null;
+  const displayPhoneNumber = phonesRes.data?.data?.[0]?.display_phone_number || null;
+  const verifiedName = phonesRes.data?.data?.[0]?.verified_name || null;
+
+  return { ok: true, businessId, wabaId, phoneNumberId, displayPhoneNumber, verifiedName };
+}
+
 router.post(
   "/whatsapp/callback",
   requireAuth,
@@ -401,20 +425,21 @@ router.post(
       const appId = requireEnv("META_APP_ID");
       const appSecret = requireEnv("META_APP_SECRET");
 
-      let parsedState;
-      try {
-        parsedState = verifyState(state);
-      } catch (e) {
-        // ✅ inválido = 400 (não 500)
-        return res.status(400).json({ error: "invalid_state" });
-      }
-
+      const parsedState = verifyState(state);
       const tenantId = String(parsedState?.tenantId || "").trim();
       if (!tenantId) return res.status(400).json({ error: "invalid_state" });
 
       const redirectUri = getMetaOAuthRedirectUri();
 
-      logger.info({ tenantId, redirectUri }, "🟡 WhatsApp callback: exchanging code");
+      logger.info(
+        {
+          tenantId,
+          redirectUri,
+          refOrigin: req.headers.referer ? new URL(req.headers.referer).origin : "",
+          refPath: req.headers.referer || ""
+        },
+        "🟡 WhatsApp callback: exchanging code"
+      );
 
       const tokenRes = await exchangeCodeForToken({
         appId,
@@ -428,25 +453,53 @@ router.post(
           { tokenRes, redirectUriUsed: redirectUri, tenantId },
           "❌ Meta token exchange failed"
         );
-
         return res.status(400).json({
           error: "token_exchange_failed",
           meta: tokenRes?.error || tokenRes
         });
       }
 
+      // ✅ Sync IDs (WABA + Phone Number) — best effort
+      const sync = await fetchWabaAndPhoneNumber({ accessToken: tokenRes.access_token });
+      if (!sync.ok) {
+        logger.warn(
+          { sync },
+          "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)"
+        );
+      } else {
+        logger.info(
+          {
+            wabaId: sync.wabaId,
+            phoneNumberId: sync.phoneNumberId,
+            displayPhoneNumber: sync.displayPhoneNumber
+          },
+          "✅ WhatsApp sync OK (WABA/PhoneNumber)"
+        );
+      }
+
+      // ✅ mantém compatibilidade + adiciona campos novos
+      const newConfig = {
+        accessToken: tokenRes.access_token,
+        tokenType: tokenRes.token_type || null,
+        expiresIn: tokenRes.expires_in || null,
+        redirectUriUsed: redirectUri,
+        connectedAt: new Date().toISOString(),
+
+        // ids úteis pro runtime do webhook/router
+        businessId: sync.ok ? sync.businessId : null,
+        wabaId: sync.ok ? sync.wabaId : null,
+        phoneNumberId: sync.ok ? sync.phoneNumberId : null,
+        displayPhoneNumber: sync.ok ? sync.displayPhoneNumber : null,
+        verifiedName: sync.ok ? sync.verifiedName : null,
+        apiVersion: "v19.0"
+      };
+
       await prisma.channelConfig.upsert({
         where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
         update: {
           enabled: true,
           status: "connected",
-          config: {
-            accessToken: tokenRes.access_token,
-            tokenType: tokenRes.token_type || null,
-            expiresIn: tokenRes.expires_in || null,
-            redirectUriUsed: redirectUri,
-            connectedAt: new Date().toISOString()
-          },
+          config: newConfig,
           updatedAt: new Date()
         },
         create: {
@@ -455,17 +508,22 @@ router.post(
           enabled: true,
           status: "connected",
           widgetKey: null,
-          config: {
-            accessToken: tokenRes.access_token,
-            tokenType: tokenRes.token_type || null,
-            expiresIn: tokenRes.expires_in || null,
-            redirectUriUsed: redirectUri,
-            connectedAt: new Date().toISOString()
-          }
+          config: newConfig
         }
       });
 
-      return res.json({ ok: true, redirectUriUsed: redirectUri });
+      return res.json({
+        ok: true,
+        redirectUriUsed: redirectUri,
+        synced: sync.ok
+          ? {
+              businessId: sync.businessId,
+              wabaId: sync.wabaId,
+              phoneNumberId: sync.phoneNumberId,
+              displayPhoneNumber: sync.displayPhoneNumber
+            }
+          : { ok: false, reason: sync.reason || sync.step || "sync_failed" }
+      });
     } catch (e) {
       logger.error({ err: e }, "❌ whatsapp callback error");
       return res.status(500).json({ error: "whatsapp_connect_failed" });
