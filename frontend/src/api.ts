@@ -117,7 +117,7 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
   if (extra) {
     const h = new Headers(extra);
     h.forEach((v, k) => {
-      normalized[k] = v;
+      normalized[k] = v; // o browser normalmente normaliza para lower-case
     });
   }
 
@@ -226,11 +226,12 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
   const hasBody = effectiveBody !== undefined && effectiveBody !== null;
 
   // Se já veio string/FormData/etc, respeita.
-  const body =
+  const body: any =
     hasBody && isPlainObject(effectiveBody)
       ? JSON.stringify(effectiveBody)
       : (effectiveBody as any);
 
+  // Só seta JSON quando body é objeto puro e não veio Content-Type explicitamente
   const shouldSetJson =
     hasBody &&
     isPlainObject(effectiveBody) &&
@@ -386,7 +387,7 @@ async function downloadBlob(path: string, filename: string) {
  * setAuthSession({ token, user }, rememberMe)
  */
 export function setAuthSession(
-  data: { token?: string; user?: any },
+  data: { token?: string; user?: any; tenant?: any },
   rememberMe: boolean = true
 ) {
   if (typeof window === "undefined") return;
@@ -400,7 +401,10 @@ export function setAuthSession(
   sessionStorage.removeItem(AUTH_USER_KEY);
 
   if (data?.token) storage.setItem(AUTH_KEY, String(data.token));
-  if (data?.user) storage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+  if (data?.user) {
+    const mergedUser = data?.tenant ? { ...data.user, tenant: data.tenant } : data.user;
+    storage.setItem(AUTH_USER_KEY, JSON.stringify(mergedUser));
+  }
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
@@ -466,6 +470,21 @@ export type ChannelStatus =
   | "disabled"
   | "soon";
 
+// Campo comum que o backend devolve via shapeChannel()
+export interface BaseChannelRecord {
+  enabled: boolean;
+  status: ChannelStatus;
+  widgetKey?: string | null;
+  pageId?: string | null;
+  phoneNumberId?: string | null;
+  wabaId?: string | null;
+  displayName?: string | null;
+  displayPhoneNumber?: string | null;
+  hasAccessToken?: boolean;
+  config?: any;
+  updatedAt?: string;
+}
+
 export interface WebchatChannelConfig {
   primaryColor?: string; // compat front
   color?: string; // compat backend
@@ -474,6 +493,8 @@ export interface WebchatChannelConfig {
   title?: string;
   headerTitle?: string; // compat
   greeting?: string;
+  allowedOrigins?: string[];
+  sessionTtlSeconds?: number;
 }
 
 // ✅ WhatsApp config (pode crescer sem quebrar o front)
@@ -488,21 +509,14 @@ export interface WhatsAppChannelConfig {
   verifiedName?: string;
 }
 
-export interface WebchatChannelRecord {
-  enabled: boolean;
-  status: ChannelStatus;
-  widgetKey?: string;
+export interface WebchatChannelRecord extends BaseChannelRecord {
   allowedOrigins?: string[];
   config?: WebchatChannelConfig;
   sessionTtlSeconds?: number;
-  updatedAt?: string;
 }
 
-export interface WhatsAppChannelRecord {
-  enabled: boolean;
-  status: ChannelStatus;
+export interface WhatsAppChannelRecord extends BaseChannelRecord {
   config?: WhatsAppChannelConfig;
-  updatedAt?: string;
 }
 
 // ✅ Messenger records
@@ -511,41 +525,29 @@ export interface MessengerPageItem {
   name: string;
   pictureUrl?: string;
   category?: string;
-  // compat: backend pode retornar também
-  pageAccessToken?: string;
+  pageAccessToken?: string; // backend devolve
 }
 
 export interface MessengerChannelConfig {
-  pageId?: string;
-  pageName?: string;
   subscribedFields?: string[];
   connectedAt?: string;
   graphVersion?: string;
 }
 
-export interface MessengerChannelRecord {
-  enabled: boolean;
-  status: ChannelStatus;
+export interface MessengerChannelRecord extends BaseChannelRecord {
   config?: MessengerChannelConfig;
-  pageId?: string; // convenience (se backend retornar top-level)
-  displayName?: string; // convenience
-  updatedAt?: string;
 }
 
 // ✅ Instagram records
 export interface InstagramChannelConfig {
   instagramBusinessId?: string;
+  igUsername?: string;
   connectedAt?: string;
   graphVersion?: string;
 }
 
-export interface InstagramChannelRecord {
-  enabled: boolean;
-  status: ChannelStatus;
+export interface InstagramChannelRecord extends BaseChannelRecord {
   config?: InstagramChannelConfig;
-  pageId?: string;
-  displayName?: string;
-  updatedAt?: string;
 }
 
 export interface ChannelsState {
@@ -650,40 +652,29 @@ export async function disconnectWhatsAppChannel(): Promise<{ ok: boolean }> {
 
 /**
  * ✅ Backend atual (channels.js):
- * - POST /settings/channels/messenger/pages
- *   { userAccessToken }
- *
- * Mantemos compat:
- * - Se não passar token, tenta GET legado.
+ * - POST /settings/channels/messenger/pages { userAccessToken }
  */
 export async function listMessengerPages(
   userAccessToken?: string
 ): Promise<{ pages: MessengerPageItem[] }> {
   const tok = String(userAccessToken || "").trim();
-  if (tok) {
-    return request("/settings/channels/messenger/pages", {
-      method: "POST",
-      body: { userAccessToken: tok }
-    });
-  }
+  if (!tok) throw new Error("userAccessToken_required");
 
-  // fallback legado (se existir)
-  return request("/settings/channels/messenger/pages", { method: "GET" });
+  return request("/settings/channels/messenger/pages", {
+    method: "POST",
+    body: { userAccessToken: tok }
+  });
 }
 
 /**
- * ✅ Backend atual (channels.js):
- * - POST /settings/channels/messenger/connect
- *   { pageId, pageAccessToken, subscribedFields? }
- *
- * Mantemos compat:
- * - aceita payload antigo sem pageAccessToken (vai falhar no backend, mas preserva assinatura)
+ * ✅ Backend:
+ * - POST /settings/channels/messenger/connect { pageId, pageAccessToken, subscribedFields? }
  */
 export async function connectMessengerChannel(payload: {
   pageId: string;
-  pageAccessToken?: string;
+  pageAccessToken: string;
   subscribedFields?: string[];
-}): Promise<{ ok: boolean; messenger?: MessengerChannelRecord; channel?: MessengerChannelRecord }> {
+}): Promise<{ ok: boolean; messenger?: MessengerChannelRecord }> {
   return request("/settings/channels/messenger/connect", {
     method: "POST",
     body: payload
@@ -691,7 +682,6 @@ export async function connectMessengerChannel(payload: {
 }
 
 /**
- * Desconecta Messenger do tenant.
  * Backend:
  * - DELETE /settings/channels/messenger
  */
@@ -705,8 +695,7 @@ export async function disconnectMessengerChannel(): Promise<{ ok: boolean }> {
 
 /**
  * Backend:
- * - POST /settings/channels/instagram/pages
- *   { userAccessToken }
+ * - POST /settings/channels/instagram/pages { userAccessToken }
  */
 export async function listInstagramPages(
   userAccessToken: string
@@ -721,13 +710,12 @@ export async function listInstagramPages(
 
 /**
  * Backend:
- * - POST /settings/channels/instagram/connect
- *   { pageId, pageAccessToken }
+ * - POST /settings/channels/instagram/connect { pageId, pageAccessToken }
  */
 export async function connectInstagramChannel(payload: {
   pageId: string;
   pageAccessToken: string;
-}): Promise<{ ok: boolean; instagram?: InstagramChannelRecord }> {
+}): Promise<{ ok: boolean; instagram?: InstagramChannelRecord; resolved?: any }> {
   return request("/settings/channels/instagram/connect", {
     method: "POST",
     body: payload
@@ -738,7 +726,10 @@ export async function connectInstagramChannel(payload: {
  * Backend:
  * - DELETE /settings/channels/instagram
  */
-export async function disconnectInstagramChannel(): Promise<{ ok: boolean; instagram?: InstagramChannelRecord }> {
+export async function disconnectInstagramChannel(): Promise<{
+  ok: boolean;
+  instagram?: InstagramChannelRecord;
+}> {
   return request("/settings/channels/instagram", { method: "DELETE" });
 }
 

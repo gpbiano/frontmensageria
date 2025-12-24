@@ -1,52 +1,112 @@
-// backend/src/routes/channels/instagramRouter.js
 import express from "express";
-import logger from "../../logger.js";
+import prismaMod from "../../../lib/prisma.js";
+import { requireAuth } from "../../../middleware/requireAuth.js";
+import logger from "../../../logger.js";
 
+const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 const router = express.Router();
 
-function getQueryString(q) {
-  if (Array.isArray(q)) return String(q[0] || "");
-  return String(q || "");
+function getTenantId(req) {
+  return req.tenant?.id || req.tenantId || null;
 }
 
-// ✅ Verificação do Webhook (Meta)
-// Meta faz GET com: hub.mode, hub.verify_token, hub.challenge
-router.get("/", (req, res) => {
-  const mode = getQueryString(req.query["hub.mode"]).trim();
-  const token = getQueryString(req.query["hub.verify_token"]).trim();
-  const challenge = getQueryString(req.query["hub.challenge"]);
-
-  const VERIFY = String(process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN || "").trim();
-
-  if (mode === "subscribe" && VERIFY && token && token === VERIFY) {
-    // ✅ importante: retornar o challenge como TEXTO (não JSON)
-    res.status(200);
-    res.set("Content-Type", "text/plain");
-    return res.send(String(challenge || ""));
-  }
-
-  logger.warn(
-    { mode, hasToken: !!token, hasVerify: !!VERIFY },
-    "❌ Instagram webhook verification failed"
-  );
-  return res.sendStatus(403);
-});
-
-// ✅ Recebimento dos eventos (por enquanto só ACK)
-router.post("/", (req, res) => {
+/**
+ * POST /settings/channels/instagram/connect
+ * Body:
+ * {
+ *   pageId: string,
+ *   instagramBusinessAccountId: string,
+ *   displayName?: string,
+ *   accessToken: string
+ * }
+ */
+router.post("/connect", requireAuth, async (req, res) => {
   try {
-    // mais tarde: validar assinatura (x-hub-signature-256) e persistir no core
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(401).json({ error: "Tenant não identificado." });
+
+    const pageId = String(req.body?.pageId || "").trim();
+    const igBusinessId = String(req.body?.instagramBusinessAccountId || "").trim();
+    const displayName = String(req.body?.displayName || "").trim();
+    const accessToken = String(req.body?.accessToken || "").trim();
+
+    if (!pageId || !igBusinessId || !accessToken) {
+      return res.status(400).json({
+        error: "Dados incompletos. Envie pageId, instagramBusinessAccountId e accessToken."
+      });
+    }
+
+    const channel = await prisma.channelConfig.upsert({
+      where: {
+        tenantId_channel: { tenantId, channel: "instagram" }
+      },
+      update: {
+        enabled: true,
+        status: "connected",
+        pageId,
+        accessToken,
+        displayName: displayName || undefined,
+        config: {
+          instagramBusinessAccountId: igBusinessId
+        }
+      },
+      create: {
+        tenantId,
+        channel: "instagram",
+        enabled: true,
+        status: "connected",
+        pageId,
+        accessToken,
+        displayName: displayName || null,
+        config: {
+          instagramBusinessAccountId: igBusinessId
+        }
+      }
+    });
+
     logger.info(
-      { hasBody: !!req.body, keys: req.body && typeof req.body === "object" ? Object.keys(req.body) : [] },
-      "📩 Instagram webhook event received"
+      { tenantId, pageId, igBusinessId },
+      "✅ Instagram channel connected"
     );
+
+    return res.json({ ok: true, channel });
   } catch (e) {
-    logger.warn({ err: String(e) }, "⚠️ Instagram webhook log warning");
+    logger.error({ err: String(e) }, "❌ Instagram connect failed");
+    return res.status(500).json({ error: "Erro ao conectar Instagram." });
   }
-  return res.sendStatus(200);
 });
 
-// (Opcional) ajudar debug
-router.all("/", (_req, res) => res.sendStatus(405));
+/**
+ * DELETE /settings/channels/instagram
+ */
+router.delete("/", requireAuth, async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(401).json({ error: "Tenant não identificado." });
+
+    await prisma.channelConfig.upsert({
+      where: { tenantId_channel: { tenantId, channel: "instagram" } },
+      update: {
+        enabled: false,
+        status: "disconnected",
+        accessToken: null,
+        pageId: null,
+        displayName: null,
+        config: null
+      },
+      create: {
+        tenantId,
+        channel: "instagram",
+        enabled: false,
+        status: "disconnected"
+      }
+    });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    logger.error({ err: String(e) }, "❌ Instagram disconnect failed");
+    return res.status(500).json({ error: "Erro ao desconectar Instagram." });
+  }
+});
 
 export default router;

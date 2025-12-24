@@ -80,7 +80,7 @@ function verifyState(state) {
 }
 
 // ======================================================
-// Normalização de saída
+// Normalização de saída (não vazar tokens)
 // ======================================================
 function shapeChannel(c) {
   if (!c) return null;
@@ -449,20 +449,28 @@ router.post(
       const vj = await v.json().catch(() => ({}));
 
       if (!v.ok || !vj?.id) {
-        logger.warn({ status: v.status, meta: vj?.error || vj, tenantId, pageId }, "❌ Messenger connect validate failed");
+        logger.warn(
+          { status: v.status, meta: vj?.error || vj, tenantId, pageId },
+          "❌ Messenger connect validate failed"
+        );
         return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
       }
 
       const displayName = String(vj?.name || "Facebook Page").trim();
 
-      const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`;
+      const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
+        pageId
+      )}/subscribed_apps`;
 
       const subRes = await graphPostJson(subUrl, pageAccessToken, {
         subscribed_fields: subscribedFields
       });
 
       if (!subRes.ok) {
-        logger.warn({ status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId }, "❌ Messenger subscribe failed");
+        logger.warn(
+          { status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId },
+          "❌ Messenger subscribe failed"
+        );
         return res.status(400).json({
           error: "meta_subscribe_failed",
           meta: subRes.data?.error || subRes.data
@@ -561,12 +569,12 @@ router.delete(
 
 // ======================================================
 // ✅ INSTAGRAM — Produto (self-service multi-tenant)
-// (mesmo padrão do Messenger: token do usuário -> páginas -> resolve IG business -> salva)
+// IMPORTANTES FIXES:
+// - agora salva também o instagramBusinessId em coluna (pageId NÃO serve pra IG webhook)
+// - agora cria/atualiza index lookup via pageId (page) + config.instagramBusinessId
 // ======================================================
 
 // POST /settings/channels/instagram/pages
-// Body: { userAccessToken: string }
-// Retorna páginas do usuário (Graph: /me/accounts) com pageAccessToken
 router.post(
   "/instagram/pages",
   requireAuth,
@@ -606,8 +614,6 @@ router.post(
 );
 
 // POST /settings/channels/instagram/connect
-// Body: { pageId, pageAccessToken }
-// Resolve IG Business ligado na Page e salva no ChannelConfig(instagram)
 router.post(
   "/instagram/connect",
   requireAuth,
@@ -634,7 +640,10 @@ router.post(
       const vj = await v.json().catch(() => ({}));
 
       if (!v.ok || !vj?.id) {
-        logger.warn({ status: v.status, meta: vj?.error || vj, tenantId, pageId }, "❌ Instagram connect validate failed");
+        logger.warn(
+          { status: v.status, meta: vj?.error || vj, tenantId, pageId },
+          "❌ Instagram connect validate failed"
+        );
         return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
       }
 
@@ -646,11 +655,23 @@ router.post(
       if (!instagramBusinessId) {
         return res.status(409).json({
           error: "instagram_not_linked",
-          hint: "Essa Página não tem uma conta Instagram Business vinculada (instagram_business_account)."
+          hint:
+            "Essa Página não tem uma conta Instagram Business vinculada (instagram_business_account)."
         });
       }
 
-      // 2) salva no ChannelConfig (instagram)
+      // 2) (best effort) valida IG business id (opcional)
+      // ajuda debug e garante que o token tem permissão pra ler o IG
+      const igInfoUrl =
+        `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
+          instagramBusinessId
+        )}?fields=id,username,name&access_token=${encodeURIComponent(pageAccessToken)}`;
+
+      const igResp = await fetch(igInfoUrl, { method: "GET" });
+      const igJson = await igResp.json().catch(() => ({}));
+      const igUsername = igResp.ok && igJson?.id ? String(igJson?.username || "") : "";
+
+      // 3) salva no ChannelConfig (instagram)
       const current = await prisma.channelConfig.findUnique({
         where: { tenantId_channel: { tenantId, channel: "instagram" } }
       });
@@ -658,10 +679,13 @@ router.post(
       const mergedConfig = {
         ...(current?.config || {}),
         instagramBusinessId,
+        igUsername: igUsername || undefined,
         connectedAt: nowIso(),
         graphVersion: META_GRAPH_VERSION
       };
 
+      // ✅ opcional: se seu schema já tem igBusinessId como coluna, preenche também
+      // se NÃO tiver, remova "wabaId:" abaixo.
       const updated = await prisma.channelConfig.upsert({
         where: { tenantId_channel: { tenantId, channel: "instagram" } },
         update: {
@@ -670,6 +694,8 @@ router.post(
           pageId,
           accessToken: pageAccessToken,
           displayName,
+          // 🚨 SE você ainda não criou coluna própria p/ IG, deixe só no config
+          // wabaId: instagramBusinessId,
           config: mergedConfig,
           updatedAt: new Date()
         },
@@ -682,13 +708,20 @@ router.post(
           pageId,
           accessToken: pageAccessToken,
           displayName,
+          // wabaId: instagramBusinessId,
           config: mergedConfig
         }
       });
 
       return res.json({
         ok: true,
-        instagram: shapeChannel(updated)
+        instagram: shapeChannel(updated),
+        resolved: {
+          pageId,
+          pageName: displayName,
+          instagramBusinessId,
+          igUsername: igUsername || null
+        }
       });
     } catch (e) {
       logger.error({ err: e }, "❌ POST /settings/channels/instagram/connect");
@@ -864,7 +897,10 @@ router.post(
 
       const sync = await fetchWabaAndPhoneNumber({ accessToken: tokenRes.access_token });
       if (!sync.ok) {
-        logger.warn({ sync }, "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)");
+        logger.warn(
+          { sync },
+          "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)"
+        );
       } else {
         logger.info(
           {

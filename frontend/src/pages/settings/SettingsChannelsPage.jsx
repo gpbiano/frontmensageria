@@ -193,16 +193,17 @@ export default function SettingsChannelsPage() {
   const [msSelectedPageId, setMsSelectedPageId] = useState("");
   const [msSubFields, setMsSubFields] = useState("messages,messaging_postbacks");
 
+  // ✅ Messenger: user token (obrigatório no backend atual)
+  const [msUserToken, setMsUserToken] = useState("");
+
   // ✅ Instagram state
   const [igModalOpen, setIgModalOpen] = useState(false);
   const [igConnecting, setIgConnecting] = useState(false);
   const [igErr, setIgErr] = useState("");
   const [igPages, setIgPages] = useState([]);
   const [igSelectedPageId, setIgSelectedPageId] = useState("");
-  const [igSubFields, setIgSubFields] = useState("messages,messaging_postbacks");
 
-  // ✅ fallback (somente se backend exigir)
-  const [igRequiresUserToken, setIgRequiresUserToken] = useState(false);
+  // ✅ Instagram: user token (obrigatório no backend atual)
   const [igUserToken, setIgUserToken] = useState("");
 
   useEffect(() => {
@@ -552,6 +553,7 @@ export default function SettingsChannelsPage() {
     setMsPages([]);
     setMsSelectedPageId("");
     setMsSubFields("messages,messaging_postbacks");
+    setMsUserToken("");
     setMsModalOpen(true);
   }
 
@@ -560,14 +562,17 @@ export default function SettingsChannelsPage() {
     setMsConnecting(true);
 
     try {
-      const res = await listMessengerPages();
+      const token = String(msUserToken || "").trim();
+      if (!token) throw new Error("Cole um User Access Token (Graph) para listar páginas.");
+      const res = await listMessengerPages(token);
+
       const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name);
 
       if (!mountedRef.current) return;
 
       setMsPages(pages);
       if (pages.length === 1) setMsSelectedPageId(String(pages[0].id));
-      if (!pages.length) setMsErr("Nenhuma página retornada. Verifique a conexão no backend.");
+      if (!pages.length) setMsErr("Nenhuma página retornada. Verifique permissões do token.");
     } catch (e) {
       if (!mountedRef.current) return;
       setMsErr(extractErr(e).msg || String(e));
@@ -586,12 +591,16 @@ export default function SettingsChannelsPage() {
       const pageId = String(msSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
 
+      const page = msPages.find((p) => String(p.id) === pageId);
+      const pageAccessToken = String(page?.pageAccessToken || "").trim();
+      if (!pageAccessToken) throw new Error("Página selecionada sem pageAccessToken. Recarregue as páginas.");
+
       const subscribedFields = String(msSubFields || "")
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
 
-      await connectMessengerChannel({ pageId, subscribedFields });
+      await connectMessengerChannel({ pageId, pageAccessToken, subscribedFields });
       await loadChannels();
 
       if (!mountedRef.current) return;
@@ -631,7 +640,7 @@ export default function SettingsChannelsPage() {
   }
 
   // ===============================
-  // ✅ Instagram actions (adaptativo)
+  // ✅ Instagram actions (token obrigatório)
   // ===============================
   const igStatus = normalizeChannelStatus(instagram?.status);
   const igIsConnected = igStatus === "connected" || instagram?.enabled === true;
@@ -648,8 +657,6 @@ export default function SettingsChannelsPage() {
     setIgErr("");
     setIgPages([]);
     setIgSelectedPageId("");
-    setIgSubFields("messages,messaging_postbacks");
-    setIgRequiresUserToken(false);
     setIgUserToken("");
     setIgModalOpen(true);
   }
@@ -659,15 +666,9 @@ export default function SettingsChannelsPage() {
     setIgConnecting(true);
 
     try {
-      // 1) tenta sem token (self-service backend)
-      let res;
-      if (!igRequiresUserToken) {
-        res = await listInstagramPages();
-      } else {
-        const token = String(igUserToken || "").trim();
-        if (!token) throw new Error("Cole o User Access Token (Graph) para listar páginas.");
-        res = await listInstagramPages(token);
-      }
+      const token = String(igUserToken || "").trim();
+      if (!token) throw new Error("Cole um User Access Token (Graph) para listar páginas.");
+      const res = await listInstagramPages(token);
 
       const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name);
 
@@ -675,13 +676,11 @@ export default function SettingsChannelsPage() {
 
       setIgPages(pages);
       if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
-      if (!pages.length) setIgErr("Nenhuma página retornada. Verifique a conexão/permissões no backend.");
+      if (!pages.length) setIgErr("Nenhuma página retornada. Verifique permissões do token.");
     } catch (e) {
       if (!mountedRef.current) return;
 
-      // 2) se backend disser que precisa token, habilita o campo e pede token
       if (isUserTokenRequiredError(e)) {
-        setIgRequiresUserToken(true);
         setIgErr("Cole um User Access Token (Graph) e clique em “Carregar páginas” novamente.");
       } else {
         setIgErr(extractErr(e).msg || String(e));
@@ -702,21 +701,11 @@ export default function SettingsChannelsPage() {
       const pageId = String(igSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
 
-      const subscribedFields = String(igSubFields || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      // Se a listagem trouxe pageAccessToken, envia (compatível com backend antigo)
       const page = igPages.find((p) => String(p.id) === pageId);
       const pageAccessToken = String(page?.pageAccessToken || "").trim();
+      if (!pageAccessToken) throw new Error("Página selecionada sem pageAccessToken. Recarregue as páginas.");
 
-      const payload = pageAccessToken
-        ? { pageId, pageAccessToken, subscribedFields }
-        : { pageId, subscribedFields };
-
-      await connectInstagramChannel(payload);
-
+      await connectInstagramChannel({ pageId, pageAccessToken });
       await loadChannels();
 
       if (!mountedRef.current) return;
@@ -725,12 +714,7 @@ export default function SettingsChannelsPage() {
       setIgModalOpen(false);
     } catch (e) {
       if (!mountedRef.current) return;
-      if (isUserTokenRequiredError(e)) {
-        setIgRequiresUserToken(true);
-        setIgErr("Seu backend está exigindo User Access Token para essa operação. Cole o token e tente novamente.");
-      } else {
-        setIgErr(extractErr(e).msg || String(e));
-      }
+      setIgErr(extractErr(e).msg || String(e));
     } finally {
       if (!mountedRef.current) return;
       setIgConnecting(false);
@@ -1070,8 +1054,17 @@ export default function SettingsChannelsPage() {
 
           {!msIsConnected && (
             <>
-              <div style={{ marginTop: 2, fontSize: 12, opacity: 0.85 }}>
-                Clique para carregar as páginas disponíveis para conexão.
+              <div>
+                <div style={labelStyle()}>User Access Token (Graph)</div>
+                <input
+                  style={fieldStyle()}
+                  value={msUserToken}
+                  onChange={(e) => setMsUserToken(e.target.value)}
+                  placeholder="Cole aqui o user access token"
+                />
+                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+                  Precisamos desse token para listar as páginas (o backend exige).
+                </div>
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1186,20 +1179,18 @@ export default function SettingsChannelsPage() {
 
           {!igIsConnected && (
             <>
-              {igRequiresUserToken && (
-                <div>
-                  <div style={labelStyle()}>User Access Token (Graph)</div>
-                  <input
-                    style={fieldStyle()}
-                    value={igUserToken}
-                    onChange={(e) => setIgUserToken(e.target.value)}
-                    placeholder="Cole aqui o user access token"
-                  />
-                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-                    O backend pediu token para listar páginas. Vamos usar só aqui para carregar as páginas.
-                  </div>
+              <div>
+                <div style={labelStyle()}>User Access Token (Graph)</div>
+                <input
+                  style={fieldStyle()}
+                  value={igUserToken}
+                  onChange={(e) => setIgUserToken(e.target.value)}
+                  placeholder="Cole aqui o user access token"
+                />
+                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+                  Usamos esse token apenas para listar páginas e obter o pageAccessToken.
                 </div>
-              )}
+              </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button className="settings-primary-btn" onClick={loadInstagramPages} disabled={igConnecting}>
@@ -1225,16 +1216,6 @@ export default function SettingsChannelsPage() {
                 {!igPages.length && (
                   <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>Nenhuma página carregada ainda.</div>
                 )}
-              </div>
-
-              <div>
-                <div style={labelStyle()}>Eventos (subscribed_fields)</div>
-                <input
-                  style={fieldStyle()}
-                  value={igSubFields}
-                  onChange={(e) => setIgSubFields(e.target.value)}
-                  placeholder="messages,messaging_postbacks"
-                />
               </div>
 
               {!!igErr && (
@@ -1347,9 +1328,7 @@ export default function SettingsChannelsPage() {
                   value={webchatDraft.config?.primaryColor || "#34d399"}
                   onChange={(e) =>
                     setWebchatDraft((p) =>
-                      p
-                        ? { ...p, config: { ...(p.config || {}), primaryColor: e.target.value } }
-                        : p
+                      p ? { ...p, config: { ...(p.config || {}), primaryColor: e.target.value } } : p
                     )
                   }
                   placeholder="#34d399"
