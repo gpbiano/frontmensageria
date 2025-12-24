@@ -28,6 +28,10 @@ function newWidgetKey() {
   return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
+function stripTrailingSlash(url) {
+  return String(url || "").replace(/\/+$/, "");
+}
+
 // ======================================================
 // STATE (anti-CSRF)
 // ======================================================
@@ -65,15 +69,27 @@ function verifyState(state) {
 }
 
 // ======================================================
-// Normalização de saída
+// Normalização de saída (compat com o front)
+// - allowedOrigins fica dentro de config no banco
+// - mas devolvemos também allowedOrigins no root (pro front)
 // ======================================================
 function shapeChannel(c) {
   if (!c) return null;
+
+  const cfg = c.config || {};
+  const allowedOrigins = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
+
   return {
     enabled: !!c.enabled,
     status: c.status,
     widgetKey: c.widgetKey || null,
-    config: c.config || {},
+
+    // ✅ compat: seu front usa webchat.allowedOrigins
+    allowedOrigins,
+
+    // ✅ sempre existe
+    config: cfg,
+
     updatedAt: c.updatedAt
   };
 }
@@ -86,15 +102,22 @@ function shapeChannels(list) {
 
 // ======================================================
 // Redirect URI (SINGLE SOURCE OF TRUTH)
+// ✅ SEM fallback do facebook
+// ✅ padroniza sem trailing slash para evitar mismatch
 // ======================================================
 function getMetaOAuthRedirectUri() {
-  // ✅ preferir a variável certa
-  const v =
-    String(process.env.META_OAUTH_REDIRECT_URI || "").trim() ||
-    // ✅ fallback final (padrão Meta para JS SDK)
-    "https://www.facebook.com/connect/login_success.html";
+  // Use a SUA env real (mantive seu nome, mas sem fallback perigoso)
+  // Se você preferir, pode renomear para META_EMBEDDED_REDIRECT_URI,
+  // mas aqui vamos respeitar META_OAUTH_REDIRECT_URI.
+  const raw = String(process.env.META_OAUTH_REDIRECT_URI || "").trim();
 
-  return v;
+  if (!raw) {
+    // 👇 importante: sem fallback aqui, porque causa erro 191
+    throw new Error("META_OAUTH_REDIRECT_URI não configurado");
+  }
+
+  // padroniza sem slash final (start e callback idênticos)
+  return stripTrailingSlash(raw);
 }
 
 // ======================================================
@@ -129,6 +152,7 @@ router.get(
                   buttonText: "Ajuda",
                   headerTitle: "Atendimento",
                   greeting: "Olá! Como posso ajudar?",
+                  // ✅ fica no JSON config
                   allowedOrigins: []
                 }
               : {}
@@ -136,8 +160,10 @@ router.get(
         });
       }
 
-      const channels = await prisma.channelConfig.findMany({ where: { tenantId } });
-      return res.json({ channels: shapeChannels(channels) });
+      const rows = await prisma.channelConfig.findMany({ where: { tenantId } });
+
+      // ✅ retorno compat com o front: { channels: { webchat:..., whatsapp:... } }
+      return res.json({ channels: shapeChannels(rows) });
     } catch (e) {
       logger.error({ err: e }, "❌ GET /settings/channels");
       return res.status(500).json({ error: "internal_error" });
@@ -175,6 +201,7 @@ router.patch(
         ...(cfg || {})
       };
 
+      // ✅ sempre guarda allowedOrigins dentro de config
       if (allowedOrigins) mergedConfig.allowedOrigins = allowedOrigins;
       if (typeof sessionTtlSeconds === "number") mergedConfig.sessionTtlSeconds = sessionTtlSeconds;
 
@@ -324,11 +351,10 @@ router.post(
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
       const appId = requireEnv("META_APP_ID");
-
-      // ✅ redirect_uri fixo (não inventa variação)
       const redirectUri = getMetaOAuthRedirectUri();
 
-      const state = signState({ tenantId, ts: Date.now() });
+      // ✅ guarda redirectUri no state (callback usa o MESMO)
+      const state = signState({ tenantId, ts: Date.now(), redirectUri });
 
       logger.info({ tenantId, redirectUri }, "🟢 WhatsApp Embedded Signup start");
 
@@ -371,17 +397,14 @@ router.post(
 
       const parsedState = verifyState(state);
       const tenantId = String(parsedState?.tenantId || "").trim();
-      if (!tenantId) return res.status(400).json({ error: "invalid_state" });
+      const redirectUri = String(parsedState?.redirectUri || "").trim();
 
-      // ✅ MESMO redirectUri do /start. Sem candidatos.
-      const redirectUri = getMetaOAuthRedirectUri();
+      if (!tenantId || !redirectUri) return res.status(400).json({ error: "invalid_state" });
 
       logger.info(
         {
           tenantId,
-          redirectUri,
-          refOrigin: req.headers.referer ? new URL(req.headers.referer).origin : "",
-          refPath: req.headers.referer || ""
+          redirectUri
         },
         "🟡 WhatsApp callback: exchanging code"
       );
