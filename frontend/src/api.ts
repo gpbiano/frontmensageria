@@ -509,7 +509,6 @@ export interface WhatsAppChannelRecord {
 export interface MessengerPageItem {
   id: string;
   name: string;
-  pageAccessToken?: string;
   pictureUrl?: string;
   category?: string;
 }
@@ -631,29 +630,23 @@ export async function disconnectWhatsAppChannel(): Promise<{ ok: boolean }> {
 // ===============================
 
 /**
- * Lista páginas do usuário (Graph API via backend)
+ * Lista páginas do Facebook disponíveis para o usuário (via backend).
  * Backend recomendado:
- * - POST /settings/channels/messenger/pages { userAccessToken }
- * Retorna: { pages: [{ id, name, pageAccessToken, pictureUrl, category }] }
+ * - GET /settings/channels/messenger/pages
+ * Retorna: { pages: [{ id, name, pictureUrl, category }] }
  */
-export async function listMessengerPages(payload: {
-  userAccessToken: string;
-}): Promise<{ pages: MessengerPageItem[] }> {
-  return request("/settings/channels/messenger/pages", {
-    method: "POST",
-    body: payload
-  });
+export async function listMessengerPages(): Promise<{ pages: MessengerPageItem[] }> {
+  return request("/settings/channels/messenger/pages", { method: "GET" });
 }
 
 /**
- * Conecta Messenger ao tenant (sem SQL)
+ * Conecta Messenger ao tenant (sem SQL).
  * Backend recomendado:
  * - POST /settings/channels/messenger/connect
- *   { pageId, pageAccessToken, subscribedFields }
+ *   { pageId, subscribedFields? }
  */
 export async function connectMessengerChannel(payload: {
   pageId: string;
-  pageAccessToken: string;
   subscribedFields?: string[];
 }): Promise<{ ok: boolean; channel?: MessengerChannelRecord }> {
   return request("/settings/channels/messenger/connect", {
@@ -663,7 +656,7 @@ export async function connectMessengerChannel(payload: {
 }
 
 /**
- * Desconecta Messenger do tenant
+ * Desconecta Messenger do tenant.
  * Backend recomendado:
  * - DELETE /settings/channels/messenger
  */
@@ -867,7 +860,7 @@ export type ConversationKind = "all" | "bot" | "human" | "bot_only" | "human_onl
 
 export type FetchConversationsOptions = {
   status?: ConversationStatus | "all";
-  source?: "all" | "whatsapp" | "webchat";
+  source?: "all" | "whatsapp" | "webchat" | "messenger";
   mode?: "all" | "human" | "bot";
   kind?: ConversationKind;
 };
@@ -1004,7 +997,7 @@ export async function downloadConversationCSV(conversationId: string) {
 export async function downloadHistoryExcel(params?: {
   kind?: ConversationKind;
   status?: ConversationStatus | "all";
-  source?: "all" | "whatsapp" | "webchat";
+  source?: "all" | "whatsapp" | "webchat" | "messenger";
 }) {
   const qs = buildQuery({
     kind: params?.kind ?? "all",
