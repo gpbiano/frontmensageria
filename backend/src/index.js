@@ -30,33 +30,24 @@ const envProdPath = path.join(__dirname, "..", ".env.production");
 const envDevPath = path.join(__dirname, "..", ".env");
 
 /**
- * ✅ FIX DEFINITIVO:
- * Em produção, força .env.production sobrescrever qualquer ENV injetada pelo PM2/system.
- * Isso evita regressão do META_EMBEDDED_REDIRECT_URI e outros.
+ * ✅ FIX DEFINITIVO DE ENV
  */
 if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath, override: true });
 } else if (fs.existsSync(envDevPath)) {
   dotenv.config({ path: envDevPath, override: false });
 } else if (fs.existsSync(envProdPath)) {
-  // fallback (caso dev sem .env)
   dotenv.config({ path: envProdPath, override: false });
 }
 
 // Base domain (tenant por subdomínio)
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
-// Tenant fallback para webhook (opcional)
-process.env.WHATSAPP_DEFAULT_TENANT_ID ||= String(
-  process.env.WHATSAPP_DEFAULT_TENANT_ID || ""
-).trim();
-
 // ===============================
 // LOGGER
 // ===============================
 const { default: logger } = await import("./logger.js");
 
-// 🔎 Log rápido do env efetivo (pode remover depois)
 logger.info(
   {
     ENV,
@@ -87,8 +78,7 @@ try {
   logger.info(
     {
       prismaReady,
-      tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
-      hasWhatsappDefaultTenant: !!process.env.WHATSAPP_DEFAULT_TENANT_ID
+      tenantBaseDomain: process.env.TENANT_BASE_DOMAIN
     },
     "🧠 Prisma status"
   );
@@ -109,11 +99,6 @@ const { default: passwordRouter } = await import("./auth/passwordRouter.js");
 const { default: usersRouter } = await import("./settings/usersRouter.js");
 const { default: groupsRouter } = await import("./settings/groupsRouter.js");
 const { default: channelsRouter } = await import("./routes/channels.js");
-// ⬆️ aqui ficam:
-// - /settings/channels
-// - /settings/channels/whatsapp/start
-// - /settings/channels/whatsapp/callback
-// - /settings/channels/whatsapp (DELETE)
 
 // 🤖 Atendimento
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
@@ -133,10 +118,12 @@ const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
 const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
-// 📡 WhatsApp Webhook (EVENTOS / MENSAGENS)
-// ⚠️ NÃO CONFUNDIR COM SETTINGS
+// 📡 Webhooks
 const { default: whatsappRouter } = await import(
   "./routes/channels/whatsappRouter.js"
+);
+const { default: messengerRouter } = await import(
+  "./routes/channels/messengerRouter.js"
 );
 
 // ===============================
@@ -162,13 +149,13 @@ app.use(
       ignore: (req) =>
         req.method === "OPTIONS" ||
         req.url.startsWith("/health") ||
-        req.url.startsWith("/webhook/whatsapp")
+        req.url.startsWith("/webhook/")
     }
   })
 );
 
 // ===============================
-// CORS + PARSERS
+// CORS
 // ===============================
 app.use(
   cors({
@@ -185,7 +172,17 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "5mb" }));
+// ===============================
+// BODY PARSER (com rawBody p/ Meta)
+// ===============================
+app.use(
+  express.json({
+    limit: "5mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    }
+  })
+);
 
 // ===============================
 // HELPERS
@@ -208,6 +205,7 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/auth/password/verify",
   "/auth/password/set",
   "/webhook/whatsapp",
+  "/webhook/messenger",
   "/webchat"
 ];
 
@@ -226,15 +224,11 @@ app.get("/", (_req, res) => res.json({ status: "ok" }));
 app.get("/health", async (_req, res) => {
   let users = 0;
   let tenants = 0;
-  let whatsappEnabledTenants = 0;
 
   try {
     if (prismaReady) {
       users = await prisma.user.count();
       tenants = await prisma.tenant.count();
-      whatsappEnabledTenants = await prisma.channelConfig.count({
-        where: { channel: "whatsapp", enabled: true }
-      });
     }
   } catch {}
 
@@ -245,8 +239,6 @@ app.get("/health", async (_req, res) => {
     users,
     tenants,
     tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
-    hasWhatsappDefaultTenant: !!process.env.WHATSAPP_DEFAULT_TENANT_ID,
-    whatsappEnabledTenants,
     uptime: process.uptime()
   });
 });
@@ -256,7 +248,8 @@ app.use("/auth", passwordRouter);
 
 // 🌐 Widgets / Webhooks públicos
 app.use("/webchat", requirePrisma, webchatRouter);
-app.use("/webhook/whatsapp", requirePrisma, whatsappRouter);
+app.use("/webhook/whatsapp", whatsappRouter);
+app.use("/webhook/messenger", messengerRouter);
 
 // ===============================
 // 🔒 MIDDLEWARE GLOBAL
