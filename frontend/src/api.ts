@@ -484,6 +484,8 @@ export interface WhatsAppChannelConfig {
   wabaId?: string;
   webhookVerified?: boolean;
   connectedAt?: string;
+  displayPhoneNumber?: string;
+  verifiedName?: string;
 }
 
 export interface WebchatChannelRecord {
@@ -503,10 +505,35 @@ export interface WhatsAppChannelRecord {
   updatedAt?: string;
 }
 
+// ✅ Messenger records
+export interface MessengerPageItem {
+  id: string;
+  name: string;
+  pageAccessToken?: string;
+  pictureUrl?: string;
+  category?: string;
+}
+
+export interface MessengerChannelConfig {
+  pageId?: string;
+  pageName?: string;
+  subscribedFields?: string[];
+  connectedAt?: string;
+}
+
+export interface MessengerChannelRecord {
+  enabled: boolean;
+  status: ChannelStatus;
+  config?: MessengerChannelConfig;
+  pageId?: string; // convenience (se backend retornar top-level)
+  displayName?: string; // convenience
+  updatedAt?: string;
+}
+
 export interface ChannelsState {
   whatsapp?: WhatsAppChannelRecord;
   webchat?: WebchatChannelRecord;
-  messenger?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
+  messenger?: MessengerChannelRecord;
   instagram?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
 }
 
@@ -519,7 +546,6 @@ export interface ChannelsState {
 export async function fetchChannels(): Promise<ChannelsState> {
   const res = await request<any>("/settings/channels");
 
-  // backend atual (seu channels.js): retorna array
   if (Array.isArray(res)) {
     const out: ChannelsState = {};
     for (const item of res) {
@@ -530,12 +556,10 @@ export async function fetchChannels(): Promise<ChannelsState> {
     return out;
   }
 
-  // compat: { channels: {...} }
   if (res && typeof res === "object" && res.channels && typeof res.channels === "object") {
     return res.channels as ChannelsState;
   }
 
-  // fallback: já veio como objeto final
   return (res || {}) as ChannelsState;
 }
 
@@ -576,7 +600,7 @@ export async function fetchWebchatSnippet(): Promise<{
 }
 
 // ===============================
-// ✅ WHATSAPP — EMBEDDED SIGNUP (stubs p/ quando o backend ficar pronto)
+// ✅ WHATSAPP — EMBEDDED SIGNUP
 // ===============================
 
 export async function startWhatsAppEmbeddedSignup(): Promise<{
@@ -600,6 +624,51 @@ export async function finishWhatsAppEmbeddedSignup(payload: {
 
 export async function disconnectWhatsAppChannel(): Promise<{ ok: boolean }> {
   return request("/settings/channels/whatsapp", { method: "DELETE" });
+}
+
+// ===============================
+// ✅ MESSENGER — SELF-SERVICE (Settings UI)
+// ===============================
+
+/**
+ * Lista páginas do usuário (Graph API via backend)
+ * Backend recomendado:
+ * - POST /settings/channels/messenger/pages { userAccessToken }
+ * Retorna: { pages: [{ id, name, pageAccessToken, pictureUrl, category }] }
+ */
+export async function listMessengerPages(payload: {
+  userAccessToken: string;
+}): Promise<{ pages: MessengerPageItem[] }> {
+  return request("/settings/channels/messenger/pages", {
+    method: "POST",
+    body: payload
+  });
+}
+
+/**
+ * Conecta Messenger ao tenant (sem SQL)
+ * Backend recomendado:
+ * - POST /settings/channels/messenger/connect
+ *   { pageId, pageAccessToken, subscribedFields }
+ */
+export async function connectMessengerChannel(payload: {
+  pageId: string;
+  pageAccessToken: string;
+  subscribedFields?: string[];
+}): Promise<{ ok: boolean; channel?: MessengerChannelRecord }> {
+  return request("/settings/channels/messenger/connect", {
+    method: "POST",
+    body: payload
+  });
+}
+
+/**
+ * Desconecta Messenger do tenant
+ * Backend recomendado:
+ * - DELETE /settings/channels/messenger
+ */
+export async function disconnectMessengerChannel(): Promise<{ ok: boolean }> {
+  return request("/settings/channels/messenger", { method: "DELETE" });
 }
 
 // ======================================================
@@ -1245,5 +1314,3 @@ export async function downloadConversationHistoryExcel(conversationId: string) {
     `conversation_${conversationId}.xlsx`
   );
 }
-
-
