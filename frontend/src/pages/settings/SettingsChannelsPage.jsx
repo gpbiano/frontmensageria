@@ -1,4 +1,4 @@
-// frontend/src/settings/SettingsChannelsPage.jsx
+// frontend/src/pages/settings/SettingsChannelsPage.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -16,7 +16,7 @@ import {
   listMessengerPages,
   connectMessengerChannel,
   disconnectMessengerChannel
-} from "../../api"; // SettingsChannelsPage.jsx está em src/settings → api está em src/api
+} from "../../api"; // pages/settings -> ../../api
 
 /**
  * Configurações > Canais
@@ -33,7 +33,7 @@ import {
  * - DELETE /settings/channels/whatsapp
  *
  * Messenger (self-service):
- * - POST   /settings/channels/messenger/pages
+ * - GET    /settings/channels/messenger/pages
  * - POST   /settings/channels/messenger/connect
  * - DELETE /settings/channels/messenger
  */
@@ -188,7 +188,6 @@ export default function SettingsChannelsPage() {
   const [msModalOpen, setMsModalOpen] = useState(false);
   const [msConnecting, setMsConnecting] = useState(false);
   const [msErr, setMsErr] = useState("");
-  const [msUserToken, setMsUserToken] = useState("");
   const [msPages, setMsPages] = useState([]);
   const [msSelectedPageId, setMsSelectedPageId] = useState("");
   const [msSubFields, setMsSubFields] = useState("messages,messaging_postbacks");
@@ -248,12 +247,17 @@ export default function SettingsChannelsPage() {
     const position = cfg.position === "left" ? "left" : "right";
     const primaryColor = cfg.primaryColor || cfg.color || "#34d399";
 
-    const allowedOriginsFromCfg = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
+    // ✅ allowedOrigins é top-level no record (backend), mas mantemos fallback em cfg
+    const allowedOriginsFromRecord = Array.isArray(ch.allowedOrigins)
+      ? ch.allowedOrigins
+      : Array.isArray(cfg.allowedOrigins)
+      ? cfg.allowedOrigins
+      : [];
 
     setWebchatDraft({
       enabled: !!ch.enabled,
       widgetKey: ch.widgetKey || "",
-      allowedOrigins: allowedOriginsFromCfg,
+      allowedOrigins: allowedOriginsFromRecord,
       config: {
         primaryColor,
         position,
@@ -300,7 +304,7 @@ export default function SettingsChannelsPage() {
 
     try {
       const cfg = webchatDraft.config || {};
-      const primaryColor = (cfg.primaryColor || "#34d399").trim();
+      const primaryColor = String(cfg.primaryColor || "#34d399").trim();
 
       const payload = {
         enabled: !!webchatDraft.enabled,
@@ -399,7 +403,7 @@ export default function SettingsChannelsPage() {
       : "https://api.gplabs.com.br";
 
     const cfg = webchatDraft?.config || {};
-    const color = (cfg.primaryColor || "#34d399").trim();
+    const color = String(cfg.primaryColor || "#34d399").trim();
     const position = cfg.position === "left" ? "left" : "right";
     const buttonText = String(cfg.buttonText || "Ajuda").replace(/"/g, "&quot;");
     const title = String(cfg.headerTitle || "Atendimento").replace(/"/g, "&quot;");
@@ -548,7 +552,6 @@ export default function SettingsChannelsPage() {
     setMsErr("");
     setMsPages([]);
     setMsSelectedPageId("");
-    setMsUserToken("");
     setMsSubFields("messages,messaging_postbacks");
     setMsModalOpen(true);
   }
@@ -556,18 +559,17 @@ export default function SettingsChannelsPage() {
   async function loadMessengerPages() {
     setMsErr("");
     setMsConnecting(true);
-    try {
-      const token = String(msUserToken || "").trim();
-      if (!token) throw new Error("Cole o User Access Token (curto) para listar páginas.");
 
-      const res = await listMessengerPages({ userAccessToken: token });
-      const pages = safeArr(res?.pages).filter((p) => p?.id && p?.pageAccessToken);
+    try {
+      // ✅ Agora é GET (sem token do usuário no front)
+      const res = await listMessengerPages();
+      const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name);
 
       if (!mountedRef.current) return;
 
       setMsPages(pages);
       if (pages.length === 1) setMsSelectedPageId(String(pages[0].id));
-      if (!pages.length) setMsErr("Nenhuma página retornada. Verifique permissões do token.");
+      if (!pages.length) setMsErr("Nenhuma página retornada. Verifique a conexão no backend.");
     } catch (e) {
       if (!mountedRef.current) return;
       setMsErr(e?.message || String(e));
@@ -586,18 +588,14 @@ export default function SettingsChannelsPage() {
       const pageId = String(msSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
 
-      const selected = msPages.find((p) => String(p.id) === pageId);
-      const pageAccessToken = String(selected?.pageAccessToken || "").trim();
-      if (!pageAccessToken) throw new Error("Token da página ausente (recarregue as páginas).");
-
       const subscribedFields = String(msSubFields || "")
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
 
+      // ✅ Agora não envia pageAccessToken no front (backend resolve)
       await connectMessengerChannel({
         pageId,
-        pageAccessToken,
         subscribedFields
       });
 
@@ -937,26 +935,18 @@ export default function SettingsChannelsPage() {
 
           {!msIsConnected && (
             <>
-              <div>
-                <div style={labelStyle()}>User Access Token (curto) — para listar páginas</div>
-                <input
-                  style={fieldStyle()}
-                  value={msUserToken}
-                  onChange={(e) => setMsUserToken(e.target.value)}
-                  placeholder="Cole aqui o token do usuário (Meta)"
-                />
-                <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button
-                    className="settings-primary-btn"
-                    onClick={loadMessengerPages}
-                    disabled={msConnecting}
-                  >
-                    {msConnecting ? "Carregando..." : "Listar páginas"}
-                  </button>
-                </div>
-                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-                  Dica: gere o token no Graph API Explorer com permissões adequadas (padrão do seu app).
-                </div>
+              <div style={{ marginTop: 2, fontSize: 12, opacity: 0.85 }}>
+                Clique para carregar as páginas disponíveis para conexão.
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  className="settings-primary-btn"
+                  onClick={loadMessengerPages}
+                  disabled={msConnecting}
+                >
+                  {msConnecting ? "Carregando..." : "Carregar páginas"}
+                </button>
               </div>
 
               <div>
@@ -974,6 +964,11 @@ export default function SettingsChannelsPage() {
                     </option>
                   ))}
                 </select>
+                {!msPages.length && (
+                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+                    Nenhuma página carregada ainda.
+                  </div>
+                )}
               </div>
 
               <div>
