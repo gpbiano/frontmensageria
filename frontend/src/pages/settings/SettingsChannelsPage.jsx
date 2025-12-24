@@ -11,7 +11,7 @@ import {
   startWhatsAppEmbeddedSignup,
   finishWhatsAppEmbeddedSignup,
   disconnectWhatsAppChannel
-} from "../../api"; // ✅ FIX: SettingsChannelsPage.jsx está em src/settings → api está em src/api
+} from "../../api"; // SettingsChannelsPage.jsx está em src/settings → api está em src/api
 
 /**
  * Configurações > Canais
@@ -132,7 +132,6 @@ function loadFacebookSdk(appId) {
     try {
       if (window.FB) return resolve(window.FB);
 
-      // Se o script já foi inserido, só aguarda o FB existir
       if (document.getElementById("facebook-jssdk")) {
         const t0 = Date.now();
         const timer = setInterval(() => {
@@ -147,7 +146,6 @@ function loadFacebookSdk(appId) {
         return;
       }
 
-      // ✅ IMPORTANTE: NÃO usar async aqui
       window.fbAsyncInit = function () {
         try {
           window.FB.init({
@@ -176,17 +174,6 @@ function loadFacebookSdk(appId) {
   });
 }
 
-/**
- * ❗️Não usar no fluxo.
- * Redirect URI tem que ser 100% igual ao do backend e ao cadastrado na Meta.
- * Se normalizar aqui, você pode causar 36008.
- */
-function normalizeRedirectUri(input) {
-  const raw = String(input || "").trim();
-  if (!raw) return "";
-  return raw.replace(/\/+$/, "");
-}
-
 function normalizeChannelStatus(raw) {
   const s = String(raw || "").toLowerCase();
   if (!s) return "not_connected";
@@ -197,11 +184,29 @@ function normalizeChannelStatus(raw) {
   return s;
 }
 
+function unwrapChannelsResponse(data) {
+  // aceita:
+  // - { channels: { webchat: {...}, whatsapp: {...} } }
+  // - { webchat: {...}, whatsapp: {...} }
+  // - { channels: [...] } (se um dia vier array)
+  if (!data) return {};
+  if (data.channels && typeof data.channels === "object" && !Array.isArray(data.channels)) {
+    return data.channels;
+  }
+  if (data.webchat || data.whatsapp) return data;
+  if (data.channels && Array.isArray(data.channels)) {
+    const out = {};
+    for (const row of data.channels) out[row.channel] = row;
+    return out;
+  }
+  return data;
+}
+
 export default function SettingsChannelsPage() {
   const mountedRef = useRef(true);
 
   const [loading, setLoading] = useState(true);
-  const [channelsState, setChannelsState] = useState(null);
+  const [channelsState, setChannelsState] = useState({});
   const [error, setError] = useState("");
 
   const [webchatOpen, setWebchatOpen] = useState(false);
@@ -238,17 +243,8 @@ export default function SettingsChannelsPage() {
     }
   }, []);
 
-  // ✅ compat: backend pode devolver { channels: {...} } ou {...}
-  const normalizedChannelsState = useMemo(() => {
-    if (!channelsState) return null;
-    if (channelsState.channels && typeof channelsState.channels === "object") {
-      return channelsState.channels;
-    }
-    return channelsState;
-  }, [channelsState]);
-
-  const webchat = normalizedChannelsState?.webchat || null;
-  const whatsapp = normalizedChannelsState?.whatsapp || null;
+  const webchat = channelsState?.webchat || null;
+  const whatsapp = channelsState?.whatsapp || null;
 
   async function loadChannels() {
     setLoading(true);
@@ -256,7 +252,9 @@ export default function SettingsChannelsPage() {
     try {
       const data = await fetchChannels();
       if (!mountedRef.current) return;
-      setChannelsState(data || {});
+
+      const unwrapped = unwrapChannelsResponse(data);
+      setChannelsState(unwrapped || {});
     } catch (e) {
       if (!mountedRef.current) return;
       setError(e?.message || String(e));
@@ -279,16 +277,15 @@ export default function SettingsChannelsPage() {
     const buttonText = cfg.buttonText || "Ajuda";
     const greeting = cfg.greeting || "Olá! Como posso ajudar?";
     const position = cfg.position === "left" ? "left" : "right";
-
     const primaryColor = cfg.primaryColor || cfg.color || "#34d399";
 
-    // ✅ allowedOrigins fica dentro de config (backend)
-    const allowedOrigins = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
+    // ✅ allowedOrigins agora vive no config (backend)
+    const allowedOriginsFromCfg = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
 
     setWebchatDraft({
       enabled: !!ch.enabled,
       widgetKey: ch.widgetKey || "",
-      allowedOrigins,
+      allowedOrigins: allowedOriginsFromCfg,
       config: {
         primaryColor,
         position,
@@ -416,7 +413,6 @@ export default function SettingsChannelsPage() {
   // ===============================
   const waStatus = normalizeChannelStatus(whatsapp?.status);
   const waIsConnected = waStatus === "connected" || whatsapp?.enabled === true;
-
   const whatsappVariant = waIsConnected ? "on" : "off";
 
   function whatsappLabel() {
@@ -444,7 +440,6 @@ export default function SettingsChannelsPage() {
       "&quot;"
     );
 
-    // ✅ tem que ser STRING, não JSX
     return `<script
   src="https://widget.gplabs.com.br/widget.js"
   data-widget-key="${widgetKey}"
@@ -470,13 +465,13 @@ export default function SettingsChannelsPage() {
     setWaConnecting(true);
 
     try {
-      // 1) backend assina state e retorna appId/scopes/redirectUri
       const start = await startWhatsAppEmbeddedSignup();
 
       const appId = start?.appId;
       const state = start?.state;
 
-      // ⚠️ não normalizar: usar exatamente o que veio do backend
+      // ⚠️ NÃO normalize / NÃO inventa candidate:
+      // usa exatamente o que backend retornou
       const redirectUri = String(start?.redirectUri || "").trim();
 
       const scopes =
@@ -486,11 +481,8 @@ export default function SettingsChannelsPage() {
         throw new Error("Resposta inválida do backend (appId/state/redirectUri).");
       }
 
-      // 2) carrega FB SDK
       const FB = await loadFacebookSdk(appId);
 
-      // 3) abre login/flow (Embedded Signup)
-      // ⚠️ callback NÃO pode ser async
       FB.login(
         (response) => {
           (async () => {
@@ -500,17 +492,22 @@ export default function SettingsChannelsPage() {
               }
 
               const code = response.authResponse.code;
-              if (!code) throw new Error("Meta não retornou 'code'.");
+              if (!code) {
+                throw new Error("Meta não retornou 'code'.");
+              }
 
               await finishWhatsAppEmbeddedSignup({ code, state });
               await loadChannels();
 
+              if (!mountedRef.current) return;
               setToast("WhatsApp conectado com sucesso.");
               setTimeout(() => mountedRef.current && setToast(""), 2000);
             } catch (e) {
+              if (!mountedRef.current) return;
               setWaErr(e?.message || String(e));
               setWaDebug(response || null);
             } finally {
+              if (!mountedRef.current) return;
               setWaConnecting(false);
             }
           })();
@@ -521,7 +518,7 @@ export default function SettingsChannelsPage() {
           response_type: "code",
           override_default_response_type: true,
 
-          // ✅ ÚNICA FONTE DA VERDADE
+          // ✅ TEM que ser idêntico ao backend
           redirect_uri: redirectUri
         }
       );
@@ -799,13 +796,7 @@ export default function SettingsChannelsPage() {
         ) : (
           <div style={{ display: "grid", gap: 14 }}>
             {/* Linha 1 */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 12
-              }}
-            >
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
                 <div style={labelStyle()}>Status do canal</div>
                 <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -813,10 +804,7 @@ export default function SettingsChannelsPage() {
                     type="checkbox"
                     checked={!!webchatDraft.enabled}
                     onChange={(e) =>
-                      setWebchatDraft((p) => ({
-                        ...p,
-                        enabled: e.target.checked
-                      }))
+                      setWebchatDraft((p) => ({ ...p, enabled: e.target.checked }))
                     }
                   />
                   <span>{webchatDraft.enabled ? "Ativo" : "Desativado"}</span>
@@ -829,11 +817,7 @@ export default function SettingsChannelsPage() {
               <div>
                 <div style={labelStyle()}>Chave do widget (widgetKey)</div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    style={fieldStyle()}
-                    value={webchatDraft.widgetKey || ""}
-                    readOnly
-                  />
+                  <input style={fieldStyle()} value={webchatDraft.widgetKey || ""} readOnly />
                   <button
                     className="settings-primary-btn"
                     onClick={() => copy(webchatDraft.widgetKey || "")}
@@ -856,13 +840,7 @@ export default function SettingsChannelsPage() {
             </div>
 
             {/* Personalização */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 12
-              }}
-            >
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
                 <div style={labelStyle()}>Cor principal</div>
                 <input
@@ -871,10 +849,7 @@ export default function SettingsChannelsPage() {
                   onChange={(e) =>
                     setWebchatDraft((p) => ({
                       ...p,
-                      config: {
-                        ...(p.config || {}),
-                        primaryColor: e.target.value
-                      }
+                      config: { ...(p.config || {}), primaryColor: e.target.value }
                     }))
                   }
                   placeholder="#34d399"
@@ -963,8 +938,7 @@ export default function SettingsChannelsPage() {
               </div>
 
               {isDev &&
-                (!webchatDraft.allowedOrigins ||
-                  webchatDraft.allowedOrigins.length === 0) && (
+                (!webchatDraft.allowedOrigins || webchatDraft.allowedOrigins.length === 0) && (
                   <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
                     <button
                       className="settings-primary-btn"
@@ -972,10 +946,7 @@ export default function SettingsChannelsPage() {
                       onClick={() =>
                         setWebchatDraft((p) => ({
                           ...p,
-                          allowedOrigins: [
-                            "http://localhost:5173",
-                            "http://127.0.0.1:5173"
-                          ]
+                          allowedOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"]
                         }))
                       }
                     >
