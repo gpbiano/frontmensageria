@@ -1,5 +1,5 @@
 import express from "express";
-import prismaMod from "../../../lib/prisma.js";
+import prismaMod from "../../lib/prisma.js";
 import { requireAuth } from "../../../middleware/requireAuth.js";
 import logger from "../../../logger.js";
 
