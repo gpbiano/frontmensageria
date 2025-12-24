@@ -34,6 +34,10 @@ function newWidgetKey() {
   return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
 // ======================================================
 // STATE (anti-CSRF)
 // ======================================================
@@ -377,8 +381,6 @@ router.get(
 // ======================================================
 
 // POST /settings/channels/messenger/pages
-// Body: { userAccessToken: string }
-// Retorna páginas do usuário (Graph: /me/accounts)
 router.post(
   "/messenger/pages",
   requireAuth,
@@ -407,7 +409,6 @@ router.post(
         pages: data.map((p) => ({
           id: String(p?.id || ""),
           name: String(p?.name || ""),
-          // ⚠️ Admin/manager only. Front usa este token imediatamente para /connect.
           pageAccessToken: String(p?.access_token || "")
         }))
       });
@@ -419,7 +420,6 @@ router.post(
 );
 
 // POST /settings/channels/messenger/connect
-// Body: { pageId, pageAccessToken, subscribedFields?: string[] }
 router.post(
   "/messenger/connect",
   requireAuth,
@@ -440,7 +440,6 @@ router.post(
       if (!pageId) return res.status(400).json({ error: "pageId_required" });
       if (!pageAccessToken) return res.status(400).json({ error: "pageAccessToken_required" });
 
-      // 1) valida token (garante que pertence à página e tem permissão)
       const validateUrl =
         `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}` +
         `?fields=id,name` +
@@ -456,10 +455,7 @@ router.post(
 
       const displayName = String(vj?.name || "Facebook Page").trim();
 
-      // 2) inscreve o app na página (subscribed_apps) — essencial p/ receber eventos
-      const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
-        pageId
-      )}/subscribed_apps`;
+      const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`;
 
       const subRes = await graphPostJson(subUrl, pageAccessToken, {
         subscribed_fields: subscribedFields
@@ -473,7 +469,6 @@ router.post(
         });
       }
 
-      // 3) salva no ChannelConfig (colunas first-class + config auxiliar)
       const current = await prisma.channelConfig.findUnique({
         where: { tenantId_channel: { tenantId, channel: "messenger" } }
       });
@@ -481,7 +476,7 @@ router.post(
       const mergedConfig = {
         ...(current?.config || {}),
         subscribedFields,
-        connectedAt: new Date().toISOString(),
+        connectedAt: nowIso(),
         graphVersion: META_GRAPH_VERSION
       };
 
@@ -517,7 +512,7 @@ router.post(
   }
 );
 
-// DELETE /settings/channels/messenger (disconnect)
+// DELETE /settings/channels/messenger
 router.delete(
   "/messenger",
   requireAuth,
@@ -540,10 +535,7 @@ router.delete(
           pageId: null,
           accessToken: null,
           displayName: null,
-          config: {
-            ...(current?.config || {}),
-            disconnectedAt: new Date().toISOString()
-          },
+          config: { ...(current?.config || {}), disconnectedAt: nowIso() },
           updatedAt: new Date()
         },
         create: {
@@ -555,13 +547,198 @@ router.delete(
           pageId: null,
           accessToken: null,
           displayName: null,
-          config: { disconnectedAt: new Date().toISOString() }
+          config: { disconnectedAt: nowIso() }
         }
       });
 
       return res.json({ ok: true, messenger: shapeChannel(updated) });
     } catch (e) {
       logger.error({ err: e }, "❌ DELETE /settings/channels/messenger");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// ======================================================
+// ✅ INSTAGRAM — Produto (self-service multi-tenant)
+// (mesmo padrão do Messenger: token do usuário -> páginas -> resolve IG business -> salva)
+// ======================================================
+
+// POST /settings/channels/instagram/pages
+// Body: { userAccessToken: string }
+// Retorna páginas do usuário (Graph: /me/accounts) com pageAccessToken
+router.post(
+  "/instagram/pages",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const userAccessToken = String(req.body?.userAccessToken || "").trim();
+      if (!userAccessToken) return res.status(400).json({ error: "userAccessToken_required" });
+
+      const url =
+        `https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts` +
+        `?fields=id,name,access_token` +
+        `&access_token=${encodeURIComponent(userAccessToken)}`;
+
+      const r = await fetch(url, { method: "GET" });
+      const j = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        logger.warn({ status: r.status, meta: j?.error || j }, "❌ Instagram pages list failed");
+        return res.status(400).json({ error: "meta_list_pages_failed", meta: j?.error || j });
+      }
+
+      const data = Array.isArray(j.data) ? j.data : [];
+      return res.json({
+        pages: data.map((p) => ({
+          id: String(p?.id || ""),
+          name: String(p?.name || ""),
+          pageAccessToken: String(p?.access_token || "")
+        }))
+      });
+    } catch (e) {
+      logger.error({ err: e }, "❌ POST /settings/channels/instagram/pages");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// POST /settings/channels/instagram/connect
+// Body: { pageId, pageAccessToken }
+// Resolve IG Business ligado na Page e salva no ChannelConfig(instagram)
+router.post(
+  "/instagram/connect",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const pageId = String(req.body?.pageId || "").trim();
+      const pageAccessToken = String(req.body?.pageAccessToken || "").trim();
+
+      if (!pageId) return res.status(400).json({ error: "pageId_required" });
+      if (!pageAccessToken) return res.status(400).json({ error: "pageAccessToken_required" });
+
+      // 1) valida Page token + resolve IG business account
+      const pageInfoUrl =
+        `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}` +
+        `?fields=id,name,instagram_business_account` +
+        `&access_token=${encodeURIComponent(pageAccessToken)}`;
+
+      const v = await fetch(pageInfoUrl, { method: "GET" });
+      const vj = await v.json().catch(() => ({}));
+
+      if (!v.ok || !vj?.id) {
+        logger.warn({ status: v.status, meta: vj?.error || vj, tenantId, pageId }, "❌ Instagram connect validate failed");
+        return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
+      }
+
+      const displayName = String(vj?.name || "Facebook Page").trim();
+      const instagramBusinessId = vj?.instagram_business_account?.id
+        ? String(vj.instagram_business_account.id)
+        : null;
+
+      if (!instagramBusinessId) {
+        return res.status(409).json({
+          error: "instagram_not_linked",
+          hint: "Essa Página não tem uma conta Instagram Business vinculada (instagram_business_account)."
+        });
+      }
+
+      // 2) salva no ChannelConfig (instagram)
+      const current = await prisma.channelConfig.findUnique({
+        where: { tenantId_channel: { tenantId, channel: "instagram" } }
+      });
+
+      const mergedConfig = {
+        ...(current?.config || {}),
+        instagramBusinessId,
+        connectedAt: nowIso(),
+        graphVersion: META_GRAPH_VERSION
+      };
+
+      const updated = await prisma.channelConfig.upsert({
+        where: { tenantId_channel: { tenantId, channel: "instagram" } },
+        update: {
+          enabled: true,
+          status: "connected",
+          pageId,
+          accessToken: pageAccessToken,
+          displayName,
+          config: mergedConfig,
+          updatedAt: new Date()
+        },
+        create: {
+          tenantId,
+          channel: "instagram",
+          enabled: true,
+          status: "connected",
+          widgetKey: null,
+          pageId,
+          accessToken: pageAccessToken,
+          displayName,
+          config: mergedConfig
+        }
+      });
+
+      return res.json({
+        ok: true,
+        instagram: shapeChannel(updated)
+      });
+    } catch (e) {
+      logger.error({ err: e }, "❌ POST /settings/channels/instagram/connect");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
+
+// DELETE /settings/channels/instagram
+router.delete(
+  "/instagram",
+  requireAuth,
+  enforceTokenTenant,
+  requireRole("admin", "manager"),
+  async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
+
+      const current = await prisma.channelConfig.findUnique({
+        where: { tenantId_channel: { tenantId, channel: "instagram" } }
+      });
+
+      const updated = await prisma.channelConfig.upsert({
+        where: { tenantId_channel: { tenantId, channel: "instagram" } },
+        update: {
+          enabled: false,
+          status: "disconnected",
+          pageId: null,
+          accessToken: null,
+          displayName: null,
+          config: { ...(current?.config || {}), disconnectedAt: nowIso() },
+          updatedAt: new Date()
+        },
+        create: {
+          tenantId,
+          channel: "instagram",
+          enabled: false,
+          status: "disconnected",
+          widgetKey: null,
+          pageId: null,
+          accessToken: null,
+          displayName: null,
+          config: { disconnectedAt: nowIso() }
+        }
+      });
+
+      return res.json({ ok: true, instagram: shapeChannel(updated) });
+    } catch (e) {
+      logger.error({ err: e }, "❌ DELETE /settings/channels/instagram");
       return res.status(500).json({ error: "internal_error" });
     }
   }
@@ -704,7 +881,7 @@ router.post(
         tokenType: tokenRes.token_type || null,
         expiresIn: tokenRes.expires_in || null,
         redirectUriUsed: redirectUri,
-        connectedAt: new Date().toISOString(),
+        connectedAt: nowIso(),
 
         businessId: sync.ok ? sync.businessId : null,
         wabaId: sync.ok ? sync.wabaId : null,
@@ -714,19 +891,16 @@ router.post(
         apiVersion: "v19.0"
       };
 
-      // ✅ mantém compatibilidade + adiciona colunas novas (se existirem no schema)
       await prisma.channelConfig.upsert({
         where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
         update: {
           enabled: true,
           status: "connected",
-          // colunas novas (não quebram se já estiverem no schema)
           accessToken: tokenRes.access_token,
           wabaId: sync.ok ? sync.wabaId : null,
           phoneNumberId: sync.ok ? sync.phoneNumberId : null,
           displayPhoneNumber: sync.ok ? sync.displayPhoneNumber : null,
           displayName: sync.ok ? sync.verifiedName : null,
-          // mantém config
           config: newConfig,
           updatedAt: new Date()
         },

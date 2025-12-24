@@ -511,6 +511,8 @@ export interface MessengerPageItem {
   name: string;
   pictureUrl?: string;
   category?: string;
+  // compat: backend pode retornar também
+  pageAccessToken?: string;
 }
 
 export interface MessengerChannelConfig {
@@ -518,6 +520,7 @@ export interface MessengerChannelConfig {
   pageName?: string;
   subscribedFields?: string[];
   connectedAt?: string;
+  graphVersion?: string;
 }
 
 export interface MessengerChannelRecord {
@@ -529,11 +532,27 @@ export interface MessengerChannelRecord {
   updatedAt?: string;
 }
 
+// ✅ Instagram records
+export interface InstagramChannelConfig {
+  instagramBusinessId?: string;
+  connectedAt?: string;
+  graphVersion?: string;
+}
+
+export interface InstagramChannelRecord {
+  enabled: boolean;
+  status: ChannelStatus;
+  config?: InstagramChannelConfig;
+  pageId?: string;
+  displayName?: string;
+  updatedAt?: string;
+}
+
 export interface ChannelsState {
   whatsapp?: WhatsAppChannelRecord;
   webchat?: WebchatChannelRecord;
   messenger?: MessengerChannelRecord;
-  instagram?: { enabled: boolean; status: ChannelStatus; updatedAt?: string };
+  instagram?: InstagramChannelRecord;
 }
 
 /**
@@ -630,25 +649,41 @@ export async function disconnectWhatsAppChannel(): Promise<{ ok: boolean }> {
 // ===============================
 
 /**
- * Lista páginas do Facebook disponíveis para o usuário (via backend).
- * Backend recomendado:
- * - GET /settings/channels/messenger/pages
- * Retorna: { pages: [{ id, name, pictureUrl, category }] }
+ * ✅ Backend atual (channels.js):
+ * - POST /settings/channels/messenger/pages
+ *   { userAccessToken }
+ *
+ * Mantemos compat:
+ * - Se não passar token, tenta GET legado.
  */
-export async function listMessengerPages(): Promise<{ pages: MessengerPageItem[] }> {
+export async function listMessengerPages(
+  userAccessToken?: string
+): Promise<{ pages: MessengerPageItem[] }> {
+  const tok = String(userAccessToken || "").trim();
+  if (tok) {
+    return request("/settings/channels/messenger/pages", {
+      method: "POST",
+      body: { userAccessToken: tok }
+    });
+  }
+
+  // fallback legado (se existir)
   return request("/settings/channels/messenger/pages", { method: "GET" });
 }
 
 /**
- * Conecta Messenger ao tenant (sem SQL).
- * Backend recomendado:
+ * ✅ Backend atual (channels.js):
  * - POST /settings/channels/messenger/connect
- *   { pageId, subscribedFields? }
+ *   { pageId, pageAccessToken, subscribedFields? }
+ *
+ * Mantemos compat:
+ * - aceita payload antigo sem pageAccessToken (vai falhar no backend, mas preserva assinatura)
  */
 export async function connectMessengerChannel(payload: {
   pageId: string;
+  pageAccessToken?: string;
   subscribedFields?: string[];
-}): Promise<{ ok: boolean; channel?: MessengerChannelRecord }> {
+}): Promise<{ ok: boolean; messenger?: MessengerChannelRecord; channel?: MessengerChannelRecord }> {
   return request("/settings/channels/messenger/connect", {
     method: "POST",
     body: payload
@@ -657,11 +692,54 @@ export async function connectMessengerChannel(payload: {
 
 /**
  * Desconecta Messenger do tenant.
- * Backend recomendado:
+ * Backend:
  * - DELETE /settings/channels/messenger
  */
 export async function disconnectMessengerChannel(): Promise<{ ok: boolean }> {
   return request("/settings/channels/messenger", { method: "DELETE" });
+}
+
+// ===============================
+// ✅ INSTAGRAM — SELF-SERVICE (Settings UI)
+// ===============================
+
+/**
+ * Backend:
+ * - POST /settings/channels/instagram/pages
+ *   { userAccessToken }
+ */
+export async function listInstagramPages(
+  userAccessToken: string
+): Promise<{ pages: Array<{ id: string; name: string; pageAccessToken: string }> }> {
+  const tok = String(userAccessToken || "").trim();
+  if (!tok) throw new Error("userAccessToken_required");
+  return request("/settings/channels/instagram/pages", {
+    method: "POST",
+    body: { userAccessToken: tok }
+  });
+}
+
+/**
+ * Backend:
+ * - POST /settings/channels/instagram/connect
+ *   { pageId, pageAccessToken }
+ */
+export async function connectInstagramChannel(payload: {
+  pageId: string;
+  pageAccessToken: string;
+}): Promise<{ ok: boolean; instagram?: InstagramChannelRecord }> {
+  return request("/settings/channels/instagram/connect", {
+    method: "POST",
+    body: payload
+  });
+}
+
+/**
+ * Backend:
+ * - DELETE /settings/channels/instagram
+ */
+export async function disconnectInstagramChannel(): Promise<{ ok: boolean; instagram?: InstagramChannelRecord }> {
+  return request("/settings/channels/instagram", { method: "DELETE" });
 }
 
 // ======================================================
@@ -860,7 +938,7 @@ export type ConversationKind = "all" | "bot" | "human" | "bot_only" | "human_onl
 
 export type FetchConversationsOptions = {
   status?: ConversationStatus | "all";
-  source?: "all" | "whatsapp" | "webchat" | "messenger";
+  source?: "all" | "whatsapp" | "webchat" | "messenger" | "instagram";
   mode?: "all" | "human" | "bot";
   kind?: ConversationKind;
 };
@@ -997,7 +1075,7 @@ export async function downloadConversationCSV(conversationId: string) {
 export async function downloadHistoryExcel(params?: {
   kind?: ConversationKind;
   status?: ConversationStatus | "all";
-  source?: "all" | "whatsapp" | "webchat" | "messenger";
+  source?: "all" | "whatsapp" | "webchat" | "messenger" | "instagram";
 }) {
   const qs = buildQuery({
     kind: params?.kind ?? "all",
