@@ -1,4 +1,8 @@
 // backend/src/routes/channels/messengerRouter.js
+// ✅ Patch: lookup por colunas (pageId / accessToken) em ChannelConfig
+// - remove dependência de config.path (JSON path)
+// - resolve tenant por pageId (multi-tenant real)
+// - mantém compatibilidade: se accessToken/pageId não estiverem nas colunas, tenta fallback em config.*
 
 import express from "express";
 import crypto from "crypto";
@@ -69,19 +73,42 @@ function extractTextFromMessage(m) {
   return "";
 }
 
+function safeCfgJson(cfg) {
+  const v = cfg?.config;
+  if (v && typeof v === "object") return v;
+  return {};
+}
+
+// ===============================
+// ✅ DB helpers (colunas-first)
+// ===============================
 async function getChannelConfigForPageId(pageId) {
   if (!pageId) return null;
+
+  // ✅ Preferência: coluna pageId
+  const byColumn = await prisma.channelConfig.findFirst({
+    where: {
+      channel: "messenger",
+      enabled: true,
+      pageId: String(pageId),
+    },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (byColumn) return byColumn;
+
+  // 🔁 Fallback compat: tenta achar no config.pageId (se ainda estiver lá)
+  // (mantém funcionando enquanto você migra valores para as colunas)
   try {
     return await prisma.channelConfig.findFirst({
       where: {
         channel: "messenger",
         enabled: true,
+        // Prisma JSON filter (quando suportado)
         config: { path: ["pageId"], equals: String(pageId) },
       },
       orderBy: { updatedAt: "desc" },
     });
-  } catch (e) {
-    logger.warn({ err: String(e), pageId }, "⚠️ getChannelConfigForPageId falhou (JSON path?)");
+  } catch {
     return null;
   }
 }
@@ -117,8 +144,10 @@ async function resolveTenantIdForWebhook(req, pageIdFromEvent) {
 async function getMsConfigForTenant(tenantId, pageIdFromEvent) {
   let cfg = null;
 
+  // ✅ Preferência: se veio pageId, resolve diretamente por página (multi-tenant real)
   if (pageIdFromEvent) cfg = await getChannelConfigForPageId(pageIdFromEvent);
 
+  // ✅ Fallback: config do tenant
   if (!cfg && tenantId) {
     cfg = await prisma.channelConfig.findFirst({
       where: { tenantId: String(tenantId), channel: "messenger", enabled: true },
@@ -126,9 +155,11 @@ async function getMsConfigForTenant(tenantId, pageIdFromEvent) {
     });
   }
 
-  const config = cfg?.config && typeof cfg.config === "object" ? cfg.config : {};
-  const accessToken = String(config?.accessToken || "").trim();
-  const pageId = String(config?.pageId || pageIdFromEvent || "").trim();
+  const cfgJson = safeCfgJson(cfg);
+
+  // ✅ Preferência: colunas novas
+  const accessToken = String(cfg?.accessToken || cfgJson?.accessToken || "").trim();
+  const pageId = String(cfg?.pageId || cfgJson?.pageId || pageIdFromEvent || "").trim();
 
   return { cfg, accessToken, pageId };
 }
@@ -161,7 +192,7 @@ async function sendMessengerText({ accessToken, recipientId, text }) {
 }
 
 // ===============================
-// ✅ GET /webhook/messenger  (porque o index monta /webhook/messenger)
+// ✅ GET /webhook/messenger
 // ===============================
 router.get("/", (req, res) => {
   const mode = String(req.query["hub.mode"] || "");
@@ -192,6 +223,7 @@ router.post("/", async (req, res) => {
     return res.sendStatus(403);
   }
 
+  // Meta quer 200 rápido
   res.sendStatus(200);
 
   const body = req.body || {};
@@ -212,101 +244,112 @@ router.post("/", async (req, res) => {
 
     for (const m of events) {
       try {
-        if (isMessageEvent(m)) {
-          const senderId = String(m.sender?.id || "").trim();
-          const recipientId = String(m.recipient?.id || "").trim();
-          const text = extractTextFromMessage(m);
+        if (!isMessageEvent(m)) continue;
 
-          const conv = await getOrCreateChannelConversation({
-            source: "messenger",
-            channel: "messenger",
-            tenantId,
-            accountId: recipientId || msCfg.pageId || null,
-            peerId: `ms:${senderId}`,
-            meta: { pageId: recipientId || pageId || null },
-          });
+        const senderId = String(m.sender?.id || "").trim(); // PSID
+        const recipientId = String(m.recipient?.id || "").trim(); // pageId
+        const text = extractTextFromMessage(m);
 
-          await appendMessage(conv.id, {
-            id: `ms_in_${m.timestamp || Date.now()}_${senderId}`,
-            from: "client",
-            direction: "in",
-            channel: "messenger",
-            type: m.message?.attachments?.length ? "attachment" : "text",
-            text: text || "",
-            msMessageId: String(m.message?.mid || ""),
-            createdAt: nowIso(),
-            raw: m,
-          });
+        const conv = await getOrCreateChannelConversation({
+          source: "messenger",
+          channel: "messenger",
+          tenantId,
+          accountId: recipientId || msCfg.pageId || null,
+          peerId: `ms:${senderId}`,
+          meta: { pageId: recipientId || pageId || null },
+        });
 
-          if (conv.handoffActive || conv.currentMode === "human" || conv.inboxVisible) continue;
-          if (!text) continue;
+        await appendMessage(conv.id, {
+          id: `ms_in_${m.timestamp || Date.now()}_${senderId}`,
+          from: "client",
+          direction: "in",
+          channel: "messenger",
+          type: m.message?.attachments?.length ? "attachment" : "text",
+          text: text || "",
+          msMessageId: String(m.message?.mid || ""),
+          createdAt: nowIso(),
+          raw: m,
+        });
 
-          const accountSettings = { channel: "messenger", tenantId };
-          const decision = await decideRoute({
-            accountSettings,
-            conversation: conv,
-            messageText: text,
-          });
+        // Se já está em humano/handoff → não responde bot
+        if (conv.handoffActive || conv.currentMode === "human" || conv.inboxVisible) continue;
 
-          if (decision?.target && decision.target !== "bot") {
-            try {
-              if (msCfg.accessToken) {
-                await sendMessengerText({
-                  accessToken: msCfg.accessToken,
-                  recipientId: senderId,
-                  text: HANDOFF_MESSAGE,
-                });
-              }
-            } catch (e) {
-              logger.error({ err: String(e), tenantId }, "❌ Falha ao enviar handoff (Messenger)");
-            }
+        // Só bot em texto por enquanto
+        if (!text) continue;
 
-            await appendMessage(conv.id, {
-              id: `ms_out_handoff_${Date.now()}`,
-              from: "bot",
-              isBot: true,
-              direction: "out",
-              channel: "messenger",
-              type: "text",
-              text: HANDOFF_MESSAGE,
-              handoff: true,
-              createdAt: nowIso(),
-            });
+        const accountSettings = { channel: "messenger", tenantId };
+        const decision = await decideRoute({
+          accountSettings,
+          conversation: conv,
+          messageText: text,
+        });
 
-            continue;
-          }
-
-          let botText = "";
-          try {
-            botText = await callGenAIBot({ accountSettings, conversation: conv, messageText: text });
-          } catch (e) {
-            logger.error({ err: String(e), tenantId }, "❌ Erro botEngine (Messenger)");
-            botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
-          }
-
+        if (decision?.target && decision.target !== "bot") {
           try {
             if (msCfg.accessToken) {
               await sendMessengerText({
                 accessToken: msCfg.accessToken,
                 recipientId: senderId,
-                text: botText,
+                text: HANDOFF_MESSAGE,
               });
+            } else {
+              logger.warn({ tenantId, pageId }, "⚠️ Sem accessToken do Messenger — handoff não enviado");
             }
           } catch (e) {
-            logger.error({ err: String(e), tenantId }, "❌ Falha ao enviar bot (Messenger)");
+            logger.error({ err: String(e), tenantId }, "❌ Falha ao enviar handoff (Messenger)");
           }
 
           await appendMessage(conv.id, {
-            id: `ms_out_bot_${Date.now()}`,
+            id: `ms_out_handoff_${Date.now()}`,
             from: "bot",
             isBot: true,
             direction: "out",
             channel: "messenger",
             type: "text",
-            text: botText,
+            text: HANDOFF_MESSAGE,
+            handoff: true,
             createdAt: nowIso(),
           });
+
+          continue;
         }
+
+        let botText = "";
+        try {
+          botText = await callGenAIBot({
+            accountSettings,
+            conversation: conv,
+            messageText: text,
+          });
+        } catch (e) {
+          logger.error({ err: String(e), tenantId }, "❌ Erro botEngine (Messenger)");
+          botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
+        }
+
+        try {
+          if (msCfg.accessToken) {
+            await sendMessengerText({
+              accessToken: msCfg.accessToken,
+              recipientId: senderId,
+              text: botText,
+            });
+          } else {
+            logger.warn({ tenantId, pageId }, "⚠️ Sem accessToken do Messenger — bot não enviado");
+          }
+        } catch (e) {
+          logger.error({ err: String(e), tenantId }, "❌ Falha ao enviar bot (Messenger)");
+        }
+
+        await appendMessage(conv.id, {
+          id: `ms_out_bot_${Date.now()}`,
+          from: "bot",
+          isBot: true,
+          direction: "out",
+          channel: "messenger",
+          type: "text",
+          text: botText,
+          createdAt: nowIso(),
+        });
       } catch (e) {
         logger.error({ err: String(e), tenantId, pageId }, "❌ Erro processando evento Messenger");
       }
