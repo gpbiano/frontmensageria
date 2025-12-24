@@ -1,16 +1,12 @@
 // backend/src/routes/channels.js
 import express from "express";
 import crypto from "crypto";
+import fetch from "node-fetch";
 import prismaMod from "../lib/prisma.js";
-import {
-  requireAuth,
-  enforceTokenTenant,
-  requireRole
-} from "../middleware/requireAuth.js";
+import { requireAuth, enforceTokenTenant, requireRole } from "../middleware/requireAuth.js";
 import logger from "../logger.js";
 
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
-
 const router = express.Router();
 
 const CHANNELS = ["whatsapp", "webchat", "messenger", "instagram"];
@@ -18,35 +14,10 @@ const CHANNELS = ["whatsapp", "webchat", "messenger", "instagram"];
 // ======================================================
 // Helpers
 // ======================================================
-
 function requireEnv(name) {
   const v = String(process.env[name] || "").trim();
   if (!v) throw new Error(`${name} não configurado`);
   return v;
-}
-
-function stripTrailingSlash(url) {
-  return String(url || "").replace(/\/+$/, "");
-}
-
-function safeOriginFromReferer(referer) {
-  try {
-    const u = new URL(String(referer || ""));
-    return `${u.protocol}//${u.host}`;
-  } catch {
-    return "";
-  }
-}
-
-function safePathFromReferer(referer) {
-  try {
-    const u = new URL(String(referer || ""));
-    u.hash = "";
-    u.search = "";
-    return u.toString();
-  } catch {
-    return "";
-  }
 }
 
 function getTenantId(req) {
@@ -58,71 +29,44 @@ function newWidgetKey() {
 }
 
 // ======================================================
-// STATE (anti-CSRF) — base64url
-// Fonte da verdade para redirectUri: SEM normalizar.
+// STATE (anti-CSRF)
 // ======================================================
-
-function b64urlEncode(str) {
-  return Buffer.from(String(str), "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function b64urlDecodeToUtf8(b64url) {
-  const s = String(b64url || "")
-    .trim()
-    .replace(/-/g, "+")
-    .replace(/_/g, "/");
-  const pad = s.length % 4 ? "=".repeat(4 - (s.length % 4)) : "";
-  return Buffer.from(s + pad, "base64").toString("utf8");
-}
-
 function signState(payload) {
   const raw = JSON.stringify(payload);
   const sig = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
+  return Buffer.from(`${raw}.${sig}`).toString("base64");
+}
 
-  // formato: base64url(raw.sig)
-  return b64urlEncode(`${raw}.${sig}`);
+function decodeBase64Compat(state) {
+  const s = String(state || "").trim().replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(s, "base64").toString("utf8");
 }
 
 function verifyState(state) {
-  const decoded = b64urlDecodeToUtf8(state);
-  const lastDot = decoded.lastIndexOf(".");
-  if (lastDot <= 0) throw new Error("invalid_state");
-
-  const raw = decoded.slice(0, lastDot);
-  const sig = decoded.slice(lastDot + 1);
-
+  const decoded = decodeBase64Compat(state);
+  const [raw, sig] = decoded.split(".");
   const expected = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
 
-  if (!sig || sig !== expected) throw new Error("invalid_state");
+  if (!raw || !sig) throw new Error("invalid_state");
+  if (sig !== expected) throw new Error("invalid_state");
 
   const payload = JSON.parse(raw);
 
-  // expira em 10 min
   const ts = Number(payload?.ts || 0);
   if (ts && Date.now() - ts > 10 * 60 * 1000) throw new Error("invalid_state");
-
-  // valida campos mínimos
-  if (!payload?.tenantId) throw new Error("invalid_state");
-  if (!payload?.redirectUri) throw new Error("invalid_state");
 
   return payload;
 }
 
 // ======================================================
 // Normalização de saída
-// (SEM allowedOrigins no model — fica tudo dentro de config)
 // ======================================================
-
 function shapeChannel(c) {
   if (!c) return null;
   return {
@@ -141,9 +85,21 @@ function shapeChannels(list) {
 }
 
 // ======================================================
+// Redirect URI (SINGLE SOURCE OF TRUTH)
+// ======================================================
+function getMetaOAuthRedirectUri() {
+  // ✅ preferir a variável certa
+  const v =
+    String(process.env.META_OAUTH_REDIRECT_URI || "").trim() ||
+    // ✅ fallback final (padrão Meta para JS SDK)
+    "https://www.facebook.com/connect/login_success.html";
+
+  return v;
+}
+
+// ======================================================
 // GET /settings/channels
 // ======================================================
-
 router.get(
   "/",
   requireAuth,
@@ -154,7 +110,6 @@ router.get(
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-      // garante que todos os canais existem (SEM allowedOrigins no model)
       for (const ch of CHANNELS) {
         const isWebchat = ch === "webchat";
 
@@ -174,9 +129,7 @@ router.get(
                   buttonText: "Ajuda",
                   headerTitle: "Atendimento",
                   greeting: "Olá! Como posso ajudar?",
-                  // allowedOrigins dentro do JSON
-                  allowedOrigins: [],
-                  sessionTtlSeconds: 0
+                  allowedOrigins: []
                 }
               : {}
           }
@@ -184,8 +137,6 @@ router.get(
       }
 
       const channels = await prisma.channelConfig.findMany({ where: { tenantId } });
-
-      // ✅ compat: seu front trata { channels } e também array
       return res.json({ channels: shapeChannels(channels) });
     } catch (e) {
       logger.error({ err: e }, "❌ GET /settings/channels");
@@ -196,9 +147,7 @@ router.get(
 
 // ======================================================
 // PATCH /settings/channels/webchat
-// (SEM allowedOrigins no model — salva dentro do config)
 // ======================================================
-
 router.patch(
   "/webchat",
   requireAuth,
@@ -213,7 +162,6 @@ router.patch(
       const cfg = req.body?.config || {};
       const sessionTtlSeconds = req.body?.sessionTtlSeconds;
 
-      // allowedOrigins vem do front, mas vai dentro do JSON config
       const allowedOrigins = Array.isArray(req.body?.allowedOrigins)
         ? req.body.allowedOrigins
         : undefined;
@@ -264,7 +212,6 @@ router.patch(
 // ======================================================
 // POST /settings/channels/webchat/rotate-key
 // ======================================================
-
 router.post(
   "/webchat/rotate-key",
   requireAuth,
@@ -292,8 +239,7 @@ router.post(
             buttonText: "Ajuda",
             headerTitle: "Atendimento",
             greeting: "Olá! Como posso ajudar?",
-            allowedOrigins: [],
-            sessionTtlSeconds: 0
+            allowedOrigins: []
           }
         }
       });
@@ -309,7 +255,6 @@ router.post(
 // ======================================================
 // GET /settings/channels/webchat/snippet
 // ======================================================
-
 router.get(
   "/webchat/snippet",
   requireAuth,
@@ -356,7 +301,7 @@ router.get(
         allowedOrigins,
         scriptTag,
         widgetJsUrl: "https://widget.gplabs.com.br/widget.js",
-        sessionTtlSeconds: Number(cfg.sessionTtlSeconds || 0)
+        sessionTtlSeconds: cfg.sessionTtlSeconds || 0
       });
     } catch (e) {
       logger.error({ err: e }, "❌ GET /settings/channels/webchat/snippet");
@@ -367,13 +312,7 @@ router.get(
 
 // ======================================================
 // WHATSAPP Embedded Signup
-// Regra de ouro: redirectUri NÃO é normalizado.
-// Ele precisa ser IDENTICO ao que:
-// - você cadastrou na Meta (Valid OAuth Redirect URIs)
-// - você enviou no FB.login (redirect_uri)
-// - você usa no token exchange
 // ======================================================
-
 router.post(
   "/whatsapp/start",
   requireAuth,
@@ -386,17 +325,10 @@ router.post(
 
       const appId = requireEnv("META_APP_ID");
 
-      // ✅ NÃO coloque barra / NÃO remova barra.
-      // Use EXACTAMENTE o valor do env (apenas trim).
-      const redirectUri = String(process.env.META_EMBEDDED_REDIRECT_URI || "").trim();
-      if (!redirectUri) throw new Error("META_EMBEDDED_REDIRECT_URI não configurado");
+      // ✅ redirect_uri fixo (não inventa variação)
+      const redirectUri = getMetaOAuthRedirectUri();
 
-      // state carrega tenantId + redirectUri exato (fonte da verdade)
-      const state = signState({
-        tenantId,
-        redirectUri,
-        ts: Date.now()
-      });
+      const state = signState({ tenantId, ts: Date.now() });
 
       logger.info({ tenantId, redirectUri }, "🟢 WhatsApp Embedded Signup start");
 
@@ -421,9 +353,7 @@ async function exchangeCodeForToken({ appId, appSecret, code, redirectUri }) {
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&code=${encodeURIComponent(code)}`;
 
-  // Node 20 tem fetch nativo
-  const r = await fetch(url, { method: "GET" });
-  return r.json();
+  return fetch(url, { method: "GET" }).then((r) => r.json());
 }
 
 router.post(
@@ -439,24 +369,23 @@ router.post(
       const appId = requireEnv("META_APP_ID");
       const appSecret = requireEnv("META_APP_SECRET");
 
-      // ✅ fonte da verdade
       const parsedState = verifyState(state);
       const tenantId = String(parsedState?.tenantId || "").trim();
-      const redirectUri = String(parsedState?.redirectUri || "").trim();
+      if (!tenantId) return res.status(400).json({ error: "invalid_state" });
 
-      if (!tenantId || !redirectUri) return res.status(400).json({ error: "invalid_state" });
-
-      // (debug) se quiser comparar com referer
-      const ref = String(req.headers.referer || "");
-      const refOrigin = safeOriginFromReferer(ref);
-      const refPath = safePathFromReferer(ref);
+      // ✅ MESMO redirectUri do /start. Sem candidatos.
+      const redirectUri = getMetaOAuthRedirectUri();
 
       logger.info(
-        { tenantId, redirectUri, refOrigin, refPath },
+        {
+          tenantId,
+          redirectUri,
+          refOrigin: req.headers.referer ? new URL(req.headers.referer).origin : "",
+          refPath: req.headers.referer || ""
+        },
         "🟡 WhatsApp callback: exchanging code"
       );
 
-      // ✅ 1 tentativa só (evita loteria / erro 191)
       const tokenRes = await exchangeCodeForToken({
         appId,
         appSecret,
@@ -466,11 +395,7 @@ router.post(
 
       if (!tokenRes?.access_token) {
         logger.error(
-          {
-            tokenRes,
-            redirectUriUsed: redirectUri,
-            tenantId
-          },
+          { tokenRes, redirectUriUsed: redirectUri, tenantId },
           "❌ Meta token exchange failed"
         );
 
@@ -480,7 +405,6 @@ router.post(
         });
       }
 
-      // ✅ salva no config JSON (sem allowedOrigins no model)
       await prisma.channelConfig.upsert({
         where: { tenantId_channel: { tenantId, channel: "whatsapp" } },
         update: {
