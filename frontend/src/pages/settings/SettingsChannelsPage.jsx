@@ -37,14 +37,14 @@ import {
  * - POST   /settings/channels/whatsapp/callback
  * - DELETE /settings/channels/whatsapp
  *
- * Messenger (self-service):
- * - POST   /settings/channels/messenger/pages   { userAccessToken }
- * - POST   /settings/channels/messenger/connect { pageId, pageAccessToken, subscribedFields? }
+ * Messenger (self-service) — padrão atual (sem token do usuário no front):
+ * - GET    /settings/channels/messenger/pages
+ * - POST   /settings/channels/messenger/connect   { pageId, subscribedFields? }
  * - DELETE /settings/channels/messenger
  *
- * Instagram (self-service):
- * - POST   /settings/channels/instagram/pages   { userAccessToken }
- * - POST   /settings/channels/instagram/connect { pageId, pageAccessToken }
+ * Instagram (self-service) — padrão atual (sem token do usuário no front):
+ * - GET    /settings/channels/instagram/pages
+ * - POST   /settings/channels/instagram/connect   { pageId, subscribedFields? }
  * - DELETE /settings/channels/instagram
  */
 
@@ -198,7 +198,6 @@ export default function SettingsChannelsPage() {
   const [msModalOpen, setMsModalOpen] = useState(false);
   const [msConnecting, setMsConnecting] = useState(false);
   const [msErr, setMsErr] = useState("");
-  const [msUserToken, setMsUserToken] = useState("");
   const [msPages, setMsPages] = useState([]);
   const [msSelectedPageId, setMsSelectedPageId] = useState("");
   const [msSubFields, setMsSubFields] = useState("messages,messaging_postbacks");
@@ -207,9 +206,9 @@ export default function SettingsChannelsPage() {
   const [igModalOpen, setIgModalOpen] = useState(false);
   const [igConnecting, setIgConnecting] = useState(false);
   const [igErr, setIgErr] = useState("");
-  const [igUserToken, setIgUserToken] = useState("");
   const [igPages, setIgPages] = useState([]);
   const [igSelectedPageId, setIgSelectedPageId] = useState("");
+  const [igSubFields, setIgSubFields] = useState("messages,messaging_postbacks");
 
   useEffect(() => {
     mountedRef.current = true;
@@ -264,7 +263,6 @@ export default function SettingsChannelsPage() {
     const position = cfg.position === "left" ? "left" : "right";
     const primaryColor = cfg.primaryColor || cfg.color || "#34d399";
 
-    // ✅ allowedOrigins é top-level no record (backend), mas mantemos fallback em cfg
     const allowedOriginsFromRecord = Array.isArray(ch.allowedOrigins)
       ? ch.allowedOrigins
       : Array.isArray(cfg.allowedOrigins)
@@ -559,7 +557,6 @@ export default function SettingsChannelsPage() {
     setMsPages([]);
     setMsSelectedPageId("");
     setMsSubFields("messages,messaging_postbacks");
-    setMsUserToken("");
     setMsModalOpen(true);
   }
 
@@ -568,17 +565,14 @@ export default function SettingsChannelsPage() {
     setMsConnecting(true);
 
     try {
-      const token = String(msUserToken || "").trim();
-      if (!token) throw new Error("Cole o User Access Token (Graph API) para listar páginas.");
-
-      const res = await listMessengerPages(token);
-      const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name && p?.pageAccessToken);
+      const res = await listMessengerPages(); // ✅ GET (backend resolve token)
+      const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name);
 
       if (!mountedRef.current) return;
 
       setMsPages(pages);
       if (pages.length === 1) setMsSelectedPageId(String(pages[0].id));
-      if (!pages.length) setMsErr("Nenhuma página retornada. Verifique permissões do token.");
+      if (!pages.length) setMsErr("Nenhuma página retornada. Verifique a conexão no backend.");
     } catch (e) {
       if (!mountedRef.current) return;
       setMsErr(e?.message || String(e));
@@ -597,21 +591,12 @@ export default function SettingsChannelsPage() {
       const pageId = String(msSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
 
-      const page = msPages.find((p) => String(p.id) === pageId);
-      const pageAccessToken = String(page?.pageAccessToken || "").trim();
-      if (!pageAccessToken) throw new Error("pageAccessToken não encontrado para esta página (recarregue as páginas).");
-
       const subscribedFields = String(msSubFields || "")
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
 
-      await connectMessengerChannel({
-        pageId,
-        pageAccessToken,
-        subscribedFields
-      });
-
+      await connectMessengerChannel({ pageId, subscribedFields }); // ✅ sem pageAccessToken no front
       await loadChannels();
 
       if (!mountedRef.current) return;
@@ -668,7 +653,7 @@ export default function SettingsChannelsPage() {
     setIgErr("");
     setIgPages([]);
     setIgSelectedPageId("");
-    setIgUserToken("");
+    setIgSubFields("messages,messaging_postbacks");
     setIgModalOpen(true);
   }
 
@@ -677,17 +662,14 @@ export default function SettingsChannelsPage() {
     setIgConnecting(true);
 
     try {
-      const token = String(igUserToken || "").trim();
-      if (!token) throw new Error("Cole o User Access Token (Graph API) para listar páginas.");
-
-      const res = await listInstagramPages(token);
-      const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name && p?.pageAccessToken);
+      const res = await listInstagramPages(); // ✅ GET (backend resolve token)
+      const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name);
 
       if (!mountedRef.current) return;
 
       setIgPages(pages);
       if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
-      if (!pages.length) setIgErr("Nenhuma página retornada. Verifique permissões do token.");
+      if (!pages.length) setIgErr("Nenhuma página retornada. Verifique a conexão no backend.");
     } catch (e) {
       if (!mountedRef.current) return;
       setIgErr(e?.message || String(e));
@@ -706,11 +688,12 @@ export default function SettingsChannelsPage() {
       const pageId = String(igSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
 
-      const page = igPages.find((p) => String(p.id) === pageId);
-      const pageAccessToken = String(page?.pageAccessToken || "").trim();
-      if (!pageAccessToken) throw new Error("pageAccessToken não encontrado para esta página (recarregue as páginas).");
+      const subscribedFields = String(igSubFields || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
 
-      await connectInstagramChannel({ pageId, pageAccessToken });
+      await connectInstagramChannel({ pageId, subscribedFields }); // ✅ sem pageAccessToken no front
       await loadChannels();
 
       if (!mountedRef.current) return;
@@ -846,11 +829,7 @@ export default function SettingsChannelsPage() {
                 </button>
               ) : (
                 <>
-                  <button
-                    className="settings-primary-btn"
-                    onClick={() => setWaModalOpen(true)}
-                    disabled={waConnecting}
-                  >
+                  <button className="settings-primary-btn" onClick={() => setWaModalOpen(true)} disabled={waConnecting}>
                     Detalhes
                   </button>
                   <button
@@ -1063,17 +1042,8 @@ export default function SettingsChannelsPage() {
 
           {!msIsConnected && (
             <>
-              <div>
-                <div style={labelStyle()}>User Access Token (Graph)</div>
-                <input
-                  style={fieldStyle()}
-                  value={msUserToken}
-                  onChange={(e) => setMsUserToken(e.target.value)}
-                  placeholder="Cole aqui o user access token"
-                />
-                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-                  Usamos esse token apenas para listar páginas e obter o page access token.
-                </div>
+              <div style={{ marginTop: 2, fontSize: 12, opacity: 0.85 }}>
+                Clique para carregar as páginas disponíveis para conexão.
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1188,17 +1158,8 @@ export default function SettingsChannelsPage() {
 
           {!igIsConnected && (
             <>
-              <div>
-                <div style={labelStyle()}>User Access Token (Graph)</div>
-                <input
-                  style={fieldStyle()}
-                  value={igUserToken}
-                  onChange={(e) => setIgUserToken(e.target.value)}
-                  placeholder="Cole aqui o user access token"
-                />
-                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-                  Usamos esse token apenas para listar páginas e obter o page access token do Facebook Page ligado ao IG.
-                </div>
+              <div style={{ marginTop: 2, fontSize: 12, opacity: 0.85 }}>
+                Clique para carregar as páginas com Instagram conectado (IG Professional vinculado à Página).
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1225,6 +1186,16 @@ export default function SettingsChannelsPage() {
                 {!igPages.length && (
                   <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>Nenhuma página carregada ainda.</div>
                 )}
+              </div>
+
+              <div>
+                <div style={labelStyle()}>Eventos (subscribed_fields)</div>
+                <input
+                  style={fieldStyle()}
+                  value={igSubFields}
+                  onChange={(e) => setIgSubFields(e.target.value)}
+                  placeholder="messages,messaging_postbacks"
+                />
               </div>
 
               {!!igErr && (
@@ -1292,7 +1263,9 @@ export default function SettingsChannelsPage() {
                   <input
                     type="checkbox"
                     checked={!!webchatDraft.enabled}
-                    onChange={(e) => setWebchatDraft((p) => ({ ...p, enabled: e.target.checked }))}
+                    onChange={(e) =>
+                      setWebchatDraft((p) => (p ? { ...p, enabled: e.target.checked } : p))
+                    }
                   />
                   <span>{webchatDraft.enabled ? "Ativo" : "Desativado"}</span>
                 </label>
@@ -1334,10 +1307,11 @@ export default function SettingsChannelsPage() {
                   style={fieldStyle()}
                   value={webchatDraft.config?.primaryColor || "#34d399"}
                   onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: { ...(p.config || {}), primaryColor: e.target.value }
-                    }))
+                    setWebchatDraft((p) =>
+                      p
+                        ? { ...p, config: { ...(p.config || {}), primaryColor: e.target.value } }
+                        : p
+                    )
                   }
                   placeholder="#34d399"
                 />
@@ -1349,10 +1323,9 @@ export default function SettingsChannelsPage() {
                   style={fieldStyle()}
                   value={webchatDraft.config?.position || "right"}
                   onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: { ...(p.config || {}), position: e.target.value }
-                    }))
+                    setWebchatDraft((p) =>
+                      p ? { ...p, config: { ...(p.config || {}), position: e.target.value } } : p
+                    )
                   }
                 >
                   <option value="right">Direita</option>
@@ -1366,10 +1339,9 @@ export default function SettingsChannelsPage() {
                   style={fieldStyle()}
                   value={webchatDraft.config?.buttonText || ""}
                   onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: { ...(p.config || {}), buttonText: e.target.value }
-                    }))
+                    setWebchatDraft((p) =>
+                      p ? { ...p, config: { ...(p.config || {}), buttonText: e.target.value } } : p
+                    )
                   }
                   placeholder="Ajuda"
                 />
@@ -1381,10 +1353,9 @@ export default function SettingsChannelsPage() {
                   style={fieldStyle()}
                   value={webchatDraft.config?.headerTitle || ""}
                   onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: { ...(p.config || {}), headerTitle: e.target.value }
-                    }))
+                    setWebchatDraft((p) =>
+                      p ? { ...p, config: { ...(p.config || {}), headerTitle: e.target.value } } : p
+                    )
                   }
                   placeholder="Atendimento"
                 />
@@ -1396,10 +1367,9 @@ export default function SettingsChannelsPage() {
                   style={fieldStyle()}
                   value={webchatDraft.config?.greeting || ""}
                   onChange={(e) =>
-                    setWebchatDraft((p) => ({
-                      ...p,
-                      config: { ...(p.config || {}), greeting: e.target.value }
-                    }))
+                    setWebchatDraft((p) =>
+                      p ? { ...p, config: { ...(p.config || {}), greeting: e.target.value } } : p
+                    )
                   }
                   placeholder="Olá! Como posso ajudar?"
                 />
@@ -1413,10 +1383,9 @@ export default function SettingsChannelsPage() {
                 style={{ ...fieldStyle(), minHeight: 110, resize: "vertical" }}
                 value={(webchatDraft.allowedOrigins || []).join("\n")}
                 onChange={(e) =>
-                  setWebchatDraft((p) => ({
-                    ...p,
-                    allowedOrigins: normalizeOriginLines(e.target.value)
-                  }))
+                  setWebchatDraft((p) =>
+                    p ? { ...p, allowedOrigins: normalizeOriginLines(e.target.value) } : p
+                  )
                 }
                 placeholder={`Ex:\nhttps://cliente.gplabs.com.br\nhttps://www.gplabs.com.br`}
               />
@@ -1430,10 +1399,14 @@ export default function SettingsChannelsPage() {
                     className="settings-primary-btn"
                     style={{ opacity: 0.9 }}
                     onClick={() =>
-                      setWebchatDraft((p) => ({
-                        ...p,
-                        allowedOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"]
-                      }))
+                      setWebchatDraft((p) =>
+                        p
+                          ? {
+                              ...p,
+                              allowedOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"]
+                            }
+                          : p
+                      )
                     }
                   >
                     Preencher origens de teste
@@ -1445,7 +1418,8 @@ export default function SettingsChannelsPage() {
             {/* Snippet */}
             <div>
               <div style={labelStyle()}>
-                Script de embed <span style={{ opacity: 0.75 }}>(use este script no site para aplicar as personalizações)</span>
+                Script de embed{" "}
+                <span style={{ opacity: 0.75 }}>(use este script no site para aplicar as personalizações)</span>
               </div>
 
               <textarea
