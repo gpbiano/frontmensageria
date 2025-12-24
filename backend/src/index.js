@@ -31,6 +31,8 @@ const envDevPath = path.join(__dirname, "..", ".env");
 
 /**
  * ✅ FIX DEFINITIVO DE ENV
+ * - Production: prioridade .env.production (override true)
+ * - Dev: prioridade .env (override false)
  */
 if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath, override: true });
@@ -119,12 +121,11 @@ const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
 const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
 // 📡 Webhooks
-const { default: whatsappRouter } = await import(
-  "./routes/channels/whatsappRouter.js"
-);
-const { default: messengerRouter } = await import(
-  "./routes/channels/messengerRouter.js"
-);
+const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
+const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
+
+// ✅ Instagram webhook (NOVO)
+const { default: instagramRouter } = await import("./routes/channels/instagramRouter.js");
 
 // ===============================
 // VARS
@@ -198,14 +199,21 @@ function requirePrisma(_req, res, next) {
 const PUBLIC_NO_TENANT_PATHS = [
   "/",
   "/health",
+
+  // Auth (mantemos ambos para compat)
   "/login",
   "/auth/login",
   "/auth/select-tenant",
   "/auth/password",
   "/auth/password/verify",
   "/auth/password/set",
+
+  // Webhooks (públicos)
   "/webhook/whatsapp",
   "/webhook/messenger",
+  "/webhook/instagram",
+
+  // Webchat público
   "/webchat"
 ];
 
@@ -225,12 +233,14 @@ app.get("/health", async (_req, res) => {
   let users = 0;
   let tenants = 0;
 
-  try {
-    if (prismaReady) {
+  if (prismaReady) {
+    try {
       users = await prisma.user.count();
       tenants = await prisma.tenant.count();
+    } catch {
+      // não quebra health
     }
-  } catch {}
+  }
 
   res.json({
     ok: true,
@@ -243,13 +253,18 @@ app.get("/health", async (_req, res) => {
   });
 });
 
+// Auth público
 app.use("/", authRouter);
 app.use("/auth", passwordRouter);
 
 // 🌐 Widgets / Webhooks públicos
 app.use("/webchat", requirePrisma, webchatRouter);
+
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
+
+// ✅ Instagram Webhook (NOVO)
+app.use("/webhook/instagram", instagramRouter);
 
 // ===============================
 // 🔒 MIDDLEWARE GLOBAL
