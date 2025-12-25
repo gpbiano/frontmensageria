@@ -24,8 +24,32 @@ function safeStr(v, fallback = "") {
   return s.trim() || fallback;
 }
 
+function asJson(v) {
+  return v && typeof v === "object" ? v : {};
+}
+
+// Mensagem texto (apenas quando existir)
 function msgTextFromIGEvent(ev) {
   return safeStr(ev?.message?.text || ev?.message?.body || ev?.text || "");
+}
+
+// Ignora eventos que não são mensagem de texto do usuário
+function isValidIncomingTextEvent(ev) {
+  const text = msgTextFromIGEvent(ev);
+  if (!text) return false;
+
+  // IG/Messenger podem mandar "echo" do que o app enviou
+  if (ev?.message?.is_echo === true) return false;
+
+  // alguns eventos vêm sem sender/recipient
+  const senderId = safeStr(ev?.sender?.id);
+  const recipientId = safeStr(ev?.recipient?.id);
+  if (!senderId || !recipientId) return false;
+
+  // evita auto-reply acidental
+  if (senderId === recipientId) return false;
+
+  return true;
 }
 
 async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, text }) {
@@ -53,12 +77,16 @@ async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, t
 }
 
 async function resolveTenantByInstagramRecipient(instagramBusinessId) {
+  // instagramBusinessId fica em config.instagramBusinessId
   return prisma.channelConfig.findFirst({
     where: {
       channel: "instagram",
       enabled: true,
       status: "connected",
-      config: { path: ["instagramBusinessId"], equals: String(instagramBusinessId) }
+      config: {
+        path: ["instagramBusinessId"],
+        equals: String(instagramBusinessId)
+      }
     },
     orderBy: { updatedAt: "desc" }
   });
@@ -98,12 +126,13 @@ router.post("/", async (req, res) => {
       const events = Array.isArray(entry.messaging) ? entry.messaging : [];
 
       for (const ev of events) {
+        if (!isValidIncomingTextEvent(ev)) continue;
+
         const senderId = safeStr(ev?.sender?.id); // user
-        const recipientId = safeStr(ev?.recipient?.id); // IG business
+        const recipientId = safeStr(ev?.recipient?.id); // IG business id (recipient)
         const text = msgTextFromIGEvent(ev);
 
-        if (!senderId || !recipientId || !text) continue;
-
+        // 1) resolve tenant via recipientId (instagramBusinessId)
         const ch = await resolveTenantByInstagramRecipient(recipientId);
         if (!ch?.tenantId) {
           logger.warn({ recipientId }, "⚠️ IG webhook: tenant não encontrado para recipientId");
@@ -111,7 +140,16 @@ router.post("/", async (req, res) => {
         }
 
         const tenantId = String(ch.tenantId);
+        const cfg = asJson(ch.config);
+        const instagramBusinessId = safeStr(cfg.instagramBusinessId || recipientId);
+        const pageAccessToken = safeStr(ch.accessToken);
 
+        if (!pageAccessToken) {
+          logger.warn({ tenantId, recipientId }, "⚠️ IG webhook: sem accessToken no ChannelConfig.instagram");
+          continue;
+        }
+
+        // 2) upsert conversa
         const convRes = await getOrCreateChannelConversation({
           tenantId,
           source: "instagram",
@@ -121,8 +159,10 @@ router.post("/", async (req, res) => {
 
         if (!convRes?.ok || !convRes?.conversation?.id) continue;
 
-        const conversationId = String(convRes.conversation.id);
+        const conversation = convRes.conversation;
+        const conversationId = String(conversation.id);
 
+        // 3) salva mensagem recebida (dedupe usa waMessageId no conversations.js)
         await appendMessage(conversationId, {
           tenantId,
           source: "instagram",
@@ -132,35 +172,39 @@ router.post("/", async (req, res) => {
           type: "text",
           text,
           createdAt: new Date().toISOString(),
-          waMessageId: ev?.message?.mid ? String(ev.message.mid) : undefined,
+          waMessageId: ev?.message?.mid ? String(ev.message.mid) : undefined, // reusa campo p/ dedupe
           payload: ev
         });
 
-        const botSettings = await getChatbotSettingsForAccount({
-          tenantId,
-          channel: "instagram",
-          accountId: recipientId
-        });
+        // 4) se já está em modo humano / handoff ativo, não roda bot
+        if (String(conversation.currentMode || "").toLowerCase() === "human" || conversation.handoffActive === true) {
+          continue;
+        }
+
+        // 5) regras do bot (accountId pode ser recipientId, ou "default")
+        const accountSettings = getChatbotSettingsForAccount(recipientId || "default");
 
         const route = decideRoute({
-          channel: "instagram",
-          text,
-          settings: botSettings
+          accountSettings,
+          conversation,
+          messageText: text
         });
 
-        if (route?.mode !== "bot") continue;
+        if (route?.target !== "bot") continue;
 
+        // 6) gera resposta do bot
         const botReply = await callGenAIBot({
           tenantId,
           channel: "instagram",
           conversationId,
           text,
-          settings: botSettings
+          settings: accountSettings
         });
 
         const botText = safeStr(botReply?.text || botReply?.message || botReply || "");
         if (!botText) continue;
 
+        // 7) salva a resposta do bot no histórico
         await appendMessage(conversationId, {
           tenantId,
           source: "instagram",
@@ -172,14 +216,7 @@ router.post("/", async (req, res) => {
           createdAt: new Date().toISOString()
         });
 
-        const pageAccessToken = safeStr(ch.accessToken);
-        const instagramBusinessId = safeStr(ch?.config?.instagramBusinessId || recipientId);
-
-        if (!pageAccessToken) {
-          logger.warn({ tenantId }, "⚠️ IG webhook: sem accessToken no ChannelConfig.instagram");
-          continue;
-        }
-
+        // 8) envia via Graph para o usuário (sender)
         const sendRes = await igSendText({
           instagramBusinessId,
           recipientId: senderId,
@@ -188,7 +225,10 @@ router.post("/", async (req, res) => {
         });
 
         if (!sendRes.ok) {
-          logger.warn({ tenantId, sendRes }, "⚠️ IG webhook: falha ao enviar mensagem (Graph)");
+          logger.warn(
+            { tenantId, status: sendRes.status, meta: sendRes.json?.error || sendRes.json },
+            "⚠️ IG webhook: falha ao enviar mensagem (Graph)"
+          );
         }
       }
     }
