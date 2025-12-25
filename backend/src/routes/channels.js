@@ -163,6 +163,68 @@ async function graphPostJson(url, accessToken, bodyObj = {}) {
 }
 
 // ======================================================
+// META OAuth helpers (User short -> long-lived)
+// ======================================================
+async function exchangeForLongLivedUserToken(shortToken) {
+  const appId = requireEnv("META_APP_ID");
+  const appSecret = requireEnv("META_APP_SECRET");
+
+  const url =
+    `https://graph.facebook.com/${META_GRAPH_VERSION}/oauth/access_token` +
+    `?grant_type=fb_exchange_token` +
+    `&client_id=${encodeURIComponent(appId)}` +
+    `&client_secret=${encodeURIComponent(appSecret)}` +
+    `&fb_exchange_token=${encodeURIComponent(shortToken)}`;
+
+  const r = await fetch(url, { method: "GET" });
+  const j = await r.json().catch(() => ({}));
+
+  if (!r.ok || !j?.access_token) {
+    logger.warn({ status: r.status, meta: j?.error || j }, "❌ Meta long-lived exchange failed");
+    return { ok: false, error: "long_lived_exchange_failed", meta: j?.error || j };
+  }
+
+  return {
+    ok: true,
+    accessToken: String(j.access_token),
+    expiresIn: j.expires_in ?? null,
+    tokenType: j.token_type ?? null
+  };
+}
+
+async function fetchPageAccessTokenFromUser(userToken, pageId) {
+  const url =
+    `https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts` +
+    `?fields=id,name,access_token` +
+    `&access_token=${encodeURIComponent(userToken)}`;
+
+  const r = await fetch(url, { method: "GET" });
+  const j = await r.json().catch(() => ({}));
+
+  if (!r.ok) {
+    logger.warn({ status: r.status, meta: j?.error || j }, "❌ Meta /me/accounts failed");
+    return { ok: false, error: "me_accounts_failed", meta: j?.error || j };
+  }
+
+  const data = Array.isArray(j?.data) ? j.data : [];
+  const row = data.find((p) => String(p?.id || "") === String(pageId));
+
+  if (!row?.access_token) {
+    return {
+      ok: false,
+      error: "page_token_not_found",
+      meta: { pagesCount: data.length }
+    };
+  }
+
+  return {
+    ok: true,
+    pageAccessToken: String(row.access_token),
+    pageName: String(row?.name || "").trim()
+  };
+}
+
+// ======================================================
 // GET /settings/channels
 // ======================================================
 router.get(
@@ -569,12 +631,14 @@ router.delete(
 
 // ======================================================
 // ✅ INSTAGRAM — Produto (self-service multi-tenant)
-// IMPORTANTES FIXES:
-// - agora salva também o instagramBusinessId em coluna (pageId NÃO serve pra IG webhook)
-// - agora cria/atualiza index lookup via pageId (page) + config.instagramBusinessId
+// FIX DEFINITIVO:
+// - aceitar userAccessToken (do login do usuário) e trocar por long-lived
+// - resolver pageAccessToken via /me/accounts
+// - persistir ChannelConfig.accessToken como PAGE TOKEN (não expira rápido)
+// - manter instagramBusinessId/igUsername em config
 // ======================================================
 
-// POST /settings/channels/instagram/pages
+// POST /settings/channels/instagram/pages  (mantém igual)
 router.post(
   "/instagram/pages",
   requireAuth,
@@ -613,7 +677,7 @@ router.post(
   }
 );
 
-// POST /settings/channels/instagram/connect
+// POST /settings/channels/instagram/connect  ✅ CORRIGIDO (usa PAGE TOKEN)
 router.post(
   "/instagram/connect",
   requireAuth,
@@ -625,12 +689,40 @@ router.post(
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
       const pageId = String(req.body?.pageId || "").trim();
-      const pageAccessToken = String(req.body?.pageAccessToken || "").trim();
+
+      // ✅ compat: front pode mandar "accessToken" antigo
+      const userAccessToken = String(
+        req.body?.userAccessToken || req.body?.accessToken || ""
+      ).trim();
+
+      const subscribedFields = Array.isArray(req.body?.subscribedFields)
+        ? req.body.subscribedFields.map(String).map((s) => s.trim()).filter(Boolean)
+        : ["messages", "messaging_postbacks"];
 
       if (!pageId) return res.status(400).json({ error: "pageId_required" });
-      if (!pageAccessToken) return res.status(400).json({ error: "pageAccessToken_required" });
+      if (!userAccessToken) return res.status(400).json({ error: "userAccessToken_required" });
 
-      // 1) valida Page token + resolve IG business account
+      // 1) troca por long-lived user token
+      const exchanged = await exchangeForLongLivedUserToken(userAccessToken);
+      if (!exchanged.ok) {
+        return res.status(400).json({
+          error: "long_lived_exchange_failed",
+          meta: exchanged.meta || null
+        });
+      }
+      const longUserToken = exchanged.accessToken;
+
+      // 2) resolve PAGE TOKEN via /me/accounts (durável)
+      const pageTok = await fetchPageAccessTokenFromUser(longUserToken, pageId);
+      if (!pageTok.ok) {
+        return res.status(400).json({
+          error: pageTok.error,
+          meta: pageTok.meta || null
+        });
+      }
+      const pageAccessToken = pageTok.pageAccessToken;
+
+      // 3) valida Page token + resolve IG business account
       const pageInfoUrl =
         `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}` +
         `?fields=id,name,instagram_business_account` +
@@ -647,7 +739,7 @@ router.post(
         return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
       }
 
-      const displayName = String(vj?.name || "Facebook Page").trim();
+      const displayName = String(vj?.name || pageTok.pageName || "Facebook Page").trim();
       const instagramBusinessId = vj?.instagram_business_account?.id
         ? String(vj.instagram_business_account.id)
         : null;
@@ -660,18 +752,44 @@ router.post(
         });
       }
 
-      // 2) (best effort) valida IG business id (opcional)
-      // ajuda debug e garante que o token tem permissão pra ler o IG
-      const igInfoUrl =
-        `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
-          instagramBusinessId
-        )}?fields=id,username,name&access_token=${encodeURIComponent(pageAccessToken)}`;
+      // 4) (best effort) pega username do IG
+      let igUsername = "";
+      try {
+        const igInfoUrl =
+          `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
+            instagramBusinessId
+          )}?fields=id,username,name&access_token=${encodeURIComponent(pageAccessToken)}`;
 
-      const igResp = await fetch(igInfoUrl, { method: "GET" });
-      const igJson = await igResp.json().catch(() => ({}));
-      const igUsername = igResp.ok && igJson?.id ? String(igJson?.username || "") : "";
+        const igResp = await fetch(igInfoUrl, { method: "GET" });
+        const igJson = await igResp.json().catch(() => ({}));
+        igUsername = igResp.ok && igJson?.id ? String(igJson?.username || "").trim() : "";
+      } catch {
+        // ignora
+      }
 
-      // 3) salva no ChannelConfig (instagram)
+      // 5) subscribe (best effort)
+      let subscribeOk = false;
+      try {
+        const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
+          pageId
+        )}/subscribed_apps`;
+
+        const subRes = await graphPostJson(subUrl, pageAccessToken, {
+          subscribed_fields: subscribedFields
+        });
+
+        subscribeOk = !!subRes.ok;
+        if (!subRes.ok) {
+          logger.warn(
+            { status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId },
+            "⚠️ Instagram subscribe failed (best effort)"
+          );
+        }
+      } catch (e) {
+        logger.warn({ err: e, tenantId, pageId }, "⚠️ Instagram subscribe exception (best effort)");
+      }
+
+      // 6) salva no ChannelConfig (instagram) — accessToken = PAGE TOKEN
       const current = await prisma.channelConfig.findUnique({
         where: { tenantId_channel: { tenantId, channel: "instagram" } }
       });
@@ -680,22 +798,21 @@ router.post(
         ...(current?.config || {}),
         instagramBusinessId,
         igUsername: igUsername || undefined,
+        subscribedFields,
         connectedAt: nowIso(),
-        graphVersion: META_GRAPH_VERSION
+        graphVersion: META_GRAPH_VERSION,
+        tokenKind: "page",
+        userTokenExpiresIn: exchanged.expiresIn ?? null
       };
 
-      // ✅ opcional: se seu schema já tem igBusinessId como coluna, preenche também
-      // se NÃO tiver, remova "wabaId:" abaixo.
       const updated = await prisma.channelConfig.upsert({
         where: { tenantId_channel: { tenantId, channel: "instagram" } },
         update: {
           enabled: true,
           status: "connected",
           pageId,
-          accessToken: pageAccessToken,
+          accessToken: pageAccessToken, // ✅ PAGE TOKEN (durável)
           displayName,
-          // 🚨 SE você ainda não criou coluna própria p/ IG, deixe só no config
-          // wabaId: instagramBusinessId,
           config: mergedConfig,
           updatedAt: new Date()
         },
@@ -708,7 +825,6 @@ router.post(
           pageId,
           accessToken: pageAccessToken,
           displayName,
-          // wabaId: instagramBusinessId,
           config: mergedConfig
         }
       });
@@ -720,7 +836,8 @@ router.post(
           pageId,
           pageName: displayName,
           instagramBusinessId,
-          igUsername: igUsername || null
+          igUsername: igUsername || null,
+          subscribed: subscribeOk
         }
       });
     } catch (e) {
