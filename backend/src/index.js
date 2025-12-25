@@ -124,8 +124,8 @@ const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRou
 const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
 
-// ✅ Instagram webhook (NOVO)
-const { default: instagramRouter } = await import("./routes/channels/instagramRouter.js");
+// ✅ Instagram WEBHOOK (BOT AQUI) — arquivo novo
+const { default: instagramWebhookRouter } = await import("./routes/webhooks/instagramWebhookRouter.js");
 
 // ===============================
 // VARS
@@ -257,14 +257,15 @@ app.get("/health", async (_req, res) => {
 app.use("/", authRouter);
 app.use("/auth", passwordRouter);
 
-// 🌐 Widgets / Webhooks públicos
+// 🌐 Webchat público
 app.use("/webchat", requirePrisma, webchatRouter);
 
+// 📡 Webhooks públicos
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 
-// ✅ Instagram Webhook (NOVO)
-app.use("/webhook/instagram", instagramRouter);
+// ✅ Instagram webhook (com BOT)
+app.use("/webhook/instagram", instagramWebhookRouter);
 
 // ===============================
 // 🔒 MIDDLEWARE GLOBAL
