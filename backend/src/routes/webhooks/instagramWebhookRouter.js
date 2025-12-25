@@ -145,7 +145,10 @@ router.post("/", async (req, res) => {
         const pageAccessToken = safeStr(ch.accessToken);
 
         if (!pageAccessToken) {
-          logger.warn({ tenantId, recipientId }, "⚠️ IG webhook: sem accessToken no ChannelConfig.instagram");
+          logger.warn(
+            { tenantId, recipientId },
+            "⚠️ IG webhook: sem accessToken no ChannelConfig.instagram"
+          );
           continue;
         }
 
@@ -177,7 +180,10 @@ router.post("/", async (req, res) => {
         });
 
         // 4) se já está em modo humano / handoff ativo, não roda bot
-        if (String(conversation.currentMode || "").toLowerCase() === "human" || conversation.handoffActive === true) {
+        if (
+          String(conversation?.currentMode || "").toLowerCase() === "human" ||
+          conversation?.handoffActive === true
+        ) {
           continue;
         }
 
@@ -192,16 +198,15 @@ router.post("/", async (req, res) => {
 
         if (route?.target !== "bot") continue;
 
-        // 6) gera resposta do bot
+        // 6) gera resposta do bot (assinatura correta do botEngine)
         const botReply = await callGenAIBot({
-          tenantId,
-          channel: "instagram",
-          conversationId,
-          text,
-          settings: accountSettings
+          accountSettings,
+          conversation: { ...conversation, id: conversationId }, // garante id para logs
+          messageText: text,
+          history: [] // opcional: aqui você pode buscar histórico no futuro
         });
 
-        const botText = safeStr(botReply?.text || botReply?.message || botReply || "");
+        const botText = safeStr(botReply?.replyText || "");
         if (!botText) continue;
 
         // 7) salva a resposta do bot no histórico
