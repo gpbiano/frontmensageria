@@ -54,6 +54,7 @@ logger.info(
   {
     ENV,
     TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN,
+    META_OAUTH_REDIRECT_URI: process.env.META_OAUTH_REDIRECT_URI || null,
     META_EMBEDDED_REDIRECT_URI: process.env.META_EMBEDDED_REDIRECT_URI || null
   },
   "🧩 Env carregado"
@@ -74,7 +75,8 @@ try {
     prisma?.tenant &&
     prisma?.userTenant &&
     prisma?.conversation &&
-    prisma?.message
+    prisma?.message &&
+    prisma?.channelConfig
   );
 
   logger.info(
@@ -120,12 +122,14 @@ const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
 const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
-// 📡 Webhooks
+// 📡 Webhooks (públicos)
 const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
 
-// ✅ Instagram WEBHOOK (BOT AQUI) — arquivo novo
-const { default: instagramWebhookRouter } = await import("./routes/webhooks/instagramWebhookRouter.js");
+// ✅ Instagram WEBHOOK (arquivo novo — NÃO é o settings/channels)
+const { default: instagramWebhookRouter } = await import(
+  "./routes/webhooks/instagramWebhookRouter.js"
+);
 
 // ===============================
 // VARS
@@ -263,8 +267,6 @@ app.use("/webchat", requirePrisma, webchatRouter);
 // 📡 Webhooks públicos
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
-
-// ✅ Instagram webhook (com BOT)
 app.use("/webhook/instagram", instagramWebhookRouter);
 
 // ===============================
