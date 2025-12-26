@@ -696,7 +696,6 @@ export type InstagramPageItem = {
  * Backend:
  * - POST /settings/channels/instagram/start
  * Retorna appId, redirectUri, state e scopes.
- * (O front monta a URL do Instagram OAuth e redireciona)
  */
 export async function startInstagramBusinessLogin(): Promise<{
   appId: string;
@@ -712,7 +711,6 @@ export async function startInstagramBusinessLogin(): Promise<{
  * Backend:
  * - POST /settings/channels/instagram/callback { code, state }
  * Troca code -> token (server-side) e lista páginas.
- * Retorna connectState assinado (não expõe token pro front).
  */
 export async function finishInstagramBusinessLogin(payload: {
   code: string;
@@ -730,7 +728,7 @@ export async function finishInstagramBusinessLogin(payload: {
 }
 
 /**
- * ✅ Backend atualizado:
+ * ✅ Backend:
  * - POST /settings/channels/instagram/connect { pageId, connectState, subscribedFields? }
  */
 export async function connectInstagramChannel(payload: {
@@ -753,6 +751,27 @@ export async function disconnectInstagramChannel(): Promise<{
   instagram?: InstagramChannelRecord;
 }> {
   return request("/settings/channels/instagram", { method: "DELETE" });
+}
+
+/**
+ * ✅ Compat (caso algum lugar do front antigo ainda importe estes nomes)
+ * Isso evita erro de build tipo "X is not exported by src/api.ts".
+ */
+export const startInstagramOAuth = startInstagramBusinessLogin;
+export const finishInstagramOAuth = finishInstagramBusinessLogin;
+
+/**
+ * Opcional/compat: alguns fronts antigos listavam páginas via endpoint separado.
+ * Se o backend NÃO tiver esse endpoint, não chame essa função.
+ */
+export async function listInstagramPages(userAccessToken: string): Promise<{ pages: InstagramPageItem[] }> {
+  const tok = String(userAccessToken || "").trim();
+  if (!tok) throw new Error("userAccessToken_required");
+
+  return request("/settings/channels/instagram/pages", {
+    method: "POST",
+    body: { userAccessToken: tok }
+  });
 }
 
 // ======================================================
