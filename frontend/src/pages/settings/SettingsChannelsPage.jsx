@@ -170,7 +170,7 @@ function decodeStateFlowUnsafe(state) {
     const decoded = atob(s + pad); // "<raw>.<sig>"
     const [raw] = String(decoded || "").split(".");
     const obj = JSON.parse(raw);
-    return String(obj?.flow || obj?.kind || "").trim();
+    return String(obj?.flow || obj?.kind || obj?.channel || "").trim();
   } catch {
     return "";
   }
@@ -619,9 +619,16 @@ export default function SettingsChannelsPage() {
 
   function openInstagramModal() {
     setIgErr("");
+    setIgPages([]);
+    setIgSelectedPageId("");
+    setIgConnectState("");
     setIgModalOpen(true);
   }
 
+  /**
+   * ✅ FIX: backend retorna authUrl, NÃO appId.
+   * Então aqui só redireciona para start.authUrl.
+   */
   async function startInstagramConnect() {
     setIgErr("");
     setIgConnecting(true);
@@ -629,28 +636,12 @@ export default function SettingsChannelsPage() {
     try {
       const start = await startInstagramBusinessLogin();
 
-      const appId = start?.appId;
-      const state = start?.state;
-      const redirectUri = String(start?.redirectUri || "").trim();
-      const scopes = start?.scopes || [];
-
-      if (!appId || !state || !redirectUri) {
-        throw new Error("Resposta inválida do backend (appId/state/redirectUri).");
+      const authUrl = String(start?.authUrl || "").trim();
+      if (!authUrl) {
+        throw new Error("Resposta inválida do backend (authUrl ausente).");
       }
 
-      // Base padrão (Instagram)
-      const base = String(start?.authBaseUrl || "https://www.instagram.com/oauth/authorize").trim();
-
-      const params = new URLSearchParams({
-        force_reauth: "true",
-        client_id: String(appId),
-        redirect_uri: redirectUri,
-        response_type: "code",
-        scope: scopes.join(","),
-        state: String(state)
-      });
-
-      window.location.href = `${base}?${params.toString()}`;
+      window.location.href = authUrl;
     } catch (e) {
       if (!mountedRef.current) return;
       setIgErr(extractErr(e).msg || String(e));
@@ -670,7 +661,7 @@ export default function SettingsChannelsPage() {
       await connectInstagramChannel({
         pageId,
         connectState: igConnectState,
-        subscribedFields: ["messages"] // pode expandir depois
+        subscribedFields: ["messages"]
       });
 
       await loadChannels();
@@ -729,7 +720,6 @@ export default function SettingsChannelsPage() {
 
       if (err) {
         const msg = String(errDesc || err);
-        // tenta classificar pelo state
         const flow = decodeStateFlowUnsafe(state);
         if (flow === "instagram") setIgErr(msg);
         else setWaErr(msg);
@@ -754,13 +744,11 @@ export default function SettingsChannelsPage() {
             setIgConnectState(String(res?.connectState || ""));
             if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
 
-            // abre modal automaticamente para escolher página
             setIgModalOpen(true);
 
             setToast(pages.length > 1 ? "Escolha a página para conectar." : "Página carregada.");
             setTimeout(() => mountedRef.current && setToast(""), 2000);
           } else {
-            // default: WhatsApp
             setWaConnecting(true);
             await finishWhatsAppEmbeddedSignup({ code, state });
             await loadChannels();
@@ -770,7 +758,6 @@ export default function SettingsChannelsPage() {
             setTimeout(() => mountedRef.current && setToast(""), 2000);
           }
 
-          // limpa query
           url.searchParams.delete("code");
           url.searchParams.delete("state");
           url.searchParams.delete("error");
@@ -863,7 +850,7 @@ export default function SettingsChannelsPage() {
           <div className="settings-channel-card">
             <div className="settings-channel-header">
               <span className="settings-channel-title">WhatsApp</span>
-              <Pill variant={waIsConnected ? "on" : "off"}>{whatsappLabel()}</Pill>
+              <Pill variant={whatsappVariant}>{whatsappLabel()}</Pill>
             </div>
 
             <p className="settings-channel-description">Conecte seu WhatsApp Business via Cadastro Incorporado (Meta).</p>
@@ -1240,7 +1227,6 @@ export default function SettingsChannelsPage() {
                 </button>
               </div>
 
-              {/* Step 2: páginas */}
               {!!igPages.length && (
                 <div>
                   <div style={labelStyle()}>Página</div>
