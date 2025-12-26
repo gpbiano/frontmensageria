@@ -17,7 +17,7 @@ import {
   connectMessengerChannel,
   disconnectMessengerChannel,
 
-  // ✅ Instagram (Zenvia-like) — ALINHADO COM api.ts
+  // ✅ Instagram (Zenvia-like) — backend retorna authUrl pronta
   startInstagramBusinessLogin,
   finishInstagramBusinessLogin,
   connectInstagramChannel,
@@ -468,9 +468,7 @@ export default function SettingsChannelsPage() {
       const startRaw = await startWhatsAppEmbeddedSignup();
       const start = normalizeMetaStart(startRaw);
 
-      // ✅ SEMPRE usar redirectUri do backend (single source of truth).
-      // Fallback é só pra não quebrar dev.
-      const redirectUri = String(start.redirectUri || "").trim() || buildFrontendCallbackUrl("whatsapp");
+      const redirectUri = start.redirectUri || buildFrontendCallbackUrl("whatsapp");
 
       if (!start.appId || !start.state) {
         throw new Error(
@@ -486,9 +484,7 @@ export default function SettingsChannelsPage() {
         scope: (start.scopes.length ? start.scopes : ["whatsapp_business_messaging", "business_management"]).join(",")
       });
 
-      window.location.href = `https://www.facebook.com/${encodeURIComponent(
-        start.graphVersion
-      )}/dialog/oauth?${params.toString()}`;
+      window.location.href = `https://www.facebook.com/${encodeURIComponent(start.graphVersion)}/dialog/oauth?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
       setWaErr(extractErr(e).msg || String(e));
@@ -641,35 +637,39 @@ export default function SettingsChannelsPage() {
   }
 
   function openInstagramModal() {
+    // ✅ evita mostrar erro/estado velho
     setIgErr("");
-    // ✅ se já tem connectState + páginas, mantém pra não perder o step 2
+    setIgPages([]);
+    setIgSelectedPageId("");
+    setIgConnectState("");
     setIgModalOpen(true);
   }
 
-async function startInstagramConnect() {
-  setIgErr("");
-  setIgConnecting(true);
+  // ✅ AQUI está o fix definitivo:
+  // Backend retorna authUrl pronta (com client_id, redirect_uri, state, scope, version).
+  async function startInstagramConnect() {
+    setIgErr("");
+    setIgConnecting(true);
 
-  try {
-    const start = await startInstagramBusinessLogin();
+    try {
+      const start = await startInstagramBusinessLogin();
 
-    // ✅ CONTRATO CORRETO
-    if (!start?.authUrl) {
-      throw new Error(
-        `Instagram start inválido (authUrl ausente). Recebido: ${JSON.stringify(start)}`
-      );
+      const authUrl = String(start?.authUrl || start?.authURL || "").trim();
+      if (!authUrl) {
+        throw new Error(
+          `Instagram start inválido (authUrl ausente). Recebido: ${JSON.stringify(start)}`
+        );
+      }
+
+      window.location.href = authUrl;
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setIgErr(extractErr(e).msg || String(e));
+    } finally {
+      if (!mountedRef.current) return;
+      setIgConnecting(false);
     }
-
-    // 🔥 OAuth redirect deve vir 100% do backend
-    window.location.href = String(start.authUrl);
-  } catch (e) {
-    if (!mountedRef.current) return;
-    setIgErr(extractErr(e).msg || String(e));
-  } finally {
-    if (!mountedRef.current) return;
-    setIgConnecting(false);
   }
-}
 
   async function finalizeInstagramWithPage() {
     setIgErr("");
@@ -761,6 +761,7 @@ async function startInstagramConnect() {
           if (channel === "instagram") {
             setIgConnecting(true);
 
+            // ✅ backend valida state e devolve connectState + pages
             const fin = await finishInstagramBusinessLogin({ code, state });
 
             const pages = safeArr(fin?.pages).filter((p) => p?.id && p?.name);
@@ -813,6 +814,9 @@ async function startInstagramConnect() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ===============================
+  // UI
+  // ===============================
   return (
     <div className="settings-page">
       <h1 className="settings-title">Configurações</h1>
@@ -1064,6 +1068,20 @@ async function startInstagramConnect() {
         </div>
       </section>
 
+      {/* ✅ Modal WhatsApp (simples) */}
+      <Modal open={waModalOpen} title="WhatsApp — Detalhes da conexão" onClose={() => setWaModalOpen(false)}>
+        <div style={{ display: "grid", gap: 10, fontSize: 13, opacity: 0.95 }}>
+          <div>
+            <b>Status:</b> {waIsConnected ? "Conectado" : whatsappLabel()}
+          </div>
+          {!!whatsapp?.updatedAt && (
+            <div>
+              <b>Atualizado em:</b> {new Date(whatsapp.updatedAt).toLocaleString()}
+            </div>
+          )}
+        </div>
+      </Modal>
+
       {/* ✅ Modal Messenger */}
       <Modal
         open={msModalOpen}
@@ -1280,9 +1298,7 @@ async function startInstagramConnect() {
                   <input
                     type="checkbox"
                     checked={!!webchatDraft.enabled}
-                    onChange={(e) =>
-                      setWebchatDraft((p) => (p ? { ...p, enabled: e.target.checked } : p))
-                    }
+                    onChange={(e) => setWebchatDraft((p) => (p ? { ...p, enabled: e.target.checked } : p))}
                   />
                   <span>{webchatDraft.enabled ? "Ativo" : "Desativado"}</span>
                 </label>
@@ -1302,12 +1318,7 @@ async function startInstagramConnect() {
                 </div>
 
                 <div style={{ marginTop: 8 }}>
-                  <button
-                    className="settings-primary-btn"
-                    style={{ opacity: 0.95 }}
-                    onClick={rotateKey}
-                    disabled={saving}
-                  >
+                  <button className="settings-primary-btn" style={{ opacity: 0.95 }} onClick={rotateKey} disabled={saving}>
                     Rotacionar chave
                   </button>
                 </div>
@@ -1394,9 +1405,7 @@ async function startInstagramConnect() {
                 style={{ ...fieldStyle(), minHeight: 110, resize: "vertical" }}
                 value={(webchatDraft.allowedOrigins || []).join("\n")}
                 onChange={(e) =>
-                  setWebchatDraft((p) =>
-                    p ? { ...p, allowedOrigins: normalizeOriginLines(e.target.value) } : p
-                  )
+                  setWebchatDraft((p) => (p ? { ...p, allowedOrigins: normalizeOriginLines(e.target.value) } : p))
                 }
                 placeholder={`Ex:\nhttps://cliente.gplabs.com.br\nhttps://www.gplabs.com.br`}
               />
@@ -1438,12 +1447,7 @@ async function startInstagramConnect() {
                 <button className="settings-primary-btn" onClick={() => copy(embedSnippet)}>
                   Copiar embed
                 </button>
-                <button
-                  className="settings-primary-btn"
-                  style={{ opacity: 0.9 }}
-                  onClick={loadSnippet}
-                  disabled={snippetLoading}
-                >
+                <button className="settings-primary-btn" style={{ opacity: 0.9 }} onClick={loadSnippet} disabled={snippetLoading}>
                   {snippetLoading ? "Atualizando..." : "Atualizar script"}
                 </button>
               </div>
@@ -1456,12 +1460,7 @@ async function startInstagramConnect() {
             </div>
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button
-                className="settings-primary-btn"
-                style={{ opacity: 0.85 }}
-                onClick={() => setWebchatOpen(false)}
-                disabled={saving}
-              >
+              <button className="settings-primary-btn" style={{ opacity: 0.85 }} onClick={() => setWebchatOpen(false)} disabled={saving}>
                 Cancelar
               </button>
               <button className="settings-primary-btn" onClick={saveWebchat} disabled={saving}>
