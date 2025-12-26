@@ -17,8 +17,9 @@ import {
   connectMessengerChannel,
   disconnectMessengerChannel,
 
-  // ✅ Instagram (Settings UI)
-  listInstagramPages,
+  // ✅ Instagram (OAuth estilo Zenvia)
+  startInstagramBusinessLogin,
+  finishInstagramBusinessLogin,
   connectInstagramChannel,
   disconnectInstagramChannel
 } from "../../api"; // pages/settings -> ../../api
@@ -156,41 +157,23 @@ function extractErr(e) {
   return { msg: String(msg || ""), code: String(code || "") };
 }
 
-function isUserTokenRequiredError(e) {
-  const { msg, code } = extractErr(e);
-  const s = `${code} ${msg}`.toLowerCase();
-  return s.includes("useraccesstoken_required") || s.includes("user_access_token_required");
-}
-
-// ✅ Detecta erro típico de token expirado da Meta (190 / 463)
-function isMetaSessionExpiredError(e) {
-  const msg = String(
-    e?.response?.data?.meta?.message ||
-      e?.response?.data?.message ||
-      e?.response?.data?.error?.message ||
-      e?.message ||
-      ""
-  ).toLowerCase();
-
-  const code = String(
-    e?.response?.data?.meta?.code ||
-      e?.response?.data?.error?.code ||
-      e?.response?.data?.code ||
-      ""
-  );
-
-  const sub = String(
-    e?.response?.data?.meta?.error_subcode ||
-      e?.response?.data?.error?.error_subcode ||
-      ""
-  );
-
-  return (
-    code === "190" ||
-    sub === "463" ||
-    msg.includes("session has expired") ||
-    msg.includes("error validating access token")
-  );
+/**
+ * ✅ Callback único (/settings/channels) para WhatsApp e Instagram:
+ * precisamos descobrir "flow" dentro do state.
+ * O state do backend é base64url de "<rawJSON>.<sig>".
+ * Aqui fazemos decode "unsafe" só pra ler o flow (não valida assinatura no front).
+ */
+function decodeStateFlowUnsafe(state) {
+  try {
+    const s = String(state || "").trim().replace(/-/g, "+").replace(/_/g, "/");
+    const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+    const decoded = atob(s + pad); // "<raw>.<sig>"
+    const [raw] = String(decoded || "").split(".");
+    const obj = JSON.parse(raw);
+    return String(obj?.flow || obj?.kind || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 export default function SettingsChannelsPage() {
@@ -216,26 +199,22 @@ export default function SettingsChannelsPage() {
   const [waDebug, setWaDebug] = useState(null);
   const [waErr, setWaErr] = useState("");
 
-  // ✅ Messenger state
+  // ✅ Messenger state (mantém como estava)
   const [msModalOpen, setMsModalOpen] = useState(false);
   const [msConnecting, setMsConnecting] = useState(false);
   const [msErr, setMsErr] = useState("");
   const [msPages, setMsPages] = useState([]);
   const [msSelectedPageId, setMsSelectedPageId] = useState("");
   const [msSubFields, setMsSubFields] = useState("messages,messaging_postbacks");
-
-  // ✅ Messenger: user token (obrigatório no backend atual)
   const [msUserToken, setMsUserToken] = useState("");
 
-  // ✅ Instagram state
+  // ✅ Instagram state (OAuth estilo Zenvia)
   const [igModalOpen, setIgModalOpen] = useState(false);
   const [igConnecting, setIgConnecting] = useState(false);
   const [igErr, setIgErr] = useState("");
   const [igPages, setIgPages] = useState([]);
   const [igSelectedPageId, setIgSelectedPageId] = useState("");
-
-  // ✅ Instagram: user token (obrigatório no backend atual)
-  const [igUserToken, setIgUserToken] = useState("");
+  const [igConnectState, setIgConnectState] = useState("");
 
   useEffect(() => {
     mountedRef.current = true;
@@ -496,52 +475,6 @@ export default function SettingsChannelsPage() {
     }
   }
 
-  useEffect(() => {
-    try {
-      const url = new URL(window.location.href);
-      const code = url.searchParams.get("code");
-      const state = url.searchParams.get("state");
-
-      const err = url.searchParams.get("error");
-      const errDesc = url.searchParams.get("error_description") || url.searchParams.get("error_message");
-
-      if (err && !waErr) {
-        setWaErr(String(errDesc || err));
-        return;
-      }
-
-      if (!code || !state) return;
-
-      (async () => {
-        try {
-          setWaConnecting(true);
-          await finishWhatsAppEmbeddedSignup({ code, state });
-          await loadChannels();
-
-          url.searchParams.delete("code");
-          url.searchParams.delete("state");
-          url.searchParams.delete("error");
-          url.searchParams.delete("error_description");
-          url.searchParams.delete("error_message");
-          window.history.replaceState({}, "", url.toString());
-
-          if (!mountedRef.current) return;
-          setToast("WhatsApp conectado com sucesso.");
-          setTimeout(() => mountedRef.current && setToast(""), 2000);
-        } catch (e) {
-          if (!mountedRef.current) return;
-          setWaErr(extractErr(e).msg || String(e));
-        } finally {
-          if (!mountedRef.current) return;
-          setWaConnecting(false);
-        }
-      })();
-    } catch {
-      // ignora
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   async function disconnectWhatsApp() {
     const ok = confirm("Deseja desconectar o WhatsApp deste tenant?");
     if (!ok) return;
@@ -671,7 +604,7 @@ export default function SettingsChannelsPage() {
   }
 
   // ===============================
-  // ✅ Instagram actions (FIX: NÃO enviar pageAccessToken e dar UX melhor p/ token expirado)
+  // ✅ Instagram actions (OAuth estilo Zenvia)
   // ===============================
   const igStatus = normalizeChannelStatus(instagram?.status);
   const igIsConnected = igStatus === "connected" || instagram?.enabled === true;
@@ -686,77 +619,73 @@ export default function SettingsChannelsPage() {
 
   function openInstagramModal() {
     setIgErr("");
-    setIgPages([]);
-    setIgSelectedPageId("");
-    setIgUserToken("");
     setIgModalOpen(true);
   }
 
-  async function loadInstagramPages() {
+  async function startInstagramConnect() {
     setIgErr("");
     setIgConnecting(true);
 
     try {
-      const token = String(igUserToken || "").trim();
-      if (!token) throw new Error("Cole um User Access Token (Graph) para listar páginas.");
-      const res = await listInstagramPages(token);
+      const start = await startInstagramBusinessLogin();
 
-      const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name);
+      const appId = start?.appId;
+      const state = start?.state;
+      const redirectUri = String(start?.redirectUri || "").trim();
+      const scopes = start?.scopes || [];
 
-      if (!mountedRef.current) return;
-
-      setIgPages(pages);
-      if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
-      if (!pages.length) setIgErr("Nenhuma página retornada. Verifique permissões do token.");
-    } catch (e) {
-      if (!mountedRef.current) return;
-
-      if (isMetaSessionExpiredError(e)) {
-        setIgErr(
-          "Seu token da Meta expirou (sessão expirada). Gere um novo User Access Token e clique em “Carregar páginas” novamente."
-        );
-      } else if (isUserTokenRequiredError(e)) {
-        setIgErr("Cole um User Access Token (Graph) e clique em “Carregar páginas” novamente.");
-      } else {
-        setIgErr(extractErr(e).msg || String(e));
+      if (!appId || !state || !redirectUri) {
+        throw new Error("Resposta inválida do backend (appId/state/redirectUri).");
       }
 
-      setIgPages([]);
-    } finally {
+      // Base padrão (Instagram)
+      const base = String(start?.authBaseUrl || "https://www.instagram.com/oauth/authorize").trim();
+
+      const params = new URLSearchParams({
+        force_reauth: "true",
+        client_id: String(appId),
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope: scopes.join(","),
+        state: String(state)
+      });
+
+      window.location.href = `${base}?${params.toString()}`;
+    } catch (e) {
       if (!mountedRef.current) return;
+      setIgErr(extractErr(e).msg || String(e));
       setIgConnecting(false);
     }
   }
 
-  async function connectInstagram() {
+  async function finalizeInstagramWithPage() {
     setIgErr("");
     setIgConnecting(true);
 
     try {
       const pageId = String(igSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
+      if (!igConnectState) throw new Error("Sessão expirada. Clique em “Conectar com Instagram” novamente.");
 
-      const userAccessToken = String(igUserToken || "").trim();
-      if (!userAccessToken) throw new Error("Cole um User Access Token (Graph) para conectar.");
+      await connectInstagramChannel({
+        pageId,
+        connectState: igConnectState,
+        subscribedFields: ["messages"] // pode expandir depois
+      });
 
-      // ✅ FIX DEFINITIVO: backend /instagram/connect agora usa userAccessToken (não pageAccessToken)
-      await connectInstagramChannel({ pageId, userAccessToken });
       await loadChannels();
 
       if (!mountedRef.current) return;
       setToast("Instagram conectado com sucesso.");
       setTimeout(() => mountedRef.current && setToast(""), 2000);
+
       setIgModalOpen(false);
+      setIgPages([]);
+      setIgSelectedPageId("");
+      setIgConnectState("");
     } catch (e) {
       if (!mountedRef.current) return;
-
-      if (isMetaSessionExpiredError(e)) {
-        setIgErr(
-          "Seu token da Meta expirou (sessão expirada). Gere um novo User Access Token e tente conectar novamente."
-        );
-      } else {
-        setIgErr(extractErr(e).msg || String(e));
-      }
+      setIgErr(extractErr(e).msg || String(e));
     } finally {
       if (!mountedRef.current) return;
       setIgConnecting(false);
@@ -785,6 +714,85 @@ export default function SettingsChannelsPage() {
       setIgConnecting(false);
     }
   }
+
+  // ===============================
+  // ✅ CALLBACK ÚNICO (WhatsApp + Instagram)
+  // ===============================
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+      const state = url.searchParams.get("state");
+
+      const err = url.searchParams.get("error");
+      const errDesc = url.searchParams.get("error_description") || url.searchParams.get("error_message");
+
+      if (err) {
+        const msg = String(errDesc || err);
+        // tenta classificar pelo state
+        const flow = decodeStateFlowUnsafe(state);
+        if (flow === "instagram") setIgErr(msg);
+        else setWaErr(msg);
+        return;
+      }
+
+      if (!code || !state) return;
+
+      const flow = decodeStateFlowUnsafe(state);
+
+      (async () => {
+        try {
+          if (flow === "instagram") {
+            setIgConnecting(true);
+
+            const res = await finishInstagramBusinessLogin({ code, state });
+
+            if (!mountedRef.current) return;
+
+            const pages = safeArr(res?.pages).filter((p) => p?.id && p?.name);
+            setIgPages(pages);
+            setIgConnectState(String(res?.connectState || ""));
+            if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
+
+            // abre modal automaticamente para escolher página
+            setIgModalOpen(true);
+
+            setToast(pages.length > 1 ? "Escolha a página para conectar." : "Página carregada.");
+            setTimeout(() => mountedRef.current && setToast(""), 2000);
+          } else {
+            // default: WhatsApp
+            setWaConnecting(true);
+            await finishWhatsAppEmbeddedSignup({ code, state });
+            await loadChannels();
+
+            if (!mountedRef.current) return;
+            setToast("WhatsApp conectado com sucesso.");
+            setTimeout(() => mountedRef.current && setToast(""), 2000);
+          }
+
+          // limpa query
+          url.searchParams.delete("code");
+          url.searchParams.delete("state");
+          url.searchParams.delete("error");
+          url.searchParams.delete("error_description");
+          url.searchParams.delete("error_message");
+          window.history.replaceState({}, "", url.toString());
+        } catch (e) {
+          if (!mountedRef.current) return;
+          const msg = extractErr(e).msg || String(e);
+          if (flow === "instagram") setIgErr(msg);
+          else setWaErr(msg);
+        } finally {
+          if (!mountedRef.current) return;
+          setWaConnecting(false);
+          setIgConnecting(false);
+        }
+      })();
+    } catch {
+      // ignora
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="settings-page">
@@ -855,7 +863,7 @@ export default function SettingsChannelsPage() {
           <div className="settings-channel-card">
             <div className="settings-channel-header">
               <span className="settings-channel-title">WhatsApp</span>
-              <Pill variant={whatsappVariant}>{whatsappLabel()}</Pill>
+              <Pill variant={waIsConnected ? "on" : "off"}>{whatsappLabel()}</Pill>
             </div>
 
             <p className="settings-channel-description">Conecte seu WhatsApp Business via Cadastro Incorporado (Meta).</p>
@@ -1196,7 +1204,7 @@ export default function SettingsChannelsPage() {
         </div>
       </Modal>
 
-      {/* ✅ Modal Instagram */}
+      {/* ✅ Modal Instagram (OAuth estilo Zenvia) */}
       <Modal
         open={igModalOpen}
         title={igIsConnected ? "Instagram — Detalhes" : "Conectar Instagram"}
@@ -1221,44 +1229,52 @@ export default function SettingsChannelsPage() {
 
           {!igIsConnected && (
             <>
-              <div>
-                <div style={labelStyle()}>User Access Token (Graph)</div>
-                <input
-                  style={fieldStyle()}
-                  value={igUserToken}
-                  onChange={(e) => setIgUserToken(e.target.value)}
-                  placeholder="Cole aqui o user access token"
-                />
-                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-                  Usamos esse token apenas para listar páginas e concluir a conexão.
-                </div>
+              <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.45 }}>
+                Clique em <b>“Conectar com Instagram”</b> para autorizar sua conta. Em seguida, selecione a{" "}
+                <b>Página do Facebook</b> vinculada ao Instagram Business.
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button className="settings-primary-btn" onClick={loadInstagramPages} disabled={igConnecting}>
-                  {igConnecting ? "Carregando..." : "Carregar páginas"}
+                <button className="settings-primary-btn" onClick={startInstagramConnect} disabled={igConnecting}>
+                  {igConnecting ? "Abrindo..." : "Conectar com Instagram"}
                 </button>
               </div>
 
-              <div>
-                <div style={labelStyle()}>Página</div>
-                <select
-                  style={fieldStyle()}
-                  value={igSelectedPageId}
-                  onChange={(e) => setIgSelectedPageId(e.target.value)}
-                  disabled={!igPages.length}
-                >
-                  <option value="">Selecione…</option>
-                  {igPages.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.id})
-                    </option>
-                  ))}
-                </select>
-                {!igPages.length && (
-                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>Nenhuma página carregada ainda.</div>
-                )}
-              </div>
+              {/* Step 2: páginas */}
+              {!!igPages.length && (
+                <div>
+                  <div style={labelStyle()}>Página</div>
+                  <select
+                    style={fieldStyle()}
+                    value={igSelectedPageId}
+                    onChange={(e) => setIgSelectedPageId(e.target.value)}
+                  >
+                    <option value="">Selecione…</option>
+                    {igPages.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.id})
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ marginTop: 10, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                    <button
+                      className="settings-primary-btn"
+                      style={{ opacity: 0.85 }}
+                      onClick={() => setIgModalOpen(false)}
+                      disabled={igConnecting}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      className="settings-primary-btn"
+                      onClick={finalizeInstagramWithPage}
+                      disabled={igConnecting || !igSelectedPageId}
+                    >
+                      {igConnecting ? "Conectando..." : "Conectar"}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {!!igErr && (
                 <div
@@ -1275,24 +1291,6 @@ export default function SettingsChannelsPage() {
                   {igErr}
                 </div>
               )}
-
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <button
-                  className="settings-primary-btn"
-                  style={{ opacity: 0.85 }}
-                  onClick={() => setIgModalOpen(false)}
-                  disabled={igConnecting}
-                >
-                  Cancelar
-                </button>
-                <button
-                  className="settings-primary-btn"
-                  onClick={connectInstagram}
-                  disabled={igConnecting || !igSelectedPageId}
-                >
-                  {igConnecting ? "Conectando..." : "Conectar"}
-                </button>
-              </div>
             </>
           )}
 

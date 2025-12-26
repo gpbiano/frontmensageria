@@ -686,18 +686,24 @@ export async function disconnectMessengerChannel(): Promise<{ ok: boolean }> {
 // ✅ INSTAGRAM — SELF-SERVICE (Settings UI) — Zenvia-like
 // ===============================
 
+export type InstagramPageItem = {
+  id: string;
+  name: string;
+  pictureUrl?: string | null;
+};
+
 /**
  * Backend:
  * - POST /settings/channels/instagram/start
- * Retorna authUrl (você abre no browser / popup)
+ * Retorna appId, redirectUri, state e scopes.
+ * (O front monta a URL do Instagram OAuth e redireciona)
  */
-export async function startInstagramOAuth(): Promise<{
-  ok: boolean;
-  authUrl: string;
+export async function startInstagramBusinessLogin(): Promise<{
+  appId: string;
   redirectUri: string;
   state: string;
   scopes: string[];
-  graphVersion?: string;
+  authBaseUrl?: string;
 }> {
   return request("/settings/channels/instagram/start", { method: "POST" });
 }
@@ -705,16 +711,17 @@ export async function startInstagramOAuth(): Promise<{
 /**
  * Backend:
  * - POST /settings/channels/instagram/callback { code, state }
- * Retorna um userAccessToken LONG-LIVED para usar em /pages e /connect.
+ * Troca code -> token (server-side) e lista páginas.
+ * Retorna connectState assinado (não expõe token pro front).
  */
-export async function finishInstagramOAuth(payload: {
+export async function finishInstagramBusinessLogin(payload: {
   code: string;
   state: string;
 }): Promise<{
   ok: boolean;
-  userAccessToken: string;
-  expiresIn?: number | null;
-  tokenType?: string | null;
+  pages: InstagramPageItem[];
+  connectState: string;
+  meta?: any;
 }> {
   return request("/settings/channels/instagram/callback", {
     method: "POST",
@@ -723,31 +730,12 @@ export async function finishInstagramOAuth(payload: {
 }
 
 /**
- * Backend:
- * - POST /settings/channels/instagram/pages { userAccessToken }
- */
-export async function listInstagramPages(
-  userAccessToken: string
-): Promise<{ pages: Array<{ id: string; name: string; pageAccessToken: string }> }> {
-  const tok = String(userAccessToken || "").trim();
-  if (!tok) throw new Error("userAccessToken_required");
-
-  return request("/settings/channels/instagram/pages", {
-    method: "POST",
-    body: { userAccessToken: tok }
-  });
-}
-
-/**
  * ✅ Backend atualizado:
- * - POST /settings/channels/instagram/connect { pageId, userAccessToken, subscribedFields? }
- *
- * ⚠️ NÃO enviar pageAccessToken do front.
- * O backend resolve o PAGE TOKEN e persiste corretamente.
+ * - POST /settings/channels/instagram/connect { pageId, connectState, subscribedFields? }
  */
 export async function connectInstagramChannel(payload: {
   pageId: string;
-  userAccessToken: string;
+  connectState: string;
   subscribedFields?: string[];
 }): Promise<{ ok: boolean; instagram?: InstagramChannelRecord; resolved?: any }> {
   return request("/settings/channels/instagram/connect", {
