@@ -126,11 +126,11 @@ function signState(payload) {
 }
 
 function verifyState(state) {
-  const normalized = normalizeStateInput(state);
+  const s = String(state || "").trim();
 
-  const decoded = base64urlDecode(normalized);
+  const decoded = base64urlDecode(s);
 
-  // ✅ pega o ÚLTIMO ponto (raw pode conter "." por conta de URLs)
+  // ✅ separador é o ÚLTIMO ponto (raw pode ter "https://...gplabs.com.br")
   const idx = String(decoded || "").lastIndexOf(".");
   if (idx <= 0) throw new Error("invalid_state");
 
@@ -157,6 +157,7 @@ function verifyState(state) {
 
   return payload;
 }
+
 
 // ======================================================
 // Normalização de saída (não vazar tokens)
