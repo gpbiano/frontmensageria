@@ -39,6 +39,65 @@ function nowIso() {
 }
 
 // ======================================================
+// Resolve base URL do Front (fallback de redirectUri)
+// ======================================================
+function normalizeRedirectUri(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+  return raw.replace(/\/+$/, "");
+}
+
+function getFrontendBaseFromReq(req) {
+  // prioridade: env > Origin > Referer > Host headers
+  const fromEnv =
+    normalizeRedirectUri(process.env.PUBLIC_APP_BASE) ||
+    normalizeRedirectUri(process.env.FRONTEND_BASE_URL) ||
+    normalizeRedirectUri(process.env.WEB_APP_BASE) ||
+    "";
+
+  if (fromEnv) return fromEnv;
+
+  const origin = String(req.headers.origin || "").trim();
+  if (origin) return normalizeRedirectUri(origin);
+
+  const referer = String(req.headers.referer || "").trim();
+  if (referer) {
+    try {
+      const u = new URL(referer);
+      return normalizeRedirectUri(u.origin);
+    } catch {
+      // ignore
+    }
+  }
+
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || "https";
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "")
+    .split(",")[0]
+    .trim();
+
+  if (host) return normalizeRedirectUri(`${proto}://${host}`);
+
+  return "";
+}
+
+function getOAuthRedirectUri(req, channel) {
+  // single source of truth:
+  // - META_OAUTH_REDIRECT_URI (whatsapp)
+  // - META_INSTAGRAM_OAUTH_REDIRECT_URI (instagram)
+  // fallback: <frontendBase>/settings/channels/<channel>/callback
+  const envKey =
+    channel === "instagram" ? "META_INSTAGRAM_OAUTH_REDIRECT_URI" : "META_OAUTH_REDIRECT_URI";
+
+  const envUri = normalizeRedirectUri(process.env[envKey]);
+  if (envUri) return envUri;
+
+  const base = getFrontendBaseFromReq(req);
+  if (!base) throw new Error(`${envKey} não configurado e não foi possível inferir base do front`);
+
+  return `${base}/settings/channels/${channel}/callback`;
+}
+
+// ======================================================
 // STATE (anti-CSRF)
 // ======================================================
 function base64urlEncode(str) {
@@ -73,18 +132,32 @@ function verifyState(state) {
     .update(String(raw || ""))
     .digest("hex");
 
-  if (!raw || !sig) throw new Error("invalid_state");
-  if (sig !== expected) throw new Error("invalid_state");
+  if (!raw || !sig) {
+    const err = new Error("invalid_state");
+    err.code = "invalid_state";
+    throw err;
+  }
+  if (sig !== expected) {
+    const err = new Error("invalid_state");
+    err.code = "invalid_state";
+    throw err;
+  }
 
   let payload;
   try {
     payload = JSON.parse(raw);
   } catch {
-    throw new Error("invalid_state");
+    const err = new Error("invalid_state");
+    err.code = "invalid_state";
+    throw err;
   }
 
   const ts = Number(payload?.ts || 0);
-  if (ts && Date.now() - ts > 10 * 60 * 1000) throw new Error("invalid_state");
+  if (ts && Date.now() - ts > 10 * 60 * 1000) {
+    const err = new Error("invalid_state");
+    err.code = "invalid_state";
+    throw err;
+  }
 
   return payload;
 }
@@ -100,7 +173,7 @@ function shapeChannel(c) {
     status: c.status,
     widgetKey: c.widgetKey || null,
 
-    // ✅ colunas first-class (não vazar token)
+    // colunas first-class (não vazar token)
     pageId: c.pageId || null,
     phoneNumberId: c.phoneNumberId || null,
     wabaId: c.wabaId || null,
@@ -108,7 +181,6 @@ function shapeChannel(c) {
     displayPhoneNumber: c.displayPhoneNumber || null,
     hasAccessToken: !!c.accessToken,
 
-    // config
     config: cfg,
     updatedAt: c.updatedAt
   };
@@ -118,28 +190,6 @@ function shapeChannels(list) {
   const out = {};
   for (const c of list) out[c.channel] = shapeChannel(c);
   return out;
-}
-
-// ======================================================
-// Redirect URI (SINGLE SOURCE OF TRUTH)
-// ======================================================
-function normalizeRedirectUri(input) {
-  const raw = String(input || "").trim();
-  if (!raw) return "";
-  return raw.replace(/\/+$/, "");
-}
-
-function getMetaOAuthRedirectUri() {
-  const v = normalizeRedirectUri(process.env.META_OAUTH_REDIRECT_URI);
-  if (!v) throw new Error("META_OAUTH_REDIRECT_URI não configurado");
-  return v;
-}
-
-// ✅ Instagram OAuth redirect (Zenvia-like)
-function getInstagramOAuthRedirectUri() {
-  const v = normalizeRedirectUri(process.env.META_INSTAGRAM_OAUTH_REDIRECT_URI);
-  if (!v) throw new Error("META_INSTAGRAM_OAUTH_REDIRECT_URI não configurado");
-  return v;
 }
 
 // ======================================================
@@ -182,7 +232,7 @@ async function graphPostJson(url, accessToken, bodyObj = {}) {
 // ======================================================
 // META OAuth helpers (User short -> long-lived)
 // ======================================================
-async function exchangeForLongLivedUserToken(shortToken) {
+async function exchangeForLongLivedUserToken(anyUserToken) {
   const appId = requireEnv("META_APP_ID");
   const appSecret = requireEnv("META_APP_SECRET");
 
@@ -191,7 +241,7 @@ async function exchangeForLongLivedUserToken(shortToken) {
     `?grant_type=fb_exchange_token` +
     `&client_id=${encodeURIComponent(appId)}` +
     `&client_secret=${encodeURIComponent(appSecret)}` +
-    `&fb_exchange_token=${encodeURIComponent(shortToken)}`;
+    `&fb_exchange_token=${encodeURIComponent(anyUserToken)}`;
 
   const r = await fetch(url, { method: "GET" });
   const raw = await r.text().catch(() => "");
@@ -204,8 +254,7 @@ async function exchangeForLongLivedUserToken(shortToken) {
   })();
 
   if (!r.ok || !j?.access_token) {
-    logger.warn({ status: r.status, meta: j?.error || j }, "❌ Meta long-lived exchange failed");
-    return { ok: false, error: "long_lived_exchange_failed", meta: j?.error || j };
+    return { ok: false, error: "long_lived_exchange_failed", meta: j?.error || j, status: r.status };
   }
 
   return {
@@ -693,11 +742,10 @@ router.delete(
 );
 
 // ======================================================
-// ✅ INSTAGRAM — Produto (self-service multi-tenant)
-// + OAuth Zenvia-like (start/callback) para não depender de token manual
+// ✅ INSTAGRAM — OAuth Zenvia-like
 // ======================================================
 
-// ✅ POST /settings/channels/instagram/start
+// POST /settings/channels/instagram/start
 router.post(
   "/instagram/start",
   requireAuth,
@@ -708,7 +756,7 @@ router.post(
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
-      const redirectUri = getInstagramOAuthRedirectUri();
+      const redirectUri = getOAuthRedirectUri(req, "instagram");
 
       const scopes = [
         "pages_show_list",
@@ -719,7 +767,12 @@ router.post(
         "instagram_manage_messages"
       ];
 
-      const state = signState({ tenantId, ts: Date.now(), channel: "instagram", redirectUri });
+      const state = signState({
+        tenantId,
+        ts: Date.now(),
+        channel: "instagram",
+        redirectUri
+      });
 
       const authUrl = buildMetaOAuthUrl({ redirectUri, state, scopes });
 
@@ -733,12 +786,15 @@ router.post(
       });
     } catch (e) {
       logger.error({ err: e }, "❌ POST /settings/channels/instagram/start");
-      return res.status(500).json({ error: e?.message || "internal_error" });
+      // ✅ devolve 400 se for erro de configuração
+      const msg = String(e?.message || "internal_error");
+      const isConfig = /não configurado|inferir base/i.test(msg);
+      return res.status(isConfig ? 400 : 500).json({ error: msg });
     }
   }
 );
 
-// ✅ POST /settings/channels/instagram/callback
+// POST /settings/channels/instagram/callback
 router.post(
   "/instagram/callback",
   requireAuth,
@@ -750,7 +806,14 @@ router.post(
       const state = String(req.body?.state || "").trim();
       if (!code || !state) return res.status(400).json({ error: "missing_code_or_state" });
 
-      const parsed = verifyState(state);
+      let parsed;
+      try {
+        parsed = verifyState(state);
+      } catch (e) {
+        logger.warn({ err: e }, "❌ Instagram invalid_state");
+        return res.status(400).json({ error: "invalid_state" });
+      }
+
       const tenantIdFromState = String(parsed?.tenantId || "").trim();
       const channel = String(parsed?.channel || "").trim();
 
@@ -762,9 +825,9 @@ router.post(
         return res.status(403).json({ error: "tenant_mismatch" });
       }
 
-      const redirectUri = getInstagramOAuthRedirectUri();
+      const redirectUri = getOAuthRedirectUri(req, "instagram");
 
-      // 1) code -> user short token
+      // 1) code -> user token
       const tokenRes = await exchangeCodeForUserToken({ code, redirectUri });
       if (!tokenRes.ok || !tokenRes?.json?.access_token) {
         logger.warn(
@@ -777,23 +840,29 @@ router.post(
         });
       }
 
-      const shortUserToken = String(tokenRes.json.access_token);
+      const userToken = String(tokenRes.json.access_token);
 
-      // 2) short -> long-lived (reduz 190/463)
-      const exchanged = await exchangeForLongLivedUserToken(shortUserToken);
-      if (!exchanged.ok) {
-        return res.status(400).json({
-          error: "long_lived_exchange_failed",
-          meta: exchanged.meta || null
-        });
+      // 2) best-effort long-lived (se falhar, seguimos com o token atual)
+      let tokenToReturn = userToken;
+      let exchangeMeta = null;
+
+      try {
+        const exchanged = await exchangeForLongLivedUserToken(userToken);
+        if (exchanged?.ok && exchanged?.accessToken) {
+          tokenToReturn = exchanged.accessToken;
+        } else {
+          exchangeMeta = exchanged?.meta || exchanged;
+          logger.warn({ meta: exchangeMeta }, "⚠️ Instagram long-lived exchange failed (best-effort)");
+        }
+      } catch (e) {
+        logger.warn({ err: e }, "⚠️ Instagram long-lived exchange exception (best-effort)");
       }
 
-      // ⚠️ NÃO persistimos user token.
       return res.json({
         ok: true,
-        userAccessToken: exchanged.accessToken,
-        expiresIn: exchanged.expiresIn ?? null,
-        tokenType: exchanged.tokenType ?? null
+        userAccessToken: tokenToReturn,
+        tokenKind: tokenToReturn === userToken ? "short_or_unknown" : "long_lived",
+        exchangeMeta
       });
     } catch (e) {
       logger.error({ err: e }, "❌ POST /settings/channels/instagram/callback");
@@ -802,7 +871,7 @@ router.post(
   }
 );
 
-// POST /settings/channels/instagram/pages  ✅ CORRIGIDO (tenta long-lived antes)
+// POST /settings/channels/instagram/pages
 router.post(
   "/instagram/pages",
   requireAuth,
@@ -813,11 +882,14 @@ router.post(
       const userAccessToken = String(req.body?.userAccessToken || "").trim();
       if (!userAccessToken) return res.status(400).json({ error: "userAccessToken_required" });
 
+      // ✅ best-effort: tenta trocar, se falhar usa o token que já tem
       let tokenToUse = userAccessToken;
-
-      // ✅ tenta trocar (se já for long-lived, Meta geralmente devolve erro ou outro token, então é best-effort)
-      const exchanged = await exchangeForLongLivedUserToken(userAccessToken);
-      if (exchanged?.ok && exchanged?.accessToken) tokenToUse = exchanged.accessToken;
+      try {
+        const exchanged = await exchangeForLongLivedUserToken(userAccessToken);
+        if (exchanged?.ok && exchanged?.accessToken) tokenToUse = exchanged.accessToken;
+      } catch {
+        // ignore
+      }
 
       const url =
         `https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts` +
@@ -829,20 +901,13 @@ router.post(
 
       if (!r.ok) {
         logger.warn(
-          { status: r.status, meta: j?.error || j, usedLongLived: tokenToUse !== userAccessToken },
+          { status: r.status, meta: j?.error || j },
           "❌ Instagram pages list failed"
         );
 
-        const code = Number(j?.error?.code || 0);
-        const subcode = Number(j?.error?.error_subcode || 0);
-        const isExpired = code === 190 && subcode === 463;
-
         return res.status(400).json({
           error: "meta_list_pages_failed",
-          meta: j?.error || j,
-          hint: isExpired
-            ? "Token expirado (190/463). Refaça a conexão com Facebook para gerar um novo token."
-            : undefined
+          meta: j?.error || j
         });
       }
 
@@ -861,7 +926,7 @@ router.post(
   }
 );
 
-// POST /settings/channels/instagram/connect  ✅ CORRIGIDO (usa PAGE TOKEN)
+// POST /settings/channels/instagram/connect
 router.post(
   "/instagram/connect",
   requireAuth,
@@ -882,18 +947,24 @@ router.post(
       if (!pageId) return res.status(400).json({ error: "pageId_required" });
       if (!userAccessToken) return res.status(400).json({ error: "userAccessToken_required" });
 
-      // 1) troca por long-lived user token
-      const exchanged = await exchangeForLongLivedUserToken(userAccessToken);
-      if (!exchanged.ok) {
-        return res.status(400).json({
-          error: "long_lived_exchange_failed",
-          meta: exchanged.meta || null
-        });
-      }
-      const longUserToken = exchanged.accessToken;
+      // ✅ best-effort long-lived: se falhar, usa o token original
+      let userTokenToUse = userAccessToken;
+      let userTokenExpiresIn = null;
 
-      // 2) resolve PAGE TOKEN via /me/accounts
-      const pageTok = await fetchPageAccessTokenFromUser(longUserToken, pageId);
+      try {
+        const exchanged = await exchangeForLongLivedUserToken(userAccessToken);
+        if (exchanged?.ok && exchanged?.accessToken) {
+          userTokenToUse = exchanged.accessToken;
+          userTokenExpiresIn = exchanged.expiresIn ?? null;
+        } else {
+          logger.warn({ meta: exchanged?.meta || exchanged }, "⚠️ IG long-lived exchange failed (best-effort)");
+        }
+      } catch (e) {
+        logger.warn({ err: e }, "⚠️ IG long-lived exchange exception (best-effort)");
+      }
+
+      // 1) resolve PAGE TOKEN via /me/accounts
+      const pageTok = await fetchPageAccessTokenFromUser(userTokenToUse, pageId);
       if (!pageTok.ok) {
         return res.status(400).json({
           error: pageTok.error,
@@ -902,7 +973,7 @@ router.post(
       }
       const pageAccessToken = pageTok.pageAccessToken;
 
-      // 3) valida Page token + resolve IG business account
+      // 2) valida Page token + resolve IG business account
       const pageInfoUrl =
         `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}` +
         `?fields=id,name,instagram_business_account` +
@@ -931,7 +1002,7 @@ router.post(
         });
       }
 
-      // 4) (best effort) pega username do IG
+      // 3) best effort: username
       let igUsername = "";
       try {
         const igInfoUrl =
@@ -943,10 +1014,10 @@ router.post(
         const igJson = await igResp.json().catch(() => ({}));
         igUsername = igResp.ok && igJson?.id ? String(igJson?.username || "").trim() : "";
       } catch {
-        // ignora
+        // ignore
       }
 
-      // 5) subscribe (best effort)
+      // 4) subscribe (best effort)
       let subscribeOk = false;
       try {
         const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
@@ -968,7 +1039,7 @@ router.post(
         logger.warn({ err: e, tenantId, pageId }, "⚠️ Instagram subscribe exception (best effort)");
       }
 
-      // 6) salva no ChannelConfig (instagram) — accessToken = PAGE TOKEN
+      // 5) salva (instagram) — accessToken = PAGE TOKEN
       const current = await prisma.channelConfig.findUnique({
         where: { tenantId_channel: { tenantId, channel: "instagram" } }
       });
@@ -981,7 +1052,7 @@ router.post(
         connectedAt: nowIso(),
         graphVersion: META_GRAPH_VERSION,
         tokenKind: "page",
-        userTokenExpiresIn: exchanged.expiresIn ?? null
+        userTokenExpiresIn
       };
 
       const updated = await prisma.channelConfig.upsert({
@@ -1087,8 +1158,10 @@ router.post(
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
       const appId = requireEnv("META_APP_ID");
-      const redirectUri = getMetaOAuthRedirectUri();
-      const state = signState({ tenantId, ts: Date.now(), redirectUri });
+      const redirectUri = getOAuthRedirectUri(req, "whatsapp");
+
+      // ✅ inclui channel no state (ajuda o front detectar)
+      const state = signState({ tenantId, ts: Date.now(), channel: "whatsapp", redirectUri });
 
       logger.info({ tenantId, redirectUri }, "🟢 WhatsApp Embedded Signup start");
 
@@ -1096,11 +1169,14 @@ router.post(
         appId,
         state,
         redirectUri,
-        scopes: ["whatsapp_business_messaging", "business_management"]
+        scopes: ["whatsapp_business_messaging", "business_management"],
+        graphVersion: META_GRAPH_VERSION
       });
     } catch (e) {
       logger.error({ err: e }, "❌ POST /settings/channels/whatsapp/start");
-      return res.status(500).json({ error: e?.message || "internal_error" });
+      const msg = String(e?.message || "internal_error");
+      const isConfig = /não configurado|inferir base/i.test(msg);
+      return res.status(isConfig ? 400 : 500).json({ error: msg });
     }
   }
 );
@@ -1156,32 +1232,22 @@ router.post(
       const { code, state } = req.body || {};
       if (!code || !state) return res.status(400).json({ error: "missing_code_or_state" });
 
-      const appId = requireEnv("META_APP_ID");
-      const appSecret = requireEnv("META_APP_SECRET");
+      let parsedState;
+      try {
+        parsedState = verifyState(state);
+      } catch (e) {
+        logger.warn({ err: e }, "❌ WhatsApp invalid_state");
+        return res.status(400).json({ error: "invalid_state" });
+      }
 
-      const parsedState = verifyState(state);
       const tenantId = String(parsedState?.tenantId || "").trim();
       if (!tenantId) return res.status(400).json({ error: "invalid_state" });
 
-      const redirectUri = getMetaOAuthRedirectUri();
+      const appId = requireEnv("META_APP_ID");
+      const appSecret = requireEnv("META_APP_SECRET");
+      const redirectUri = getOAuthRedirectUri(req, "whatsapp");
 
-      let refOrigin = "";
-      let refPath = "";
-      try {
-        const ref = String(req.headers.referer || "");
-        if (ref) {
-          const u = new URL(ref);
-          refOrigin = u.origin;
-          refPath = ref;
-        }
-      } catch {
-        // ignore
-      }
-
-      logger.info(
-        { tenantId, redirectUri, refOrigin, refPath },
-        "🟡 WhatsApp callback: exchanging code"
-      );
+      logger.info({ tenantId, redirectUri }, "🟡 WhatsApp callback: exchanging code");
 
       const tokenRes = await exchangeCodeForToken({ appId, appSecret, code, redirectUri });
 
@@ -1205,19 +1271,7 @@ router.post(
 
       const sync = await fetchWabaAndPhoneNumber({ accessToken });
       if (!sync.ok) {
-        logger.warn(
-          { sync },
-          "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)"
-        );
-      } else {
-        logger.info(
-          {
-            wabaId: sync.wabaId,
-            phoneNumberId: sync.phoneNumberId,
-            displayPhoneNumber: sync.displayPhoneNumber
-          },
-          "✅ WhatsApp sync OK (WABA/PhoneNumber)"
-        );
+        logger.warn({ sync }, "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)");
       }
 
       const newConfig = {
@@ -1318,6 +1372,8 @@ router.delete(
 export default router;
 
 /*
-✅ ENV (produção)
+✅ ENV (produção) — recomendado (mas agora tem fallback)
+- PUBLIC_APP_BASE=https://cliente.gplabs.com.br
+- META_OAUTH_REDIRECT_URI=https://cliente.gplabs.com.br/settings/channels/whatsapp/callback
 - META_INSTAGRAM_OAUTH_REDIRECT_URI=https://cliente.gplabs.com.br/settings/channels/instagram/callback
 */
