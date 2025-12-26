@@ -41,26 +41,38 @@ function nowIso() {
 // ======================================================
 // STATE (anti-CSRF)
 // ======================================================
+function base64urlEncode(str) {
+  return Buffer.from(String(str), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function base64urlDecode(b64url) {
+  const s = String(b64url || "").trim().replace(/-/g, "+").replace(/_/g, "/");
+  // pad base64
+  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+  return Buffer.from(s + pad, "base64").toString("utf8");
+}
+
 function signState(payload) {
   const raw = JSON.stringify(payload);
   const sig = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
     .update(raw)
     .digest("hex");
-  return Buffer.from(`${raw}.${sig}`).toString("base64");
-}
 
-function decodeBase64Compat(state) {
-  const s = String(state || "").trim().replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(s, "base64").toString("utf8");
+  // base64url para evitar problemas com + / =
+  return base64urlEncode(`${raw}.${sig}`);
 }
 
 function verifyState(state) {
-  const decoded = decodeBase64Compat(state);
-  const [raw, sig] = decoded.split(".");
+  const decoded = base64urlDecode(state);
+  const [raw, sig] = String(decoded || "").split(".");
   const expected = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
-    .update(raw)
+    .update(String(raw || ""))
     .digest("hex");
 
   if (!raw || !sig) throw new Error("invalid_state");
@@ -177,7 +189,14 @@ async function exchangeForLongLivedUserToken(shortToken) {
     `&fb_exchange_token=${encodeURIComponent(shortToken)}`;
 
   const r = await fetch(url, { method: "GET" });
-  const j = await r.json().catch(() => ({}));
+  const raw = await r.text().catch(() => "");
+  const j = (() => {
+    try {
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return { raw };
+    }
+  })();
 
   if (!r.ok || !j?.access_token) {
     logger.warn({ status: r.status, meta: j?.error || j }, "❌ Meta long-lived exchange failed");
@@ -634,11 +653,11 @@ router.delete(
 // FIX DEFINITIVO:
 // - aceitar userAccessToken (do login do usuário) e trocar por long-lived
 // - resolver pageAccessToken via /me/accounts
-// - persistir ChannelConfig.accessToken como PAGE TOKEN (não expira rápido)
+// - persistir ChannelConfig.accessToken como PAGE TOKEN (não user token curto)
 // - manter instagramBusinessId/igUsername em config
 // ======================================================
 
-// POST /settings/channels/instagram/pages  (mantém igual)
+// POST /settings/channels/instagram/pages
 router.post(
   "/instagram/pages",
   requireAuth,
@@ -690,14 +709,13 @@ router.post(
 
       const pageId = String(req.body?.pageId || "").trim();
 
-      // ✅ compat: front pode mandar "accessToken" antigo
-      const userAccessToken = String(
-        req.body?.userAccessToken || req.body?.accessToken || ""
-      ).trim();
+      // ✅ compat: front pode mandar "accessToken" antigo (user token curto)
+      const userAccessToken = String(req.body?.userAccessToken || req.body?.accessToken || "").trim();
 
+      // IG normalmente só precisa "messages". Mantemos compat com payload do front.
       const subscribedFields = Array.isArray(req.body?.subscribedFields)
         ? req.body.subscribedFields.map(String).map((s) => s.trim()).filter(Boolean)
-        : ["messages", "messaging_postbacks"];
+        : ["messages"];
 
       if (!pageId) return res.status(400).json({ error: "pageId_required" });
       if (!userAccessToken) return res.status(400).json({ error: "userAccessToken_required" });
@@ -712,7 +730,7 @@ router.post(
       }
       const longUserToken = exchanged.accessToken;
 
-      // 2) resolve PAGE TOKEN via /me/accounts (durável)
+      // 2) resolve PAGE TOKEN via /me/accounts
       const pageTok = await fetchPageAccessTokenFromUser(longUserToken, pageId);
       if (!pageTok.ok) {
         return res.status(400).json({
@@ -747,8 +765,7 @@ router.post(
       if (!instagramBusinessId) {
         return res.status(409).json({
           error: "instagram_not_linked",
-          hint:
-            "Essa Página não tem uma conta Instagram Business vinculada (instagram_business_account)."
+          hint: "Essa Página não tem uma conta Instagram Business vinculada (instagram_business_account)."
         });
       }
 
@@ -767,7 +784,7 @@ router.post(
         // ignora
       }
 
-      // 5) subscribe (best effort)
+      // 5) subscribe (best effort) — para IG/Messenger
       let subscribeOk = false;
       try {
         const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
@@ -811,7 +828,7 @@ router.post(
           enabled: true,
           status: "connected",
           pageId,
-          accessToken: pageAccessToken, // ✅ PAGE TOKEN (durável)
+          accessToken: pageAccessToken, // ✅ PAGE TOKEN
           displayName,
           config: mergedConfig,
           updatedAt: new Date()
@@ -909,7 +926,7 @@ router.post(
 
       const appId = requireEnv("META_APP_ID");
       const redirectUri = getMetaOAuthRedirectUri();
-      const state = signState({ tenantId, ts: Date.now() });
+      const state = signState({ tenantId, ts: Date.now(), redirectUri });
 
       logger.info({ tenantId, redirectUri }, "🟢 WhatsApp Embedded Signup start");
 
@@ -928,13 +945,15 @@ router.post(
 
 async function exchangeCodeForToken({ appId, appSecret, code, redirectUri }) {
   const url =
-    "https://graph.facebook.com/v19.0/oauth/access_token" +
+    `https://graph.facebook.com/v19.0/oauth/access_token` +
     `?client_id=${encodeURIComponent(appId)}` +
     `&client_secret=${encodeURIComponent(appSecret)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&code=${encodeURIComponent(code)}`;
 
-  return fetch(url, { method: "GET" }).then((r) => r.json());
+  const r = await fetch(url, { method: "GET" });
+  const j = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, json: j };
 }
 
 async function fetchWabaAndPhoneNumber({ accessToken }) {
@@ -984,55 +1003,51 @@ router.post(
 
       const redirectUri = getMetaOAuthRedirectUri();
 
-      logger.info(
-        {
-          tenantId,
-          redirectUri,
-          refOrigin: req.headers.referer ? new URL(req.headers.referer).origin : "",
-          refPath: req.headers.referer || ""
-        },
-        "🟡 WhatsApp callback: exchanging code"
-      );
+      // safe referer parsing
+      let refOrigin = "";
+      let refPath = "";
+      try {
+        const ref = String(req.headers.referer || "");
+        if (ref) {
+          const u = new URL(ref);
+          refOrigin = u.origin;
+          refPath = ref;
+        }
+      } catch {
+        // ignore
+      }
 
-      const tokenRes = await exchangeCodeForToken({
-        appId,
-        appSecret,
-        code,
-        redirectUri
-      });
+      logger.info({ tenantId, redirectUri, refOrigin, refPath }, "🟡 WhatsApp callback: exchanging code");
 
-      if (!tokenRes?.access_token) {
+      const tokenRes = await exchangeCodeForToken({ appId, appSecret, code, redirectUri });
+
+      if (!tokenRes.ok || !tokenRes?.json?.access_token) {
         logger.error(
-          { tokenRes, redirectUriUsed: redirectUri, tenantId },
+          { tokenRes: tokenRes?.json, status: tokenRes?.status, redirectUriUsed: redirectUri, tenantId },
           "❌ Meta token exchange failed"
         );
         return res.status(400).json({
           error: "token_exchange_failed",
-          meta: tokenRes?.error || tokenRes
+          meta: tokenRes?.json?.error || tokenRes?.json || { status: tokenRes?.status }
         });
       }
 
-      const sync = await fetchWabaAndPhoneNumber({ accessToken: tokenRes.access_token });
+      const accessToken = String(tokenRes.json.access_token);
+
+      const sync = await fetchWabaAndPhoneNumber({ accessToken });
       if (!sync.ok) {
-        logger.warn(
-          { sync },
-          "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)"
-        );
+        logger.warn({ sync }, "⚠️ WhatsApp connected, mas sem sync de WABA/PhoneNumber (best effort)");
       } else {
         logger.info(
-          {
-            wabaId: sync.wabaId,
-            phoneNumberId: sync.phoneNumberId,
-            displayPhoneNumber: sync.displayPhoneNumber
-          },
+          { wabaId: sync.wabaId, phoneNumberId: sync.phoneNumberId, displayPhoneNumber: sync.displayPhoneNumber },
           "✅ WhatsApp sync OK (WABA/PhoneNumber)"
         );
       }
 
       const newConfig = {
-        accessToken: tokenRes.access_token,
-        tokenType: tokenRes.token_type || null,
-        expiresIn: tokenRes.expires_in || null,
+        accessToken,
+        tokenType: tokenRes.json.token_type || null,
+        expiresIn: tokenRes.json.expires_in || null,
         redirectUriUsed: redirectUri,
         connectedAt: nowIso(),
 
@@ -1049,7 +1064,7 @@ router.post(
         update: {
           enabled: true,
           status: "connected",
-          accessToken: tokenRes.access_token,
+          accessToken,
           wabaId: sync.ok ? sync.wabaId : null,
           phoneNumberId: sync.ok ? sync.phoneNumberId : null,
           displayPhoneNumber: sync.ok ? sync.displayPhoneNumber : null,
@@ -1063,7 +1078,7 @@ router.post(
           enabled: true,
           status: "connected",
           widgetKey: null,
-          accessToken: tokenRes.access_token,
+          accessToken,
           wabaId: sync.ok ? sync.wabaId : null,
           phoneNumberId: sync.ok ? sync.phoneNumberId : null,
           displayPhoneNumber: sync.ok ? sync.displayPhoneNumber : null,
