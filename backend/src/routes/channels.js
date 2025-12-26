@@ -121,43 +121,37 @@ function signState(payload) {
     .update(raw)
     .digest("hex");
 
+  // ⚠️ Usa "." como separador, mas no verifyState vamos cortar PELO ÚLTIMO ponto
   return base64urlEncode(`${raw}.${sig}`);
 }
 
 function verifyState(state) {
   const decoded = base64urlDecode(state);
-  const [raw, sig] = String(decoded || "").split(".");
+
+  // ✅ pega o ÚLTIMO ponto (porque o raw pode conter "." no redirectUri/domínio)
+  const idx = String(decoded || "").lastIndexOf(".");
+  if (idx <= 0) throw new Error("invalid_state");
+
+  const raw = String(decoded).slice(0, idx);
+  const sig = String(decoded).slice(idx + 1);
+
   const expected = crypto
     .createHmac("sha256", requireEnv("JWT_SECRET"))
-    .update(String(raw || ""))
+    .update(raw)
     .digest("hex");
 
-  if (!raw || !sig) {
-    const err = new Error("invalid_state");
-    err.code = "invalid_state";
-    throw err;
-  }
-  if (sig !== expected) {
-    const err = new Error("invalid_state");
-    err.code = "invalid_state";
-    throw err;
-  }
+  if (!raw || !sig) throw new Error("invalid_state");
+  if (sig !== expected) throw new Error("invalid_state");
 
   let payload;
   try {
     payload = JSON.parse(raw);
   } catch {
-    const err = new Error("invalid_state");
-    err.code = "invalid_state";
-    throw err;
+    throw new Error("invalid_state");
   }
 
   const ts = Number(payload?.ts || 0);
-  if (ts && Date.now() - ts > 10 * 60 * 1000) {
-    const err = new Error("invalid_state");
-    err.code = "invalid_state";
-    throw err;
-  }
+  if (ts && Date.now() - ts > 10 * 60 * 1000) throw new Error("invalid_state");
 
   return payload;
 }
