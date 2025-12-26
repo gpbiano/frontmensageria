@@ -162,6 +162,37 @@ function isUserTokenRequiredError(e) {
   return s.includes("useraccesstoken_required") || s.includes("user_access_token_required");
 }
 
+// ✅ Detecta erro típico de token expirado da Meta (190 / 463)
+function isMetaSessionExpiredError(e) {
+  const msg = String(
+    e?.response?.data?.meta?.message ||
+      e?.response?.data?.message ||
+      e?.response?.data?.error?.message ||
+      e?.message ||
+      ""
+  ).toLowerCase();
+
+  const code = String(
+    e?.response?.data?.meta?.code ||
+      e?.response?.data?.error?.code ||
+      e?.response?.data?.code ||
+      ""
+  );
+
+  const sub = String(
+    e?.response?.data?.meta?.error_subcode ||
+      e?.response?.data?.error?.error_subcode ||
+      ""
+  );
+
+  return (
+    code === "190" ||
+    sub === "463" ||
+    msg.includes("session has expired") ||
+    msg.includes("error validating access token")
+  );
+}
+
 export default function SettingsChannelsPage() {
   const mountedRef = useRef(true);
 
@@ -640,7 +671,7 @@ export default function SettingsChannelsPage() {
   }
 
   // ===============================
-  // ✅ Instagram actions (token obrigatório)
+  // ✅ Instagram actions (FIX: NÃO enviar pageAccessToken e dar UX melhor p/ token expirado)
   // ===============================
   const igStatus = normalizeChannelStatus(instagram?.status);
   const igIsConnected = igStatus === "connected" || instagram?.enabled === true;
@@ -680,7 +711,11 @@ export default function SettingsChannelsPage() {
     } catch (e) {
       if (!mountedRef.current) return;
 
-      if (isUserTokenRequiredError(e)) {
+      if (isMetaSessionExpiredError(e)) {
+        setIgErr(
+          "Seu token da Meta expirou (sessão expirada). Gere um novo User Access Token e clique em “Carregar páginas” novamente."
+        );
+      } else if (isUserTokenRequiredError(e)) {
         setIgErr("Cole um User Access Token (Graph) e clique em “Carregar páginas” novamente.");
       } else {
         setIgErr(extractErr(e).msg || String(e));
@@ -701,11 +736,11 @@ export default function SettingsChannelsPage() {
       const pageId = String(igSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
 
-      const page = igPages.find((p) => String(p.id) === pageId);
-      const pageAccessToken = String(page?.pageAccessToken || "").trim();
-      if (!pageAccessToken) throw new Error("Página selecionada sem pageAccessToken. Recarregue as páginas.");
+      const userAccessToken = String(igUserToken || "").trim();
+      if (!userAccessToken) throw new Error("Cole um User Access Token (Graph) para conectar.");
 
-      await connectInstagramChannel({ pageId, pageAccessToken });
+      // ✅ FIX DEFINITIVO: backend /instagram/connect agora usa userAccessToken (não pageAccessToken)
+      await connectInstagramChannel({ pageId, userAccessToken });
       await loadChannels();
 
       if (!mountedRef.current) return;
@@ -714,7 +749,14 @@ export default function SettingsChannelsPage() {
       setIgModalOpen(false);
     } catch (e) {
       if (!mountedRef.current) return;
-      setIgErr(extractErr(e).msg || String(e));
+
+      if (isMetaSessionExpiredError(e)) {
+        setIgErr(
+          "Seu token da Meta expirou (sessão expirada). Gere um novo User Access Token e tente conectar novamente."
+        );
+      } else {
+        setIgErr(extractErr(e).msg || String(e));
+      }
     } finally {
       if (!mountedRef.current) return;
       setIgConnecting(false);
@@ -1188,7 +1230,7 @@ export default function SettingsChannelsPage() {
                   placeholder="Cole aqui o user access token"
                 />
                 <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-                  Usamos esse token apenas para listar páginas e obter o pageAccessToken.
+                  Usamos esse token apenas para listar páginas e concluir a conexão.
                 </div>
               </div>
 
