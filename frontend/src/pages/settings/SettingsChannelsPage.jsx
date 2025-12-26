@@ -20,7 +20,6 @@ import {
   // ✅ Instagram (OAuth estilo Zenvia)
   startInstagramOAuth,
   finishInstagramOAuth,
-  listInstagramPages,
   connectInstagramChannel,
   disconnectInstagramChannel
 } from "../../api"; // pages/settings -> ../../api
@@ -160,29 +159,62 @@ function extractErr(e) {
 
 /**
  * ✅ Detecta o "canal" do state, sem validar assinatura (front-only).
- * O state do backend é base64url de "<rawJSON>.<sig>".
- * Nosso backend usa "channel" (ex: "instagram"/"whatsapp").
- * Mantemos compat com flow/kind também.
+ * O state do backend geralmente é base64url de "<rawJSON>.<sig>".
+ * Porém, por segurança, toleramos:
+ * - state já sendo "<rawJSON>.<sig>"
+ * - state sendo JSON puro
  */
 function decodeStateChannelUnsafe(state) {
+  const st = String(state || "").trim();
+  if (!st) return "";
+
+  // 1) tenta ler como JSON puro
   try {
-    const s = String(state || "").trim().replace(/-/g, "+").replace(/_/g, "/");
+    if (st.startsWith("{") && st.endsWith("}")) {
+      const obj = JSON.parse(st);
+      const ch = obj?.channel || obj?.flow || obj?.kind || obj?.provider || "";
+      return String(ch || "").trim().toLowerCase();
+    }
+  } catch {
+    // ignora
+  }
+
+  // 2) tenta ler como "<raw>.<sig>" sem base64
+  try {
+    if (st.includes(".") && st.trim().startsWith("{")) {
+      const [raw] = st.split(".");
+      const obj = JSON.parse(raw);
+      const ch = obj?.channel || obj?.flow || obj?.kind || obj?.provider || "";
+      return String(ch || "").trim().toLowerCase();
+    }
+  } catch {
+    // ignora
+  }
+
+  // 3) tenta base64url decode de "<raw>.<sig>"
+  try {
+    const s = st.replace(/-/g, "+").replace(/_/g, "/");
     const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
     const decoded = atob(s + pad); // "<raw>.<sig>"
     const [raw] = String(decoded || "").split(".");
     const obj = JSON.parse(raw);
 
-    const ch =
-      obj?.channel ||
-      obj?.flow ||
-      obj?.kind ||
-      obj?.provider ||
-      "";
-
+    const ch = obj?.channel || obj?.flow || obj?.kind || obj?.provider || "";
     return String(ch || "").trim().toLowerCase();
   } catch {
     return "";
   }
+}
+
+/**
+ * ✅ Ajuda extra: detecta canal pelo PATH
+ * (evita instagram cair no fluxo do WhatsApp quando state não decodifica)
+ */
+function detectChannelByPath(pathname) {
+  const p = String(pathname || "").toLowerCase();
+  if (p.includes("/settings/channels/instagram/callback")) return "instagram";
+  if (p.includes("/settings/channels/whatsapp")) return "whatsapp";
+  return "";
 }
 
 export default function SettingsChannelsPage() {
@@ -223,7 +255,7 @@ export default function SettingsChannelsPage() {
   const [igErr, setIgErr] = useState("");
   const [igPages, setIgPages] = useState([]);
   const [igSelectedPageId, setIgSelectedPageId] = useState("");
-  const [igUserAccessToken, setIgUserAccessToken] = useState("");
+  const [igConnectState, setIgConnectState] = useState(""); // ✅ assinado pelo backend (não expõe token)
 
   useEffect(() => {
     mountedRef.current = true;
@@ -471,7 +503,8 @@ export default function SettingsChannelsPage() {
         scope: scopes.join(",")
       });
 
-      window.location.href = `https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`;
+      // (ok manter versão fixa, mas se quiser alinhar com backend, troca pra v21.0)
+      window.location.href = `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
       setWaErr(extractErr(e).msg || String(e));
@@ -623,7 +656,6 @@ export default function SettingsChannelsPage() {
 
   function openInstagramModal() {
     setIgErr("");
-    // mantém páginas/token se já carregou no step 2
     setIgModalOpen(true);
   }
 
@@ -634,11 +666,28 @@ export default function SettingsChannelsPage() {
     try {
       const start = await startInstagramOAuth();
 
-      const authUrl = String(start?.authUrl || "").trim();
-      if (!authUrl) throw new Error("Resposta inválida do backend (authUrl).");
+      // ✅ api.ts exporta startInstagramOAuth como alias de startInstagramBusinessLogin()
+      // então o retorno é: { appId, redirectUri, state, scopes, authBaseUrl? }
+      const appId = String(start?.appId || "").trim();
+      const redirectUri = String(start?.redirectUri || "").trim();
+      const state = String(start?.state || "").trim();
+      const scopes = Array.isArray(start?.scopes) ? start.scopes : [];
 
-      // ✅ IMPORTANTÍSSIMO: usar authUrl do backend (evita mismatch de redirect/state)
-      window.location.href = authUrl;
+      if (!appId || !redirectUri || !state) {
+        throw new Error("Resposta inválida do backend (appId/redirectUri/state).");
+      }
+
+      const base = String(start?.authBaseUrl || "https://www.facebook.com/v21.0/dialog/oauth").trim();
+
+      const params = new URLSearchParams({
+        client_id: appId,
+        redirect_uri: redirectUri,
+        state,
+        response_type: "code",
+        scope: scopes.length ? scopes.join(",") : "instagram_basic,instagram_manage_messages,pages_show_list"
+      });
+
+      window.location.href = `${base}?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
       setIgErr(extractErr(e).msg || String(e));
@@ -653,12 +702,12 @@ export default function SettingsChannelsPage() {
     try {
       const pageId = String(igSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
-      const tok = String(igUserAccessToken || "").trim();
-      if (!tok) throw new Error("Token do Instagram expirou. Clique em “Conectar com Instagram” novamente.");
+      const cs = String(igConnectState || "").trim();
+      if (!cs) throw new Error("Sessão do Instagram expirou. Clique em “Conectar com Instagram” novamente.");
 
       await connectInstagramChannel({
         pageId,
-        userAccessToken: tok,
+        connectState: cs,
         subscribedFields: ["messages"]
       });
 
@@ -671,7 +720,7 @@ export default function SettingsChannelsPage() {
       setIgModalOpen(false);
       setIgPages([]);
       setIgSelectedPageId("");
-      setIgUserAccessToken("");
+      setIgConnectState("");
     } catch (e) {
       if (!mountedRef.current) return;
       setIgErr(extractErr(e).msg || String(e));
@@ -714,38 +763,39 @@ export default function SettingsChannelsPage() {
       const state = url.searchParams.get("state");
 
       const err = url.searchParams.get("error");
-      const errDesc =
-        url.searchParams.get("error_description") || url.searchParams.get("error_message");
+      const errDesc = url.searchParams.get("error_description") || url.searchParams.get("error_message");
+
+      // ✅ Canal por path tem prioridade (resolve o bug do instagram cair no whatsapp)
+      const byPath = detectChannelByPath(url.pathname);
+      const byState = decodeStateChannelUnsafe(state);
+      const channel = byPath || byState || "whatsapp";
 
       if (err) {
         const msg = String(errDesc || err);
-        const channel = decodeStateChannelUnsafe(state);
-
         if (channel === "instagram") setIgErr(msg);
         else setWaErr(msg);
-
         return;
       }
 
       if (!code || !state) return;
-
-      const channel = decodeStateChannelUnsafe(state);
 
       (async () => {
         try {
           if (channel === "instagram") {
             setIgConnecting(true);
 
+            // ✅ Backend: /settings/channels/instagram/callback
+            // Retorna: { ok, pages, connectState, ... }
             const fin = await finishInstagramOAuth({ code, state });
-            const userAccessToken = String(fin?.userAccessToken || "").trim();
-            if (!userAccessToken) throw new Error("Instagram: userAccessToken não retornado no callback.");
 
-            const pagesRes = await listInstagramPages(userAccessToken);
-            const pages = safeArr(pagesRes?.pages).filter((p) => p?.id && p?.name);
+            const pages = safeArr(fin?.pages).filter((p) => p?.id && p?.name);
+            const cs = String(fin?.connectState || "").trim();
+            if (!cs) throw new Error("Instagram: connectState não retornado no callback.");
+            if (!pages.length) throw new Error("Instagram: nenhuma página retornada (verifique permissões).");
 
             if (!mountedRef.current) return;
 
-            setIgUserAccessToken(userAccessToken);
+            setIgConnectState(cs);
             setIgPages(pages);
             if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
             setIgModalOpen(true);
@@ -753,7 +803,7 @@ export default function SettingsChannelsPage() {
             setToast(pages.length > 1 ? "Escolha a página para conectar." : "Página carregada.");
             setTimeout(() => mountedRef.current && setToast(""), 2000);
           } else {
-            // default: WhatsApp
+            // ✅ default: WhatsApp
             setWaConnecting(true);
             await finishWhatsAppEmbeddedSignup({ code, state });
             await loadChannels();
@@ -1316,9 +1366,7 @@ export default function SettingsChannelsPage() {
                   <input
                     type="checkbox"
                     checked={!!webchatDraft.enabled}
-                    onChange={(e) =>
-                      setWebchatDraft((p) => (p ? { ...p, enabled: e.target.checked } : p))
-                    }
+                    onChange={(e) => setWebchatDraft((p) => (p ? { ...p, enabled: e.target.checked } : p))}
                   />
                   <span>{webchatDraft.enabled ? "Ativo" : "Desativado"}</span>
                 </label>
@@ -1340,12 +1388,7 @@ export default function SettingsChannelsPage() {
                   </button>
                 </div>
                 <div style={{ marginTop: 8 }}>
-                  <button
-                    className="settings-primary-btn"
-                    style={{ opacity: 0.95 }}
-                    onClick={rotateKey}
-                    disabled={saving}
-                  >
+                  <button className="settings-primary-btn" style={{ opacity: 0.95 }} onClick={rotateKey} disabled={saving}>
                     Rotacionar chave
                   </button>
                 </div>
@@ -1434,9 +1477,7 @@ export default function SettingsChannelsPage() {
                 style={{ ...fieldStyle(), minHeight: 110, resize: "vertical" }}
                 value={(webchatDraft.allowedOrigins || []).join("\n")}
                 onChange={(e) =>
-                  setWebchatDraft((p) =>
-                    p ? { ...p, allowedOrigins: normalizeOriginLines(e.target.value) } : p
-                  )
+                  setWebchatDraft((p) => (p ? { ...p, allowedOrigins: normalizeOriginLines(e.target.value) } : p))
                 }
                 placeholder={`Ex:\nhttps://cliente.gplabs.com.br\nhttps://www.gplabs.com.br`}
               />
@@ -1496,12 +1537,7 @@ export default function SettingsChannelsPage() {
                 >
                   Copiar widgetKey
                 </button>
-                <button
-                  className="settings-primary-btn"
-                  style={{ opacity: 0.9 }}
-                  onClick={loadSnippet}
-                  disabled={snippetLoading}
-                >
+                <button className="settings-primary-btn" style={{ opacity: 0.9 }} onClick={loadSnippet} disabled={snippetLoading}>
                   {snippetLoading ? "Atualizando..." : "Atualizar script"}
                 </button>
               </div>
