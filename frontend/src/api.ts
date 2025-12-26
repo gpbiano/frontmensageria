@@ -117,7 +117,7 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
   if (extra) {
     const h = new Headers(extra);
     h.forEach((v, k) => {
-      normalized[k] = v; // o browser normalmente normaliza para lower-case
+      normalized[k] = v; // browser normalmente normaliza para lower-case
     });
   }
 
@@ -127,9 +127,7 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
   });
 
   // Se já vier x-tenant-id no extra, respeita; senão injeta do storage
-  const hasTenantHeader = Object.keys(normalized).some(
-    (k) => k.toLowerCase() === "x-tenant-id"
-  );
+  const hasTenantHeader = Object.keys(normalized).some((k) => k.toLowerCase() === "x-tenant-id");
 
   return {
     ...normalized,
@@ -215,8 +213,7 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
       b.payload?.text ??
       null;
 
-    const hasText =
-      b.text !== undefined && b.text !== null && String(b.text).trim() !== "";
+    const hasText = b.text !== undefined && b.text !== null && String(b.text).trim() !== "";
 
     if (!hasText && candidate !== null && String(candidate).trim() !== "") {
       effectiveBody = { ...b, text: String(candidate).trim() };
@@ -227,9 +224,7 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
 
   // Se já veio string/FormData/etc, respeita.
   const body: any =
-    hasBody && isPlainObject(effectiveBody)
-      ? JSON.stringify(effectiveBody)
-      : (effectiveBody as any);
+    hasBody && isPlainObject(effectiveBody) ? JSON.stringify(effectiveBody) : (effectiveBody as any);
 
   // Só seta JSON quando body é objeto puro e não veio Content-Type explicitamente
   const shouldSetJson =
@@ -463,12 +458,7 @@ export async function setPasswordWithToken(token: string, password: string) {
 // SETTINGS — CHANNELS (Configurações → Canais)
 // ======================================================
 
-export type ChannelStatus =
-  | "connected"
-  | "not_connected"
-  | "disconnected"
-  | "disabled"
-  | "soon";
+export type ChannelStatus = "connected" | "not_connected" | "disconnected" | "disabled" | "soon";
 
 // Campo comum que o backend devolve via shapeChannel()
 export interface BaseChannelRecord {
@@ -542,6 +532,9 @@ export interface MessengerChannelRecord extends BaseChannelRecord {
 export interface InstagramChannelConfig {
   instagramBusinessId?: string;
   igUsername?: string;
+  subscribedFields?: string[];
+  tokenKind?: "page" | "user";
+  userTokenExpiresIn?: number | null;
   connectedAt?: string;
   graphVersion?: string;
 }
@@ -690,8 +683,44 @@ export async function disconnectMessengerChannel(): Promise<{ ok: boolean }> {
 }
 
 // ===============================
-// ✅ INSTAGRAM — SELF-SERVICE (Settings UI)
+// ✅ INSTAGRAM — SELF-SERVICE (Settings UI) — Zenvia-like
 // ===============================
+
+/**
+ * Backend:
+ * - POST /settings/channels/instagram/start
+ * Retorna authUrl (você abre no browser / popup)
+ */
+export async function startInstagramOAuth(): Promise<{
+  ok: boolean;
+  authUrl: string;
+  redirectUri: string;
+  state: string;
+  scopes: string[];
+  graphVersion?: string;
+}> {
+  return request("/settings/channels/instagram/start", { method: "POST" });
+}
+
+/**
+ * Backend:
+ * - POST /settings/channels/instagram/callback { code, state }
+ * Retorna um userAccessToken LONG-LIVED para usar em /pages e /connect.
+ */
+export async function finishInstagramOAuth(payload: {
+  code: string;
+  state: string;
+}): Promise<{
+  ok: boolean;
+  userAccessToken: string;
+  expiresIn?: number | null;
+  tokenType?: string | null;
+}> {
+  return request("/settings/channels/instagram/callback", {
+    method: "POST",
+    body: payload
+  });
+}
 
 /**
  * Backend:
@@ -702,6 +731,7 @@ export async function listInstagramPages(
 ): Promise<{ pages: Array<{ id: string; name: string; pageAccessToken: string }> }> {
   const tok = String(userAccessToken || "").trim();
   if (!tok) throw new Error("userAccessToken_required");
+
   return request("/settings/channels/instagram/pages", {
     method: "POST",
     body: { userAccessToken: tok }
@@ -709,12 +739,16 @@ export async function listInstagramPages(
 }
 
 /**
- * Backend:
- * - POST /settings/channels/instagram/connect { pageId, pageAccessToken }
+ * ✅ Backend atualizado:
+ * - POST /settings/channels/instagram/connect { pageId, userAccessToken, subscribedFields? }
+ *
+ * ⚠️ NÃO enviar pageAccessToken do front.
+ * O backend resolve o PAGE TOKEN e persiste corretamente.
  */
 export async function connectInstagramChannel(payload: {
   pageId: string;
-  pageAccessToken: string;
+  userAccessToken: string;
+  subscribedFields?: string[];
 }): Promise<{ ok: boolean; instagram?: InstagramChannelRecord; resolved?: any }> {
   return request("/settings/channels/instagram/connect", {
     method: "POST",
@@ -749,9 +783,7 @@ export interface UserRecord {
   updatedAt?: string;
 }
 
-type UsersListResponse =
-  | { data: UserRecord[]; total: number }
-  | { items: UserRecord[]; total: number };
+type UsersListResponse = { data: UserRecord[]; total: number } | { items: UserRecord[]; total: number };
 
 export async function fetchUsers(): Promise<{ data: UserRecord[]; total: number }> {
   const res = await request<UsersListResponse>("/settings/users");
@@ -905,7 +937,9 @@ export async function deactivateGroupMember(
   userId: number
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/deactivate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
+      String(userId)
+    )}/deactivate`,
     { method: "PATCH" }
   );
 }
