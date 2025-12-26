@@ -759,16 +759,19 @@ export default function SettingsChannelsPage() {
   useEffect(() => {
     try {
       const url = new URL(window.location.href);
+
+      // ✅ Só processa se estiver numa rota de callback
+      const isCallbackRoute = /\/settings\/channels\/(instagram|whatsapp)\/callback$/i.test(url.pathname);
+      if (!isCallbackRoute) return;
+
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
 
       const err = url.searchParams.get("error");
-      const errDesc = url.searchParams.get("error_description") || url.searchParams.get("error_message");
+      const errDesc =
+        url.searchParams.get("error_description") || url.searchParams.get("error_message");
 
-      // ✅ Canal por path tem prioridade (resolve o bug do instagram cair no whatsapp)
-      const byPath = detectChannelByPath(url.pathname);
-      const byState = decodeStateChannelUnsafe(state);
-      const channel = byPath || byState || "whatsapp";
+      const channel = detectChannelByPath(url.pathname) || decodeStateChannelUnsafe(state) || "";
 
       if (err) {
         const msg = String(errDesc || err);
@@ -784,12 +787,11 @@ export default function SettingsChannelsPage() {
           if (channel === "instagram") {
             setIgConnecting(true);
 
-            // ✅ Backend: /settings/channels/instagram/callback
-            // Retorna: { ok, pages, connectState, ... }
             const fin = await finishInstagramOAuth({ code, state });
 
             const pages = safeArr(fin?.pages).filter((p) => p?.id && p?.name);
             const cs = String(fin?.connectState || "").trim();
+
             if (!cs) throw new Error("Instagram: connectState não retornado no callback.");
             if (!pages.length) throw new Error("Instagram: nenhuma página retornada (verifique permissões).");
 
@@ -799,21 +801,13 @@ export default function SettingsChannelsPage() {
             setIgPages(pages);
             if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
             setIgModalOpen(true);
-
-            setToast(pages.length > 1 ? "Escolha a página para conectar." : "Página carregada.");
-            setTimeout(() => mountedRef.current && setToast(""), 2000);
           } else {
-            // ✅ default: WhatsApp
             setWaConnecting(true);
             await finishWhatsAppEmbeddedSignup({ code, state });
             await loadChannels();
-
-            if (!mountedRef.current) return;
-            setToast("WhatsApp conectado com sucesso.");
-            setTimeout(() => mountedRef.current && setToast(""), 2000);
           }
 
-          // limpa query
+          // ✅ limpa query SEM sair da rota (pra não reprocessar)
           url.searchParams.delete("code");
           url.searchParams.delete("state");
           url.searchParams.delete("error");
@@ -836,7 +830,6 @@ export default function SettingsChannelsPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
   return (
     <div className="settings-page">
       <h1 className="settings-title">Configurações</h1>
