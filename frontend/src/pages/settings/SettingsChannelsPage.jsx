@@ -646,66 +646,30 @@ export default function SettingsChannelsPage() {
     setIgModalOpen(true);
   }
 
-  async function startInstagramConnect() {
-    setIgErr("");
-    setIgConnecting(true);
+async function startInstagramConnect() {
+  setIgErr("");
+  setIgConnecting(true);
 
-    try {
-      const start = await startInstagramBusinessLogin();
+  try {
+    const start = await startInstagramBusinessLogin();
 
-      const appId = start?.appId || start?.app_id || start?.clientId || start?.client_id;
-      const state = start?.state;
-
-      // ✅ IMPORTANTE: use redirectUri do backend se vier.
-      const redirectUri = String(start?.redirectUri || start?.redirect_uri || "").trim()
-        || buildFrontendCallbackUrl("instagram");
-
-      const scopes = Array.isArray(start?.scopes)
-        ? start.scopes
-        : String(start?.scopes || start?.scope || "")
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean);
-
-      const authBaseUrl = String(start?.authBaseUrl || "https://www.facebook.com").trim();
-      const graphVersion = String(start?.graphVersion || start?.version || "v21.0").trim();
-
-      if (!appId || !state) {
-        throw new Error(`Instagram start inválido (appId/state). Recebido: ${JSON.stringify(start)}`);
-      }
-
-      // ✅ reset do step 2 (evita usar connectState antigo)
-      setIgPages([]);
-      setIgSelectedPageId("");
-      setIgConnectState("");
-
-      const params = new URLSearchParams({
-        client_id: String(appId),
-        redirect_uri: redirectUri,
-        state: String(state),
-        response_type: "code",
-        scope: (scopes.length
-          ? scopes
-          : [
-              "pages_show_list",
-              "pages_read_engagement",
-              "pages_manage_metadata",
-              "pages_messaging",
-              "instagram_basic",
-              "instagram_manage_messages"
-            ]
-        ).join(",")
-      });
-
-      window.location.href = `${authBaseUrl}/${encodeURIComponent(graphVersion)}/dialog/oauth?${params.toString()}`;
-    } catch (e) {
-      if (!mountedRef.current) return;
-      setIgErr(extractErr(e).msg || String(e));
-    } finally {
-      if (!mountedRef.current) return;
-      setIgConnecting(false);
+    // ✅ CONTRATO CORRETO
+    if (!start?.authUrl) {
+      throw new Error(
+        `Instagram start inválido (authUrl ausente). Recebido: ${JSON.stringify(start)}`
+      );
     }
+
+    // 🔥 OAuth redirect deve vir 100% do backend
+    window.location.href = String(start.authUrl);
+  } catch (e) {
+    if (!mountedRef.current) return;
+    setIgErr(extractErr(e).msg || String(e));
+  } finally {
+    if (!mountedRef.current) return;
+    setIgConnecting(false);
   }
+}
 
   async function finalizeInstagramWithPage() {
     setIgErr("");
