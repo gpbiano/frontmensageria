@@ -126,9 +126,11 @@ function signState(payload) {
 }
 
 function verifyState(state) {
-  const decoded = base64urlDecode(state);
+  const normalized = normalizeStateInput(state);
 
-  // ✅ pega o ÚLTIMO ponto (porque o raw pode conter "." no redirectUri/domínio)
+  const decoded = base64urlDecode(normalized);
+
+  // ✅ pega o ÚLTIMO ponto (raw pode conter "." por conta de URLs)
   const idx = String(decoded || "").lastIndexOf(".");
   if (idx <= 0) throw new Error("invalid_state");
 
