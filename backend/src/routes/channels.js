@@ -99,9 +99,10 @@ function getOAuthRedirectUri(req, channel) {
 
   return `${base}/settings/channels/${channel}/callback`;
 }
-
 // ======================================================
-// STATE (anti-CSRF)
+// STATE (anti-CSRF) — aceita 2 formatos (retrocompat)
+// Formato B (novo):  base64url(rawJSON) + "." + sigHex
+// Formato A (antigo): base64url(rawJSON + "." + sigHex)
 // ======================================================
 function base64urlEncode(str) {
   return Buffer.from(String(str), "utf8")
@@ -124,27 +125,63 @@ function signState(payload) {
     .update(raw)
     .digest("hex");
 
-  // ⚠️ separador "." — verify corta PELO ÚLTIMO ponto
-  return base64urlEncode(`${raw}.${sig}`);
+  // ✅ Formato B (recomendado): payload em base64url + "." + assinatura em hex
+  return `${base64urlEncode(raw)}.${sig}`;
 }
 
 function verifyState(state) {
   const s = String(state || "").trim();
-  const decoded = base64urlDecode(s);
+  if (!s) throw new Error("invalid_state");
 
-  const idx = String(decoded || "").lastIndexOf(".");
+  const secret = requireEnv("JWT_SECRET");
+
+  // --- Tentativa 1: Formato B (tem ponto visível) ---
+  if (s.includes(".")) {
+    const idx = s.lastIndexOf(".");
+    if (idx <= 0) throw new Error("invalid_state");
+
+    const rawB64 = s.slice(0, idx);
+    const sig = s.slice(idx + 1);
+
+    let raw = "";
+    try {
+      raw = base64urlDecode(rawB64);
+    } catch {
+      throw new Error("invalid_state");
+    }
+
+    const expected = crypto.createHmac("sha256", secret).update(raw).digest("hex");
+    if (!raw || !sig || sig !== expected) throw new Error("invalid_state");
+
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw new Error("invalid_state");
+    }
+
+    const ts = Number(payload?.ts || 0);
+    if (ts && Date.now() - ts > 10 * 60 * 1000) throw new Error("invalid_state");
+
+    return payload;
+  }
+
+  // --- Tentativa 2: Formato A (antigo): tudo está base64url(raw+"."+sig) ---
+  let decoded = "";
+  try {
+    decoded = base64urlDecode(s);
+  } catch {
+    throw new Error("invalid_state");
+  }
+
+  const idx = decoded.lastIndexOf(".");
   if (idx <= 0) throw new Error("invalid_state");
 
-  const raw = String(decoded).slice(0, idx);
-  const sig = String(decoded).slice(idx + 1);
+  const raw = decoded.slice(0, idx);
+  const sig = decoded.slice(idx + 1);
 
-  const expected = crypto
-    .createHmac("sha256", requireEnv("JWT_SECRET"))
-    .update(raw)
-    .digest("hex");
-
-  if (!raw || !sig) throw new Error("invalid_state");
-  if (sig !== expected) throw new Error("invalid_state");
+  const expected = crypto.createHmac("sha256", secret).update(raw).digest("hex");
+  if (!raw || !sig || sig !== expected) throw new Error("invalid_state");
 
   let payload;
   try {
@@ -158,7 +195,6 @@ function verifyState(state) {
 
   return payload;
 }
-
 // ======================================================
 // Normalização de saída (não vazar tokens)
 // ======================================================
