@@ -1,9 +1,13 @@
 // backend/src/routes/conversations.js
 import express from "express";
 import crypto from "crypto";
+import fetch from "node-fetch";
 import prisma from "../lib/prisma.js";
 
 const router = express.Router();
+
+const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION || "v21.0").trim();
+const META_GRAPH_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 
 // ======================================================
 // HELPERS
@@ -168,7 +172,7 @@ function normalizeConversationRow(convRow) {
       ""
   );
 
-  // ✅ FECHAMENTO: preferimos metadata (pois no seu schema atual não existem colunas)
+  // ✅ FECHAMENTO: como seu schema NÃO tem colunas closed*, fica no metadata
   const closedAtMeta = m.closedAt ?? null;
   const closedByMeta = m.closedBy ?? null;
   const closedReasonMeta = m.closedReason ?? null;
@@ -219,6 +223,7 @@ function normalizeMessageRow(convNorm, msgRow) {
 
   const from = safeStr(mm.from || (msgRow.direction === "in" ? "client" : "agent"));
   const isBot = Boolean(mm.isBot || from === "bot");
+  const providerMessageId = mm.providerMessageId || null;
   const waMessageId = mm.waMessageId || null;
 
   return {
@@ -233,10 +238,178 @@ function normalizeMessageRow(convNorm, msgRow) {
     text: typeof msgRow.text === "string" ? msgRow.text : mm.text || "",
     createdAt: msgRow.createdAt ? new Date(msgRow.createdAt).toISOString() : nowIso(),
     waMessageId,
+    providerMessageId,
     payload: mm.payload,
     delivery: mm.delivery,
     tenantId: msgRow.tenantId
   };
+}
+
+// ======================================================
+// 🔌 CONEXÃO DO CANAL (DB) + SENDERS META
+// ======================================================
+
+async function getChannelConn(tenantId, type) {
+  // ⚠️ ajuste aqui se seu model não for Channel / unique não for tenantId_type
+  const row = await prisma.channel
+    .findUnique({
+      where: { tenantId_type: { tenantId, type } }
+    })
+    .catch(() => null);
+
+  if (!row) return null;
+
+  const m = asJson(row.metadata);
+
+  // ✅ padrão que costuma existir
+  // WhatsApp: { accessToken, phoneNumberId }
+  // Messenger: { pageAccessToken, pageId }
+  // Instagram: { pageAccessToken, igBusinessAccountId } ou { accessToken, igBusinessAccountId }
+  return { row, meta: m };
+}
+
+function peerToWhatsAppTo(peerId) {
+  // aceito: "wa:556499..." ou "556499..."
+  const s = safeStr(peerId);
+  if (!s) return "";
+  if (s.includes(":")) return s.split(":").slice(1).join(":").replace(/\D/g, "");
+  return s.replace(/\D/g, "");
+}
+
+function peerToPSID(peerId) {
+  // "ms:123" ou "ig:123" ou puro
+  const s = safeStr(peerId);
+  if (!s) return "";
+  if (s.includes(":")) return s.split(":").slice(1).join(":").trim();
+  return s.trim();
+}
+
+async function sendWhatsAppText({ tenantId, peerId, text }) {
+  const conn = await getChannelConn(tenantId, "whatsapp");
+  const accessToken = safeStr(conn?.meta?.accessToken || conn?.meta?.token || "");
+  const phoneNumberId = safeStr(conn?.meta?.phoneNumberId || conn?.meta?.phone_number_id || "");
+
+  if (!accessToken || !phoneNumberId) {
+    return { ok: false, error: "WhatsApp não conectado (token/phoneNumberId ausentes no Channel.metadata)" };
+  }
+
+  const to = peerToWhatsAppTo(peerId);
+  if (!to) return { ok: false, error: "peerId inválido para WhatsApp (to vazio)" };
+
+  const url = `${META_GRAPH_BASE}/${phoneNumberId}/messages`;
+  const body = {
+    messaging_product: "whatsapp",
+    to,
+    type: "text",
+    text: { body: safeStr(text) }
+  };
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    return { ok: false, error: json?.error?.message || `WhatsApp Graph ${resp.status}`, meta: json?.error || json };
+  }
+
+  // WA retorna: { messages: [ { id: "wamid..." } ] }
+  const wamid = json?.messages?.[0]?.id || null;
+  return { ok: true, providerMessageId: wamid, raw: json };
+}
+
+async function sendMessengerText({ tenantId, peerId, text }) {
+  const conn = await getChannelConn(tenantId, "messenger");
+  const pageAccessToken = safeStr(conn?.meta?.pageAccessToken || conn?.meta?.accessToken || "");
+  if (!pageAccessToken) {
+    return { ok: false, error: "Messenger não conectado (pageAccessToken ausente no Channel.metadata)" };
+  }
+
+  const psid = peerToPSID(peerId);
+  if (!psid) return { ok: false, error: "peerId inválido para Messenger (PSID vazio)" };
+
+  const url = `${META_GRAPH_BASE}/me/messages?access_token=${encodeURIComponent(pageAccessToken)}`;
+  const body = {
+    messaging_type: "RESPONSE",
+    recipient: { id: psid },
+    message: { text: safeStr(text) }
+  };
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    return { ok: false, error: json?.error?.message || `Messenger Graph ${resp.status}`, meta: json?.error || json };
+  }
+
+  // Messenger retorna: { recipient_id, message_id }
+  return { ok: true, providerMessageId: json?.message_id || null, raw: json };
+}
+
+async function sendInstagramText({ tenantId, peerId, text }) {
+  // IG usa endpoint parecido, mas depende de permissões/capability
+  const conn = await getChannelConn(tenantId, "instagram");
+  const token = safeStr(conn?.meta?.pageAccessToken || conn?.meta?.accessToken || "");
+  if (!token) {
+    return { ok: false, error: "Instagram não conectado (token ausente no Channel.metadata)" };
+  }
+
+  const igUserId = peerToPSID(peerId);
+  if (!igUserId) return { ok: false, error: "peerId inválido para Instagram (id vazio)" };
+
+  const url = `${META_GRAPH_BASE}/me/messages?access_token=${encodeURIComponent(token)}`;
+  const body = {
+    recipient: { id: igUserId },
+    message: { text: safeStr(text) }
+  };
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    return { ok: false, error: json?.error?.message || `Instagram Graph ${resp.status}`, meta: json?.error || json };
+  }
+
+  return { ok: true, providerMessageId: json?.message_id || null, raw: json };
+}
+
+async function dispatchOutboundToChannel({ convRow, msgText }) {
+  const tenantId = convRow.tenantId;
+  const meta = getMeta(convRow);
+  const peerId = safeStr(meta.peerId || "");
+  const channel = safeStr(convRow.channel || meta.channel || "").toLowerCase();
+
+  if (!peerId) return { ok: false, error: "Conversation sem peerId no metadata" };
+
+  if (channel === "whatsapp") {
+    return sendWhatsAppText({ tenantId, peerId, text: msgText });
+  }
+
+  if (channel === "messenger") {
+    return sendMessengerText({ tenantId, peerId, text: msgText });
+  }
+
+  if (channel === "instagram") {
+    return sendInstagramText({ tenantId, peerId, text: msgText });
+  }
+
+  // webchat: a mensagem “volta” pro widget via GET /conversations/:id/messages (DB)
+  if (channel === "webchat") return { ok: true, providerMessageId: null };
+
+  return { ok: false, error: `Canal não suportado para outbound: ${channel}` };
 }
 
 // ======================================================
@@ -272,16 +445,6 @@ async function upsertContact({ tenantId, channel, peerId, title, phone, waId, vi
   });
 }
 
-/**
- * ✅ EXPORTS USADOS PELOS 4 CANAIS:
- * - getOrCreateChannelConversation
- * - appendMessage
- *
- * ⚠️ IMPORTANTÍSSIMO:
- * Seu schema NÃO tem colunas closedAt/closedBy/closedReason.
- * Então:
- * - create/update NUNCA podem enviar essas keys fora de metadata.
- */
 export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) {
   const payload = maybePayload || dbOrPayload || {};
   const tenantId = safeStr(payload.tenantId);
@@ -342,8 +505,6 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
       closedReason: null
     };
 
-    // ✅ CREATE: só envia campos que EXISTEM no schema + metadata
-    // (NÃO envia closedAt/closedBy/closedReason fora do metadata)
     const createData = {
       id: convId,
       tenantId,
@@ -370,7 +531,6 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   } else {
     const meta = getMeta(conv);
 
-    // Atualiza nome se ainda está genérico
     if (safeStr(meta.title) === "Contato" && resolvedName !== "Contato") {
       conv = await prisma.conversation.update({
         where: { id: conv.id },
@@ -475,14 +635,11 @@ async function addSystemMessage({ convRow, text, code = "system" }) {
 async function closeConversationPrisma({ convRow, closedBy, closedReason }) {
   const atIso = nowIso();
 
-  // ✅ FECHAMENTO SOMENTE NO METADATA (sem colunas no schema)
   const patch = {
     status: "closed",
     closedAt: atIso,
     closedBy: closedBy || null,
     closedReason: closedReason || "manual_by_agent",
-
-    // coerência de inbox
     handoffActive: false,
     inboxVisible: false,
     inboxStatus: "closed"
@@ -493,7 +650,6 @@ async function closeConversationPrisma({ convRow, closedBy, closedReason }) {
     metadata: setMeta(convRow, patch)
   };
 
-  // ✅ Atualiza apenas colunas que sabemos que existem (essas você já usa)
   if (hasCol(convRow, "handoffActive")) data.handoffActive = false;
   if (hasCol(convRow, "inboxStatus")) data.inboxStatus = "closed";
   if (hasCol(convRow, "inboxVisible")) data.inboxVisible = false;
@@ -521,13 +677,9 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
   if (convRow.status === "closed") return { ok: false, error: "Conversa encerrada" };
 
   const convNorm = normalizeConversationRow(convRow);
-
   const type = safeStr(rawMsg?.type || "text").toLowerCase();
   const text = msgTextFromRaw(rawMsg);
 
-  // ======================================================
-  // ✅ FIX PRINCIPAL: inferência de inbound/outbound
-  // ======================================================
   let from = safeStr(rawMsg?.from || "");
   let direction = safeStr(rawMsg?.direction || "");
 
@@ -543,9 +695,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     else direction = "in";
   }
 
-  if (!from) {
-    from = direction === "in" ? "client" : "agent";
-  }
+  if (!from) from = direction === "in" ? "client" : "agent";
 
   const isBot = rawMsg?.isBot === true || from === "bot";
   if (isBot) {
@@ -567,7 +717,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 
     if (dup) {
       const msgNorm = normalizeMessageRow(convNorm, dup);
-      return { ok: true, msg: msgNorm, duplicated: true };
+      return { ok: true, msg: msgNorm, duplicated: true, msgRow: dup, convRow };
     }
   }
 
@@ -603,7 +753,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   });
 
-  // ✅ enriquecer título se ainda está "Contato"
+  // enriquecer nome
   const nameFromMsg = resolveContactName({}, rawMsg);
   const metaBefore = getMeta(convRow);
   if (safeStr(metaBefore.title) === "Contato" && nameFromMsg !== "Contato") {
@@ -620,7 +770,6 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
   }
 
   if (from === "bot") await bumpBotAttempts({ convRow });
-
   if (from === "agent" || rawMsg?.handoff === true) {
     await promoteToInboxPrisma({ convRow, reason: "agent_message" });
   }
@@ -628,7 +777,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
   await touchConversationPrisma({ convRow, msgText: text });
 
   const msgNorm = normalizeMessageRow(convNorm, msgRow);
-  return { ok: true, msg: msgNorm };
+  return { ok: true, msg: msgNorm, msgRow, convRow };
 }
 
 // ======================================================
@@ -689,7 +838,7 @@ router.get("/:id/messages", async (req, res) => {
   }
 });
 
-// POST /conversations/:id/messages (mensagem do agente)
+// POST /conversations/:id/messages (mensagem do agente + ✅ ENVIO PARA META)
 router.post("/:id/messages", async (req, res) => {
   try {
     const tenantId = requireTenantOr401(req, res);
@@ -702,6 +851,7 @@ router.post("/:id/messages", async (req, res) => {
     if (!convRow) return res.status(404).json({ error: "Conversa não encontrada" });
     if (convRow.status === "closed") return res.status(410).json({ error: "Conversa encerrada" });
 
+    // 1) grava no banco
     const r = await appendMessage(req.params.id, {
       ...req.body,
       from: "agent",
@@ -711,7 +861,33 @@ router.post("/:id/messages", async (req, res) => {
     });
 
     if (!r.ok) return res.status(400).json({ error: r.error });
-    res.status(201).json(r.msg);
+
+    // 2) envia pro canal (WhatsApp/Messenger/Instagram)
+    const text = msgTextFromRaw(req.body);
+    if (safeStr(text)) {
+      const sendRes = await dispatchOutboundToChannel({ convRow, msgText: text });
+
+      // 3) atualiza status/metadata da mensagem (sucesso/falha)
+      const providerMessageId = sendRes?.providerMessageId || null;
+
+      const patchMeta = {
+        provider: safeStr(convRow.channel),
+        providerMessageId,
+        providerSendOk: sendRes?.ok === true,
+        providerError: sendRes?.ok ? null : (sendRes?.meta || sendRes?.error || "send_failed"),
+        sentAt: sendRes?.ok ? nowIso() : null
+      };
+
+      await prisma.message.update({
+        where: { id: String(r.msgRow?.id || r.msg?.id) },
+        data: {
+          status: sendRes?.ok ? "sent" : "failed",
+          metadata: setMeta(r.msgRow || {}, patchMeta)
+        }
+      }).catch(() => {});
+    }
+
+    return res.status(201).json(r.msg);
   } catch (e) {
     res.status(500).json({ error: "Falha ao enviar mensagem", detail: String(e?.message || e) });
   }
