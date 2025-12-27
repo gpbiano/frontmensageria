@@ -690,6 +690,7 @@ export type InstagramPageItem = {
   id: string;
   name: string;
   pictureUrl?: string | null;
+  category?: string | null;
 };
 
 /**
@@ -708,18 +709,22 @@ export async function startInstagramBusinessLogin(): Promise<{
 }
 
 /**
- * Backend:
+ * ✅ Backend:
  * - POST /settings/channels/instagram/callback { code, state }
- * Troca code -> token (server-side) e lista páginas.
+ *
+ * ⚠️ IMPORTANTE:
+ * Este endpoint NÃO precisa retornar userAccessToken.
+ * Ele retorna pages + connectState (estado assinado) para finalizar a conexão com a página escolhida.
  */
 export async function finishInstagramBusinessLogin(payload: {
   code: string;
   state: string;
 }): Promise<{
   ok: boolean;
-  pages: InstagramPageItem[];
-  connectState: string;
-  meta?: any;
+  pages?: InstagramPageItem[];
+  connectState?: string;
+  tokenKind?: "long_lived" | "short_lived" | "page" | "user" | string;
+  expiresIn?: number | null;
 }> {
   return request("/settings/channels/instagram/callback", {
     method: "POST",
@@ -764,7 +769,9 @@ export const finishInstagramOAuth = finishInstagramBusinessLogin;
  * Opcional/compat: alguns fronts antigos listavam páginas via endpoint separado.
  * Se o backend NÃO tiver esse endpoint, não chame essa função.
  */
-export async function listInstagramPages(userAccessToken: string): Promise<{ pages: InstagramPageItem[] }> {
+export async function listInstagramPages(
+  userAccessToken: string
+): Promise<{ pages: InstagramPageItem[] }> {
   const tok = String(userAccessToken || "").trim();
   if (!tok) throw new Error("userAccessToken_required");
 

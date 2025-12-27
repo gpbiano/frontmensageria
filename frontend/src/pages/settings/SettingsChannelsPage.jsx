@@ -17,9 +17,10 @@ import {
   connectMessengerChannel,
   disconnectMessengerChannel,
 
-  // ✅ Instagram (start retorna authUrl pronta; finish retorna userAccessToken)
+  // ✅ Instagram (NOVO FLUXO: finish retorna pages + connectState; connect usa pageId + connectState)
   startInstagramBusinessLogin,
   finishInstagramBusinessLogin,
+  connectInstagramChannel,
   disconnectInstagramChannel
 } from "../../api"; // pages/settings -> ../../api
 
@@ -195,13 +196,13 @@ export default function SettingsChannelsPage() {
   const [msSubFields, setMsSubFields] = useState("messages,messaging_postbacks");
   const [msUserToken, setMsUserToken] = useState("");
 
-  // ✅ Instagram state (fluxo novo: token long-lived + pages + connect)
+  // ✅ Instagram state (NOVO FLUXO)
   const [igModalOpen, setIgModalOpen] = useState(false);
   const [igConnecting, setIgConnecting] = useState(false);
   const [igErr, setIgErr] = useState("");
   const [igPages, setIgPages] = useState([]);
   const [igSelectedPageId, setIgSelectedPageId] = useState("");
-  const [igUserToken, setIgUserToken] = useState(""); // ✅ userAccessToken retornado no callback
+  const [igConnectState, setIgConnectState] = useState(""); // ✅ vem do callback (assinado pelo backend)
 
   useEffect(() => {
     mountedRef.current = true;
@@ -218,6 +219,7 @@ export default function SettingsChannelsPage() {
     }
   }, []);
 
+  // (mantido) usado só em embed fallback do Webchat
   const API_BASE = useMemo(() => {
     const base =
       import.meta.env.VITE_API_BASE ||
@@ -225,44 +227,6 @@ export default function SettingsChannelsPage() {
       "http://localhost:3010";
     return String(base || "").replace(/\/+$/, "");
   }, []);
-
-  function getAuthToken() {
-    try {
-      return localStorage.getItem("gpLabsAuthToken") || sessionStorage.getItem("gpLabsAuthToken") || "";
-    } catch {
-      return "";
-    }
-  }
-
-  async function postJson(path, bodyObj) {
-    const token = getAuthToken();
-    const url = `${API_BASE}${String(path || "").startsWith("/") ? "" : "/"}${String(path || "")}`;
-
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify(bodyObj || {})
-    });
-
-    const raw = await resp.text().catch(() => "");
-    let data = {};
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch {
-      data = { raw };
-    }
-
-    if (!resp.ok) {
-      const msg = data?.error || data?.message || `HTTP ${resp.status}`;
-      const err = new Error(String(msg));
-      err.response = { data };
-      throw err;
-    }
-    return data;
-  }
 
   const webchat = channelsState?.webchat || null;
   const whatsapp = channelsState?.whatsapp || null;
@@ -515,7 +479,9 @@ export default function SettingsChannelsPage() {
       const redirectUri = start.redirectUri || buildFrontendCallbackUrl("whatsapp");
 
       if (!start.appId || !start.state) {
-        throw new Error(`Resposta inválida do backend (appId/state). Recebido: ${JSON.stringify(startRaw)}`);
+        throw new Error(
+          `Resposta inválida do backend (appId/state). Recebido: ${JSON.stringify(startRaw)}`
+        );
       }
 
       const params = new URLSearchParams({
@@ -523,10 +489,15 @@ export default function SettingsChannelsPage() {
         redirect_uri: redirectUri,
         state: String(start.state),
         response_type: "code",
-        scope: (start.scopes.length ? start.scopes : ["whatsapp_business_messaging", "business_management"]).join(",")
+        scope: (start.scopes.length
+          ? start.scopes
+          : ["whatsapp_business_messaging", "business_management"]
+        ).join(",")
       });
 
-      window.location.href = `https://www.facebook.com/${encodeURIComponent(start.graphVersion)}/dialog/oauth?${params.toString()}`;
+      window.location.href = `https://www.facebook.com/${encodeURIComponent(
+        start.graphVersion
+      )}/dialog/oauth?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
       setWaErr(extractErr(e).msg || String(e));
@@ -665,7 +636,7 @@ export default function SettingsChannelsPage() {
   }
 
   // ===============================
-  // ✅ Instagram
+  // ✅ Instagram (NOVO FLUXO)
   // ===============================
   const igStatus = normalizeChannelStatus(instagram?.status);
   const igIsConnected = igStatus === "connected" || instagram?.enabled === true;
@@ -682,11 +653,11 @@ export default function SettingsChannelsPage() {
     setIgErr("");
     setIgPages([]);
     setIgSelectedPageId("");
-    setIgUserToken("");
+    setIgConnectState("");
     setIgModalOpen(true);
   }
 
-  // ✅ FIX: backend retorna authUrl pronta
+  // ✅ Start: backend pode retornar authUrl pronta (preferido). Mantém fallback.
   async function startInstagramConnect() {
     setIgErr("");
     setIgConnecting(true);
@@ -700,16 +671,19 @@ export default function SettingsChannelsPage() {
         return;
       }
 
-      // fallback antigo (se backend devolver appId/state algum dia)
+      // fallback antigo (se backend devolver appId/state)
       const appId = start?.appId;
       const state = start?.state;
-      const redirectUri = String(start?.redirectUri || "").trim() || buildFrontendCallbackUrl("instagram");
+      const redirectUri =
+        String(start?.redirectUri || "").trim() || buildFrontendCallbackUrl("instagram");
       const scopes = Array.isArray(start?.scopes) ? start.scopes : [];
       const authBaseUrl = String(start?.authBaseUrl || "https://www.facebook.com").trim();
       const graphVersion = String(start?.graphVersion || "v21.0").trim();
 
       if (!appId || !state) {
-        throw new Error(`Instagram start inválido (authUrl/appId/state). Recebido: ${JSON.stringify(start)}`);
+        throw new Error(
+          `Instagram start inválido (authUrl/appId/state). Recebido: ${JSON.stringify(start)}`
+        );
       }
 
       const params = new URLSearchParams({
@@ -730,7 +704,9 @@ export default function SettingsChannelsPage() {
         ).join(",")
       });
 
-      window.location.href = `${authBaseUrl}/${encodeURIComponent(graphVersion)}/dialog/oauth?${params.toString()}`;
+      window.location.href = `${authBaseUrl}/${encodeURIComponent(
+        graphVersion
+      )}/dialog/oauth?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
       setIgErr(extractErr(e).msg || String(e));
@@ -740,6 +716,7 @@ export default function SettingsChannelsPage() {
     }
   }
 
+  // ✅ FINAL CONNECT: pageId + connectState (NUNCA userAccessToken)
   async function finalizeInstagramWithPage() {
     setIgErr("");
     setIgConnecting(true);
@@ -748,13 +725,12 @@ export default function SettingsChannelsPage() {
       const pageId = String(igSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
 
-      const userAccessToken = String(igUserToken || "").trim();
-      if (!userAccessToken) throw new Error("Token do Instagram ausente. Conecte novamente.");
+      const connectState = String(igConnectState || "").trim();
+      if (!connectState) throw new Error("ConnectState ausente. Refazer conexão.");
 
-      // ✅ conecta de forma determinística direto no backend
-      await postJson("/settings/channels/instagram/connect", {
+      await connectInstagramChannel({
         pageId,
-        userAccessToken,
+        connectState,
         subscribedFields: ["messages"]
       });
 
@@ -767,7 +743,7 @@ export default function SettingsChannelsPage() {
       setIgModalOpen(false);
       setIgPages([]);
       setIgSelectedPageId("");
-      setIgUserToken("");
+      setIgConnectState("");
     } catch (e) {
       if (!mountedRef.current) return;
       setIgErr(extractErr(e).msg || String(e));
@@ -830,25 +806,22 @@ export default function SettingsChannelsPage() {
           if (channel === "instagram") {
             setIgConnecting(true);
 
-            // ✅ backend valida state e devolve userAccessToken long-lived
+            // ✅ NOVO: backend devolve pages + connectState (não userAccessToken)
             const fin = await finishInstagramBusinessLogin({ code, state });
-            const userAccessToken = String(fin?.userAccessToken || "").trim();
 
-            if (!userAccessToken) {
-              throw new Error("Instagram: userAccessToken não retornado no callback.");
+            const pages = safeArr(fin?.pages).filter((p) => p?.id && p?.name);
+            const connectState = String(fin?.connectState || "").trim();
+
+            if (!connectState) {
+              throw new Error("Instagram: connectState não retornado no callback.");
             }
-
-            // ✅ lista páginas via backend
-            const pagesRes = await postJson("/settings/channels/instagram/pages", {
-              userAccessToken
-            });
-
-            const pages = safeArr(pagesRes?.pages).filter((p) => p?.id && p?.name);
-            if (!pages.length) throw new Error("Instagram: nenhuma página retornada (verifique permissões).");
+            if (!pages.length) {
+              throw new Error("Instagram: nenhuma página retornada (verifique permissões).");
+            }
 
             if (!mountedRef.current) return;
 
-            setIgUserToken(userAccessToken);
+            setIgConnectState(connectState);
             setIgPages(pages);
             if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
             setIgModalOpen(true);
@@ -896,7 +869,9 @@ export default function SettingsChannelsPage() {
   return (
     <div className="settings-page">
       <h1 className="settings-title">Configurações</h1>
-      <p className="settings-subtitle">Defina os canais que irão se conectar à sua Plataforma WhatsApp GP Labs.</p>
+      <p className="settings-subtitle">
+        Defina os canais que irão se conectar à sua Plataforma WhatsApp GP Labs.
+      </p>
 
       <div className="settings-env-info">
         <span>{isDev ? "Ambiente local" : "Produção"}</span>
@@ -934,7 +909,9 @@ export default function SettingsChannelsPage() {
 
       <section className="settings-section">
         <h2 className="settings-section-title">Canais de atendimento</h2>
-        <p className="settings-section-description">Selecione um canal para ver os detalhes e configurar.</p>
+        <p className="settings-section-description">
+          Selecione um canal para ver os detalhes e configurar.
+        </p>
 
         <div className="settings-channels-grid">
           {/* Web Chat */}
@@ -946,7 +923,9 @@ export default function SettingsChannelsPage() {
           >
             <div className="settings-channel-header">
               <span className="settings-channel-title">Janela Web (Web Chat)</span>
-              <Pill variant={webchatStatusVariant}>{webchat?.enabled ? "Ativo" : "Desativado"}</Pill>
+              <Pill variant={webchatStatusVariant}>
+                {webchat?.enabled ? "Ativo" : "Desativado"}
+              </Pill>
             </div>
 
             <p className="settings-channel-description">Atendimento via chat integrado ao seu site.</p>
@@ -965,7 +944,9 @@ export default function SettingsChannelsPage() {
               <Pill variant={waIsConnected ? "on" : "off"}>{whatsappLabel()}</Pill>
             </div>
 
-            <p className="settings-channel-description">Conecte seu WhatsApp Business via Cadastro Incorporado (Meta).</p>
+            <p className="settings-channel-description">
+              Conecte seu WhatsApp Business via Cadastro Incorporado (Meta).
+            </p>
 
             {!!waErr && (
               <div
@@ -1013,7 +994,9 @@ export default function SettingsChannelsPage() {
               <Pill variant={msIsConnected ? "on" : "off"}>{messengerLabel()}</Pill>
             </div>
 
-            <p className="settings-channel-description">Integração com a caixa de mensagens da sua página do Facebook.</p>
+            <p className="settings-channel-description">
+              Integração com a caixa de mensagens da sua página do Facebook.
+            </p>
 
             {!!msErr && (
               <div
@@ -1059,7 +1042,8 @@ export default function SettingsChannelsPage() {
                   <b>Página:</b> {messenger?.displayName || "—"}
                 </div>
                 <div>
-                  <b>pageId:</b> <code style={{ opacity: 0.9 }}>{messenger?.pageId || "—"}</code>
+                  <b>pageId:</b>{" "}
+                  <code style={{ opacity: 0.9 }}>{messenger?.pageId || "—"}</code>
                 </div>
               </div>
             )}
@@ -1072,7 +1056,9 @@ export default function SettingsChannelsPage() {
               <Pill variant={igIsConnected ? "on" : "off"}>{instagramLabel()}</Pill>
             </div>
 
-            <p className="settings-channel-description">Mensagens diretas (DM) do Instagram integradas no painel de atendimento.</p>
+            <p className="settings-channel-description">
+              Mensagens diretas (DM) do Instagram integradas no painel de atendimento.
+            </p>
 
             {!!igErr && (
               <div
@@ -1118,7 +1104,8 @@ export default function SettingsChannelsPage() {
                   <b>Página:</b> {instagram?.displayName || "—"}
                 </div>
                 <div>
-                  <b>pageId:</b> <code style={{ opacity: 0.9 }}>{instagram?.pageId || "—"}</code>
+                  <b>pageId:</b>{" "}
+                  <code style={{ opacity: 0.9 }}>{instagram?.pageId || "—"}</code>
                 </div>
               </div>
             )}
@@ -1246,7 +1233,11 @@ export default function SettingsChannelsPage() {
                 >
                   Cancelar
                 </button>
-                <button className="settings-primary-btn" onClick={connectMessenger} disabled={msConnecting || !msSelectedPageId}>
+                <button
+                  className="settings-primary-btn"
+                  onClick={connectMessenger}
+                  disabled={msConnecting || !msSelectedPageId}
+                >
                   {msConnecting ? "Conectando..." : "Conectar"}
                 </button>
               </div>
@@ -1255,7 +1246,12 @@ export default function SettingsChannelsPage() {
 
           {msIsConnected && (
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <button className="settings-primary-btn" style={{ opacity: 0.9 }} onClick={disconnectMessenger} disabled={msConnecting}>
+              <button
+                className="settings-primary-btn"
+                style={{ opacity: 0.9 }}
+                onClick={disconnectMessenger}
+                disabled={msConnecting}
+              >
                 {msConnecting ? "..." : "Desconectar"}
               </button>
             </div>
@@ -1312,7 +1308,8 @@ export default function SettingsChannelsPage() {
                     <button
                       className="settings-primary-btn"
                       onClick={finalizeInstagramWithPage}
-                      disabled={igConnecting || !igSelectedPageId}
+                      disabled={igConnecting || !igSelectedPageId || !igConnectState}
+                      title={!igConnectState ? "Conecte via Meta para gerar connectState." : ""}
                     >
                       {igConnecting ? "Conectando..." : "Conectar"}
                     </button>
@@ -1337,7 +1334,12 @@ export default function SettingsChannelsPage() {
             </>
           ) : (
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <button className="settings-primary-btn" style={{ opacity: 0.9 }} onClick={disconnectInstagram} disabled={igConnecting}>
+              <button
+                className="settings-primary-btn"
+                style={{ opacity: 0.9 }}
+                onClick={disconnectInstagram}
+                disabled={igConnecting}
+              >
                 {igConnecting ? "..." : "Desconectar"}
               </button>
             </div>
@@ -1358,7 +1360,9 @@ export default function SettingsChannelsPage() {
                   <input
                     type="checkbox"
                     checked={!!webchatDraft.enabled}
-                    onChange={(e) => setWebchatDraft((p) => (p ? { ...p, enabled: e.target.checked } : p))}
+                    onChange={(e) =>
+                      setWebchatDraft((p) => (p ? { ...p, enabled: e.target.checked } : p))
+                    }
                   />
                   <span>{webchatDraft.enabled ? "Ativo" : "Desativado"}</span>
                 </label>
@@ -1368,13 +1372,22 @@ export default function SettingsChannelsPage() {
                 <div style={labelStyle()}>Chave do widget (widgetKey)</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <input style={fieldStyle()} value={webchatDraft.widgetKey || ""} readOnly />
-                  <button className="settings-primary-btn" onClick={() => copy(webchatDraft.widgetKey || "")} disabled={!webchatDraft.widgetKey}>
+                  <button
+                    className="settings-primary-btn"
+                    onClick={() => copy(webchatDraft.widgetKey || "")}
+                    disabled={!webchatDraft.widgetKey}
+                  >
                     Copiar
                   </button>
                 </div>
 
                 <div style={{ marginTop: 8 }}>
-                  <button className="settings-primary-btn" style={{ opacity: 0.95 }} onClick={rotateKey} disabled={saving}>
+                  <button
+                    className="settings-primary-btn"
+                    style={{ opacity: 0.95 }}
+                    onClick={rotateKey}
+                    disabled={saving}
+                  >
                     Rotacionar chave
                   </button>
                 </div>
@@ -1389,7 +1402,9 @@ export default function SettingsChannelsPage() {
                   value={webchatDraft.config?.primaryColor || "#34d399"}
                   onChange={(e) =>
                     setWebchatDraft((p) =>
-                      p ? { ...p, config: { ...(p.config || {}), primaryColor: e.target.value } } : p
+                      p
+                        ? { ...p, config: { ...(p.config || {}), primaryColor: e.target.value } }
+                        : p
                     )
                   }
                   placeholder="#34d399"
@@ -1461,7 +1476,9 @@ export default function SettingsChannelsPage() {
                 style={{ ...fieldStyle(), minHeight: 110, resize: "vertical" }}
                 value={(webchatDraft.allowedOrigins || []).join("\n")}
                 onChange={(e) =>
-                  setWebchatDraft((p) => (p ? { ...p, allowedOrigins: normalizeOriginLines(e.target.value) } : p))
+                  setWebchatDraft((p) =>
+                    p ? { ...p, allowedOrigins: normalizeOriginLines(e.target.value) } : p
+                  )
                 }
                 placeholder={`Ex:\nhttps://cliente.gplabs.com.br\nhttps://www.gplabs.com.br`}
               />
@@ -1473,7 +1490,12 @@ export default function SettingsChannelsPage() {
                     style={{ opacity: 0.9 }}
                     onClick={() =>
                       setWebchatDraft((p) =>
-                        p ? { ...p, allowedOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"] } : p
+                        p
+                          ? {
+                              ...p,
+                              allowedOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"]
+                            }
+                          : p
                       )
                     }
                   >
@@ -1503,20 +1525,31 @@ export default function SettingsChannelsPage() {
                 <button className="settings-primary-btn" onClick={() => copy(embedSnippet)}>
                   Copiar embed
                 </button>
-                <button className="settings-primary-btn" style={{ opacity: 0.9 }} onClick={loadSnippet} disabled={snippetLoading}>
+                <button
+                  className="settings-primary-btn"
+                  style={{ opacity: 0.9 }}
+                  onClick={loadSnippet}
+                  disabled={snippetLoading}
+                >
                   {snippetLoading ? "Atualizando..." : "Atualizar script"}
                 </button>
               </div>
 
               {!!snippetMeta?.allowedOrigins?.length && (
                 <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
-                  Origens salvas no backend: <code>{(snippetMeta.allowedOrigins || []).join(", ")}</code>
+                  Origens salvas no backend:{" "}
+                  <code>{(snippetMeta.allowedOrigins || []).join(", ")}</code>
                 </div>
               )}
             </div>
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button className="settings-primary-btn" style={{ opacity: 0.85 }} onClick={() => setWebchatOpen(false)} disabled={saving}>
+              <button
+                className="settings-primary-btn"
+                style={{ opacity: 0.85 }}
+                onClick={() => setWebchatOpen(false)}
+                disabled={saving}
+              >
                 Cancelar
               </button>
               <button className="settings-primary-btn" onClick={saveWebchat} disabled={saving}>
