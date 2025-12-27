@@ -1,8 +1,9 @@
 // backend/src/routes/channels/messengerRouter.js
 // ✅ Patch: lookup por colunas (pageId / accessToken) em ChannelConfig
-// - remove dependência de config.path (JSON path)
 // - resolve tenant por pageId (multi-tenant real)
-// - mantém compatibilidade: se accessToken/pageId não estiverem nas colunas, tenta fallback em config.*
+// - fallback compat: tenta config.pageId/accessToken via JSON path (se ainda existir)
+// - handoff real: grava mensagem com handoff:true para promover conversa à Inbox
+// - FIX CRÍTICO: getOrCreateChannelConversation retorna { ok, conversation } (não a conversa direta)
 
 import express from "express";
 import crypto from "crypto";
@@ -79,6 +80,11 @@ function safeCfgJson(cfg) {
   return {};
 }
 
+function safeStr(v, fallback = "") {
+  const s = typeof v === "string" ? v : v == null ? "" : String(v);
+  return s.trim() || fallback;
+}
+
 // ===============================
 // ✅ DB helpers (colunas-first)
 // ===============================
@@ -90,23 +96,21 @@ async function getChannelConfigForPageId(pageId) {
     where: {
       channel: "messenger",
       enabled: true,
-      pageId: String(pageId),
+      pageId: String(pageId)
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: { updatedAt: "desc" }
   });
   if (byColumn) return byColumn;
 
-  // 🔁 Fallback compat: tenta achar no config.pageId (se ainda estiver lá)
-  // (mantém funcionando enquanto você migra valores para as colunas)
+  // 🔁 Fallback compat: tenta achar no config.pageId
   try {
     return await prisma.channelConfig.findFirst({
       where: {
         channel: "messenger",
         enabled: true,
-        // Prisma JSON filter (quando suportado)
-        config: { path: ["pageId"], equals: String(pageId) },
+        config: { path: ["pageId"], equals: String(pageId) }
       },
-      orderBy: { updatedAt: "desc" },
+      orderBy: { updatedAt: "desc" }
     });
   } catch {
     return null;
@@ -116,7 +120,7 @@ async function getChannelConfigForPageId(pageId) {
 async function getLatestEnabledMessengerConfig() {
   return prisma.channelConfig.findFirst({
     where: { channel: "messenger", enabled: true },
-    orderBy: { updatedAt: "desc" },
+    orderBy: { updatedAt: "desc" }
   });
 }
 
@@ -151,7 +155,7 @@ async function getMsConfigForTenant(tenantId, pageIdFromEvent) {
   if (!cfg && tenantId) {
     cfg = await prisma.channelConfig.findFirst({
       where: { tenantId: String(tenantId), channel: "messenger", enabled: true },
-      orderBy: { updatedAt: "desc" },
+      orderBy: { updatedAt: "desc" }
     });
   }
 
@@ -177,13 +181,13 @@ async function sendMessengerText({ accessToken, recipientId, text }) {
   const payload = {
     messaging_type: "RESPONSE",
     recipient: { id: String(recipientId) },
-    message: { text: body },
+    message: { text: body }
   };
 
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(payload)
   });
 
   const json = await resp.json().catch(() => ({}));
@@ -247,28 +251,40 @@ router.post("/", async (req, res) => {
         if (!isMessageEvent(m)) continue;
 
         const senderId = String(m.sender?.id || "").trim(); // PSID
-        const recipientId = String(m.recipient?.id || "").trim(); // pageId
+        const recipientId = String(m.recipient?.id || "").trim(); // pageId (recipient)
         const text = extractTextFromMessage(m);
+        const mid = safeStr(m.message?.mid || "");
 
-        const conv = await getOrCreateChannelConversation({
+        // ✅ cria/acha conversa (PRISMA)
+        const convRes = await getOrCreateChannelConversation({
           source: "messenger",
           channel: "messenger",
           tenantId,
           accountId: recipientId || msCfg.pageId || null,
           peerId: `ms:${senderId}`,
-          meta: { pageId: recipientId || pageId || null },
+          title: "Contato",
+          meta: { pageId: recipientId || pageId || null }
         });
 
+        if (!convRes?.ok || !convRes?.conversation?.id) {
+          logger.warn({ tenantId, pageId }, "❌ Falha ao criar/achar conversa (Messenger)");
+          continue;
+        }
+
+        const conv = convRes.conversation;
+
+        // ✅ persiste inbound (dedupe usa metadata.waMessageId no conversations.js)
         await appendMessage(conv.id, {
           id: `ms_in_${m.timestamp || Date.now()}_${senderId}`,
           from: "client",
           direction: "in",
+          source: "messenger",
           channel: "messenger",
-          type: m.message?.attachments?.length ? "attachment" : "text",
+          type: Array.isArray(m.message?.attachments) && m.message.attachments.length ? "attachment" : "text",
           text: text || "",
-          msMessageId: String(m.message?.mid || ""),
+          waMessageId: mid || null,
           createdAt: nowIso(),
-          raw: m,
+          payload: m
         });
 
         // Se já está em humano/handoff → não responde bot
@@ -281,57 +297,74 @@ router.post("/", async (req, res) => {
         const decision = await decideRoute({
           accountSettings,
           conversation: conv,
-          messageText: text,
+          messageText: text
         });
 
+        // ===============================
+        // ✅ HANDOFF REAL
+        // ===============================
         if (decision?.target && decision.target !== "bot") {
+          // 1) tenta enviar mensagem no Messenger
           try {
             if (msCfg.accessToken) {
               await sendMessengerText({
                 accessToken: msCfg.accessToken,
                 recipientId: senderId,
-                text: HANDOFF_MESSAGE,
+                text: HANDOFF_MESSAGE
               });
             } else {
-              logger.warn({ tenantId, pageId }, "⚠️ Sem accessToken do Messenger — handoff não enviado");
+              logger.warn(
+                { tenantId, pageId, recipientId },
+                "⚠️ Sem accessToken do Messenger — handoff não enviado"
+              );
             }
           } catch (e) {
             logger.error({ err: String(e), tenantId }, "❌ Falha ao enviar handoff (Messenger)");
           }
 
+          // 2) persiste mensagem com handoff:true → promove conversa pra Inbox no conversations.js
           await appendMessage(conv.id, {
             id: `ms_out_handoff_${Date.now()}`,
             from: "bot",
             isBot: true,
             direction: "out",
+            source: "messenger",
             channel: "messenger",
             type: "text",
             text: HANDOFF_MESSAGE,
-            handoff: true,
+            handoff: true, // ✅ isso é o gatilho real
             createdAt: nowIso(),
+            waMessageId: null,
+            payload: { kind: "handoff", pageId: recipientId || pageId || null }
           });
 
           continue;
         }
 
+        // ===============================
+        // ✅ BOT
+        // ===============================
         let botText = "";
         try {
           botText = await callGenAIBot({
             accountSettings,
             conversation: conv,
-            messageText: text,
+            messageText: text
           });
+          botText = safeStr(botText);
+          if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
         } catch (e) {
           logger.error({ err: String(e), tenantId }, "❌ Erro botEngine (Messenger)");
           botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
         }
 
+        // envia bot pro Messenger
         try {
           if (msCfg.accessToken) {
             await sendMessengerText({
               accessToken: msCfg.accessToken,
               recipientId: senderId,
-              text: botText,
+              text: botText
             });
           } else {
             logger.warn({ tenantId, pageId }, "⚠️ Sem accessToken do Messenger — bot não enviado");
@@ -340,15 +373,19 @@ router.post("/", async (req, res) => {
           logger.error({ err: String(e), tenantId }, "❌ Falha ao enviar bot (Messenger)");
         }
 
+        // persiste bot
         await appendMessage(conv.id, {
           id: `ms_out_bot_${Date.now()}`,
           from: "bot",
           isBot: true,
           direction: "out",
+          source: "messenger",
           channel: "messenger",
           type: "text",
           text: botText,
+          waMessageId: null,
           createdAt: nowIso(),
+          payload: { kind: "bot" }
         });
       } catch (e) {
         logger.error({ err: String(e), tenantId, pageId }, "❌ Erro processando evento Messenger");
