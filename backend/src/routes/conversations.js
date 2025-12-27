@@ -83,7 +83,7 @@ function resolveContactName(payload = {}, rawMsg = {}) {
     safeStr(rawMsg?.sender?.name) || // Messenger
     safeStr(rawMsg?.fromName) || // Agent/webchat
     safeStr(rawMsg?.username) || // Instagram
-    safeStr(rawMsg?.from?.name) || // alguns payloads
+    safeStr(rawMsg?.from?.name) ||
     "Contato"
   );
 }
@@ -276,7 +276,6 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   if (!tenantId) return { ok: false, error: "tenantId obrigatório" };
   if (!source || !peerId) return { ok: false, error: "source e peerId obrigatórios" };
 
-  // ✅ PATCH: nome resolvido (vale pros 4 canais)
   const resolvedName = resolveContactName(payload, payload.raw || payload);
 
   const contact = await upsertContact({
@@ -351,7 +350,6 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
       }
     });
   } else {
-    // ✅ PATCH: se a conversa ainda está "Contato", atualiza title
     const meta = getMeta(conv);
     if (safeStr(meta.title) === "Contato" && resolvedName !== "Contato") {
       conv = await prisma.conversation.update({
@@ -359,7 +357,6 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
         data: { metadata: setMeta(conv, { title: resolvedName }) }
       });
 
-      // bônus: mantém contato alinhado
       await prisma.contact.update({
         where: { id: contact.id },
         data: { name: resolvedName }
@@ -479,8 +476,6 @@ async function closeConversationPrisma({ convRow, closedBy, closedReason }) {
 }
 
 export async function appendMessage(dbOrConversationId, conversationIdOrRaw, maybeRaw) {
-  // compat:
-  // appendMessage(db, conversationId, rawMsg) OR appendMessage(conversationId, rawMsg)
   const conversationId =
     typeof dbOrConversationId === "string"
       ? dbOrConversationId
@@ -504,17 +499,33 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
   const type = safeStr(rawMsg?.type || "text").toLowerCase();
   const text = msgTextFromRaw(rawMsg);
 
-  let from = rawMsg?.from || null;
-  let direction = rawMsg?.direction || null;
+  // ======================================================
+  // ✅ FIX PRINCIPAL: inferência de inbound/outbound
+  // - Se webhook não manda from/direction, assume IN/client
+  // - Respeita flags comuns: isFromMe/fromMe
+  // ======================================================
+  let from = safeStr(rawMsg?.from || "");
+  let direction = safeStr(rawMsg?.direction || "");
 
   if (from === "user" || from === "visitor") from = "client";
   if (from === "human" || from === "attendant") from = "agent";
 
+  const fromMe = rawMsg?.isFromMe === true || rawMsg?.fromMe === true || rawMsg?.sentByMe === true;
+
+  // Se não veio direction, tenta inferir
+  if (!direction) {
+    if (from === "client") direction = "in";
+    else if (from === "agent") direction = "out";
+    else if (fromMe) direction = "out";
+    else direction = "in"; // ✅ default seguro para webhook
+  }
+
+  // Se não veio from, deriva do direction
+  if (!from) {
+    from = direction === "in" ? "client" : "agent";
+  }
+
   const isBot = rawMsg?.isBot === true || from === "bot";
-
-  if (!direction) direction = from === "client" ? "in" : "out";
-  if (!from) from = direction === "in" ? "client" : "agent";
-
   if (isBot) {
     from = "bot";
     direction = "out";
@@ -570,7 +581,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   });
 
-  // ✅ PATCH: se ainda está "Contato", tenta enriquecer pelo rawMsg
+  // ✅ se ainda está "Contato", tenta enriquecer pelo rawMsg
   const nameFromMsg = resolveContactName({}, rawMsg);
   const metaBefore = getMeta(convRow);
   if (safeStr(metaBefore.title) === "Contato" && nameFromMsg !== "Contato") {
@@ -579,7 +590,6 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
       data: { metadata: setMeta(convRow, { title: nameFromMsg }) }
     });
 
-    // tenta atualizar contato se existir (sem quebrar se não existir)
     if (convRow.contactId) {
       await prisma.contact
         .update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } })
@@ -587,7 +597,11 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   }
 
+  // counters/estado
   if (from === "bot") await bumpBotAttempts({ convRow });
+
+  // ✅ se entrou mensagem do cliente, isso costuma disparar bot no pipeline externo
+  // aqui a gente só garante que a conversa “tocou” e que “agent_message” promove inbox
   if (from === "agent" || rawMsg?.handoff === true) {
     await promoteToInboxPrisma({ convRow, reason: "agent_message" });
   }
