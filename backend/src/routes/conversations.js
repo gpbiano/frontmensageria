@@ -72,21 +72,21 @@ function requireTenantOr401(req, res) {
 }
 
 // ======================================================
-// 🆕 RESOLUÇÃO DE NOME DO CONTATO
+// RESOLUÇÃO DE NOME (TODOS OS CANAIS)
 // ======================================================
 function resolveContactName(payload = {}, rawMsg = {}) {
   return (
     safeStr(payload.title) ||
-    safeStr(rawMsg?.profile?.name) ||
-    safeStr(rawMsg?.sender?.name) ||
-    safeStr(rawMsg?.fromName) ||
-    safeStr(rawMsg?.username) ||
+    safeStr(rawMsg?.profile?.name) ||   // WhatsApp
+    safeStr(rawMsg?.sender?.name) ||    // Messenger
+    safeStr(rawMsg?.fromName) ||         // Agent
+    safeStr(rawMsg?.username) ||         // Instagram
     "Contato"
   );
 }
 
 // ======================================================
-// NORMALIZA CONVERSA (FRONT)
+// NORMALIZERS
 // ======================================================
 function normalizeConversationRow(convRow) {
   const m = getMeta(convRow);
@@ -107,7 +107,7 @@ function normalizeConversationRow(convRow) {
     m.inboxVisible;
 
   if (typeof inboxVisible !== "boolean") {
-    inboxVisible = currentMode === "human" || handoffActive === true;
+    inboxVisible = currentMode === "human" || handoffActive;
   }
 
   return {
@@ -152,31 +152,38 @@ function normalizeConversationRow(convRow) {
   };
 }
 
+function normalizeMessageRow(convNorm, msgRow) {
+  const m = getMeta(msgRow);
+  return {
+    id: msgRow.id,
+    conversationId: msgRow.conversationId,
+    channel: m.channel || convNorm.channel,
+    source: m.source || convNorm.source,
+    from: m.from || "client",
+    direction: msgRow.direction,
+    type: msgRow.type || "text",
+    text: msgRow.text || "",
+    createdAt: new Date(msgRow.createdAt).toISOString(),
+    isBot: Boolean(m.isBot),
+    tenantId: msgRow.tenantId
+  };
+}
+
 // ======================================================
-// CONTACT + CONVERSATION (ÚNICA FUNÇÃO)
+// CORE — COMPATÍVEL COM 4 CANAIS
 // ======================================================
 async function upsertContact({ tenantId, channel, peerId, title }) {
   return prisma.contact.upsert({
     where: {
-      tenantId_channel_externalId: {
-        tenantId,
-        channel,
-        externalId: peerId
-      }
+      tenantId_channel_externalId: { tenantId, channel, externalId: peerId }
     },
     update: { name: title },
-    create: {
-      tenantId,
-      channel,
-      externalId: peerId,
-      name: title
-    }
+    create: { tenantId, channel, externalId: peerId, name: title }
   });
 }
 
 export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) {
   const payload = maybePayload || dbOrPayload || {};
-
   const tenantId = safeStr(payload.tenantId);
   const source = safeStr(payload.source || payload.channel || "whatsapp").toLowerCase();
   const peerId = safeStr(payload.peerId);
@@ -217,8 +224,33 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   return { ok: true, conversation: normalizeConversationRow(conv) };
 }
 
+export async function appendMessage(conversationId, rawMsg) {
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId }
+  });
+
+  if (!conv || conv.status === "closed") {
+    return { ok: false };
+  }
+
+  const msgRow = await prisma.message.create({
+    data: {
+      id: newId("msg"),
+      tenantId: conv.tenantId,
+      conversationId,
+      direction: rawMsg.direction || "in",
+      type: rawMsg.type || "text",
+      text: msgTextFromRaw(rawMsg),
+      metadata: rawMsg,
+      createdAt: new Date(rawMsg.createdAt || nowIso())
+    }
+  });
+
+  return { ok: true, msg: normalizeMessageRow(normalizeConversationRow(conv), msgRow) };
+}
+
 // ======================================================
-// ROTAS
+// ROTAS DO PAINEL
 // ======================================================
 router.get("/", async (req, res) => {
   const tenantId = requireTenantOr401(req, res);
