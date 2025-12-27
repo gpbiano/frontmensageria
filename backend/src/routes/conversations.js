@@ -44,8 +44,6 @@ function setMeta(obj, patch) {
 }
 
 function hasCol(obj, key) {
-  // Prisma retorna sempre as props selecionadas.
-  // Aqui checamos se o campo existe no row (migração aplicada) e não é undefined.
   return obj && Object.prototype.hasOwnProperty.call(obj, key);
 }
 
@@ -58,10 +56,26 @@ function msgTextFromRaw(raw) {
   return "";
 }
 
+function getConvPrefixBySource(source) {
+  const s = safeStr(source || "").toLowerCase();
+  if (s === "whatsapp") return "wa";
+  if (s === "webchat") return "wc";
+  if (s === "instagram") return "ig";
+  if (s === "messenger") return "ms";
+  return "conv";
+}
+
+function requireTenantOr401(req, res) {
+  const tenantId = pickTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "tenantId não resolvido" });
+    return null;
+  }
+  return tenantId;
+}
+
 // ======================================================
 // NORMALIZA PARA O SHAPE LEGADO DO FRONT
-// (mantém compatibilidade com ChatPanel / Inbox)
-// Agora lê de colunas (se existirem) e cai pra metadata (fallback)
 // ======================================================
 function normalizeConversationRow(convRow) {
   if (!convRow) return null;
@@ -76,12 +90,11 @@ function normalizeConversationRow(convRow) {
   const createdAt = convRow.createdAt ? new Date(convRow.createdAt).toISOString() : nowIso();
   const updatedAt = convRow.updatedAt ? new Date(convRow.updatedAt).toISOString() : createdAt;
 
-  // ✅ colunas novas (fallback para metadata)
   const currentMode = safeStr(
     (hasCol(convRow, "currentMode") ? convRow.currentMode : undefined) ?? m.currentMode ?? "bot"
   ).toLowerCase();
 
-  const hadHuman = Boolean(m.hadHuman); // ainda fica no metadata por compat
+  const hadHuman = Boolean(m.hadHuman);
   const botAttempts = Number(m.botAttempts || 0);
 
   const handoffActive = Boolean(
@@ -101,8 +114,6 @@ function normalizeConversationRow(convRow) {
     ? new Date(convRow.lastMessageAt).toISOString()
     : m.lastMessageAt || null;
 
-  // inboxVisible/inboxStatus/queuedAt:
-  // ✅ prioriza colunas, fallback metadata, fallback regra legado
   let inboxVisible =
     (hasCol(convRow, "inboxVisible") ? convRow.inboxVisible : undefined) ?? m.inboxVisible;
 
@@ -117,19 +128,33 @@ function normalizeConversationRow(convRow) {
 
   const queuedAtCol = hasCol(convRow, "queuedAt") ? convRow.queuedAt : undefined;
   const queuedAt = inboxVisible
-    ? (queuedAtCol ? new Date(queuedAtCol).toISOString() : (m.queuedAt || handoffSince || updatedAt))
+    ? (queuedAtCol
+        ? new Date(queuedAtCol).toISOString()
+        : (m.queuedAt || handoffSince || updatedAt))
     : null;
 
-  // assignment (colunas novas; fallback metadata)
   const assignedGroupId = safeStr(
-    (hasCol(convRow, "assignedGroupId") ? convRow.assignedGroupId : undefined) ?? m.assignedGroupId ?? m.groupId ?? ""
+    (hasCol(convRow, "assignedGroupId") ? convRow.assignedGroupId : undefined) ??
+      m.assignedGroupId ??
+      m.groupId ??
+      ""
   );
   const assignedUserId = safeStr(
-    (hasCol(convRow, "assignedUserId") ? convRow.assignedUserId : undefined) ?? m.assignedUserId ?? m.assignedAgentId ?? ""
+    (hasCol(convRow, "assignedUserId") ? convRow.assignedUserId : undefined) ??
+      m.assignedUserId ??
+      m.assignedAgentId ??
+      ""
   );
 
+  // closed fields (colunas novas podem existir ou ficar em metadata)
+  const closedAt =
+    (hasCol(convRow, "closedAt") ? convRow.closedAt : undefined) ?? m.closedAt ?? null;
+  const closedBy =
+    (hasCol(convRow, "closedBy") ? convRow.closedBy : undefined) ?? m.closedBy ?? null;
+  const closedReason =
+    (hasCol(convRow, "closedReason") ? convRow.closedReason : undefined) ?? m.closedReason ?? null;
+
   return {
-    // legado
     id: String(convRow.id),
     source,
     channel,
@@ -142,7 +167,9 @@ function normalizeConversationRow(convRow) {
     botAttempts,
 
     handoffActive,
-    handoffSince: handoffSince ? (handoffSince instanceof Date ? handoffSince.toISOString() : handoffSince) : null,
+    handoffSince: handoffSince
+      ? (handoffSince instanceof Date ? handoffSince.toISOString() : handoffSince)
+      : null,
     handoffReason: m.handoffReason || null,
 
     tenantId: convRow.tenantId,
@@ -156,9 +183,12 @@ function normalizeConversationRow(convRow) {
     inboxStatus,
     queuedAt,
 
-    // extras úteis (não quebra front se ignorar)
     assignedGroupId: assignedGroupId || null,
-    assignedUserId: assignedUserId || null
+    assignedUserId: assignedUserId || null,
+
+    closedAt: closedAt ? (closedAt instanceof Date ? closedAt.toISOString() : closedAt) : null,
+    closedBy: closedBy || null,
+    closedReason: closedReason || null
   };
 }
 
@@ -189,10 +219,9 @@ function normalizeMessageRow(convNorm, msgRow) {
 
 // ======================================================
 // CORE (PRISMA-FIRST)
-// Mantém assinatura antiga para não quebrar imports existentes:
+// Mantém assinatura antiga (compat imports):
 // getOrCreateChannelConversation(db, payload) e appendMessage(db, conversationId, rawMsg)
 // ======================================================
-
 async function upsertContact({ tenantId, channel, peerId, title, phone, waId, visitorId }) {
   const externalId = safeStr(peerId);
 
@@ -264,7 +293,7 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   let conv = existing;
 
   if (!conv) {
-    const convId = newId(source === "whatsapp" ? "wa" : "wc");
+    const convId = newId(getConvPrefixBySource(source));
 
     const baseMeta = {
       source,
@@ -285,10 +314,13 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
 
       inboxVisible: false,
       inboxStatus: "bot_only",
-      queuedAt: null
+      queuedAt: null,
+
+      closedAt: null,
+      closedBy: null,
+      closedReason: null
     };
 
-    // ✅ se schema novo existir, já preenche colunas também
     conv = await prisma.conversation.create({
       data: {
         id: convId,
@@ -299,8 +331,6 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
         lastMessageAt: null,
 
         // colunas novas (se existirem no schema aplicado)
-        // Prisma vai aceitar porque o schema atual do runtime já inclui ou não inclui esses campos.
-        // Se ainda não migrou, remova esse bloco ou aplique a migration antes.
         inboxVisible: false,
         inboxStatus: "bot_only",
         queuedAt: null,
@@ -309,6 +339,11 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
         handoffSince: null,
         assignedGroupId: null,
         assignedUserId: null,
+
+        // fechamento (se existirem no schema)
+        closedAt: null,
+        closedBy: null,
+        closedReason: null,
 
         metadata: baseMeta
       }
@@ -339,7 +374,6 @@ async function promoteToInboxPrisma({ convRow, reason = "handoff" }) {
     metadata: setMeta(convRow, patch)
   };
 
-  // ✅ atualiza colunas se existirem
   if (hasCol(convRow, "currentMode")) data.currentMode = "human";
   if (hasCol(convRow, "handoffActive")) data.handoffActive = true;
   if (hasCol(convRow, "handoffSince")) data.handoffSince = new Date(patch.handoffSince);
@@ -394,6 +428,64 @@ async function bumpBotAttempts({ convRow }) {
   return nextBotAttempts;
 }
 
+async function addSystemMessage({ convRow, text, code = "system" }) {
+  const createdAtIso = nowIso();
+
+  const msgRow = await prisma.message.create({
+    data: {
+      id: newId("msg"),
+      tenantId: convRow.tenantId,
+      conversationId: convRow.id,
+      direction: "out",
+      type: "system",
+      text: safeStr(text),
+      status: "sent",
+      metadata: {
+        from: "system",
+        isBot: false,
+        code,
+        source: getMeta(convRow).source || convRow.channel,
+        channel: convRow.channel,
+        tenantId: convRow.tenantId
+      },
+      createdAt: new Date(createdAtIso)
+    }
+  });
+
+  await touchConversationPrisma({ convRow, msgText: text });
+  return msgRow;
+}
+
+async function closeConversationPrisma({ convRow, closedBy, closedReason }) {
+  const atIso = nowIso();
+
+  const patch = {
+    closedAt: atIso,
+    closedBy: closedBy || null,
+    closedReason: closedReason || "manual_by_agent",
+    status: "closed"
+  };
+
+  const data = {
+    status: "closed",
+    metadata: setMeta(convRow, patch)
+  };
+
+  if (hasCol(convRow, "closedAt")) data.closedAt = new Date(atIso);
+  if (hasCol(convRow, "closedBy")) data.closedBy = patch.closedBy;
+  if (hasCol(convRow, "closedReason")) data.closedReason = patch.closedReason;
+
+  // pode esconder da inbox se seu front for "apenas open" (mantém coerência)
+  if (hasCol(convRow, "handoffActive")) data.handoffActive = false;
+  if (hasCol(convRow, "inboxStatus")) data.inboxStatus = "closed";
+  if (hasCol(convRow, "inboxVisible")) data.inboxVisible = false;
+
+  return prisma.conversation.update({
+    where: { id: convRow.id },
+    data
+  });
+}
+
 export async function appendMessage(dbOrConversationId, conversationIdOrRaw, maybeRaw) {
   // compat:
   // appendMessage(db, conversationId, rawMsg)  OR  appendMessage(conversationId, rawMsg)
@@ -402,12 +494,10 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
       ? dbOrConversationId
       : String(conversationIdOrRaw || "");
 
-  const rawMsg =
-    typeof dbOrConversationId === "string" ? conversationIdOrRaw : maybeRaw;
+  const rawMsg = typeof dbOrConversationId === "string" ? conversationIdOrRaw : maybeRaw;
 
   if (!conversationId) return { ok: false, error: "conversationId obrigatório" };
 
-  // ✅ garante tenant guard quando rawMsg traz tenantId
   const rawTenantId = rawMsg?.tenantId ? safeStr(rawMsg.tenantId) : "";
 
   const convRow = rawTenantId
@@ -415,6 +505,10 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     : await prisma.conversation.findUnique({ where: { id: conversationId } });
 
   if (!convRow) return { ok: false, error: "Conversa não encontrada" };
+
+  if (convRow.status === "closed") {
+    return { ok: false, error: "Conversa encerrada" };
+  }
 
   const convNorm = normalizeConversationRow(convRow);
 
@@ -458,7 +552,6 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   }
 
-  // cria message no Prisma
   const createdAtIso = rawMsg?.createdAt || rawMsg?.timestamp || nowIso();
 
   const msgRow = await prisma.message.create({
@@ -513,8 +606,8 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 // GET /conversations?inbox=all
 router.get("/", async (req, res) => {
   try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenantId não resolvido" });
+    const tenantId = requireTenantOr401(req, res);
+    if (!tenantId) return;
 
     const rows = await prisma.conversation.findMany({
       where: { tenantId },
@@ -542,8 +635,8 @@ router.get("/", async (req, res) => {
 // GET /conversations/:id/messages
 router.get("/:id/messages", async (req, res) => {
   try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenantId não resolvido" });
+    const tenantId = requireTenantOr401(req, res);
+    if (!tenantId) return;
 
     const convRow = await prisma.conversation.findFirst({
       where: { id: req.params.id, tenantId }
@@ -567,10 +660,9 @@ router.get("/:id/messages", async (req, res) => {
 // POST /conversations/:id/messages  (mensagem do agente)
 router.post("/:id/messages", async (req, res) => {
   try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ error: "tenantId não resolvido" });
+    const tenantId = requireTenantOr401(req, res);
+    if (!tenantId) return;
 
-    // valida conversa pertence ao tenant
     const convRow = await prisma.conversation.findFirst({
       where: { id: req.params.id, tenantId }
     });
@@ -590,6 +682,52 @@ router.post("/:id/messages", async (req, res) => {
     res.status(201).json(r.msg);
   } catch (e) {
     res.status(500).json({ error: "Falha ao enviar mensagem", detail: String(e?.message || e) });
+  }
+});
+
+// PATCH /conversations/:id/status  (encerrar conversa)
+// Body esperado: { status: "closed", reason?: "manual_by_agent" }
+router.patch("/:id/status", async (req, res) => {
+  try {
+    const tenantId = requireTenantOr401(req, res);
+    if (!tenantId) return;
+
+    const desired = safeStr(req.body?.status || "").toLowerCase();
+    if (desired !== "closed") {
+      return res.status(400).json({ error: "Status inválido. Use { status: \"closed\" }" });
+    }
+
+    const convRow = await prisma.conversation.findFirst({
+      where: { id: req.params.id, tenantId }
+    });
+
+    if (!convRow) return res.status(404).json({ error: "Conversa não encontrada" });
+    if (convRow.status === "closed") {
+      const norm = normalizeConversationRow(convRow);
+      return res.json({ ok: true, conversation: norm, alreadyClosed: true });
+    }
+
+    const userId = safeStr(req.user?.id || req.user?.userId || "", "agent");
+    const reason = safeStr(req.body?.reason || "manual_by_agent");
+
+    // 1) adiciona mensagem system (fica no histórico do chat)
+    await addSystemMessage({
+      convRow,
+      text: "Atendimento encerrado.",
+      code: "conversation_closed"
+    });
+
+    // 2) fecha conversa
+    const updated = await closeConversationPrisma({
+      convRow,
+      closedBy: userId,
+      closedReason: reason
+    });
+
+    const norm = normalizeConversationRow(updated);
+    return res.json({ ok: true, conversation: norm });
+  } catch (e) {
+    res.status(500).json({ error: "Falha ao encerrar conversa", detail: String(e?.message || e) });
   }
 });
 

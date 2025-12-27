@@ -80,10 +80,7 @@ try {
   );
 
   logger.info(
-    {
-      prismaReady,
-      tenantBaseDomain: process.env.TENANT_BASE_DOMAIN
-    },
+    { prismaReady, tenantBaseDomain: process.env.TENANT_BASE_DOMAIN },
     "🧠 Prisma status"
   );
 } catch (err) {
@@ -142,6 +139,9 @@ const PORT = Number(process.env.PORT || 3010);
 const app = express();
 app.set("etag", false);
 app.disable("x-powered-by");
+
+// ✅ Importante em produção atrás de Cloudflare / proxy reverso
+app.set("trust proxy", 1);
 
 // ===============================
 // LOGGER HTTP
@@ -258,19 +258,19 @@ app.get("/health", async (_req, res) => {
 });
 
 // Auth público
-app.use("/", authRouter);
-app.use("/auth", passwordRouter);
+app.use("/", authRouter);          // /login, /auth/login, /auth/select-tenant...
+app.use("/auth", passwordRouter);  // /auth/password/*
 
-// 🌐 Webchat público
+// 🌐 Webchat público (depende de DB)
 app.use("/webchat", requirePrisma, webchatRouter);
 
-// 📡 Webhooks públicos
+// 📡 Webhooks públicos (NÃO passam por auth/tenant guard)
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 app.use("/webhook/instagram", instagramWebhookRouter);
 
 // ===============================
-// 🔒 MIDDLEWARE GLOBAL
+// 🔒 MIDDLEWARE GLOBAL (a partir daqui tudo é protegido)
 // ===============================
 app.use(requireAuth);
 app.use(enforceTokenTenant);
@@ -295,7 +295,7 @@ app.use("/settings", usersRouter);
 app.use("/settings/groups", groupsRouter);
 app.use("/settings/channels", channelsRouter);
 
-// Conversas
+// Conversas (inclui PATCH /conversations/:id/status)
 app.use("/conversations", conversationsRouter);
 
 // Outbound
