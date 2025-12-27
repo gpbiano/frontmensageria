@@ -798,12 +798,30 @@ router.post(
   enforceTokenTenant,
   requireRole("admin", "manager"),
   async (req, res) => {
+    const reqId = req.id || req.headers["x-request-id"] || null;
+
     try {
       const code = String(req.body?.code || "").trim();
       const state = String(req.body?.state || "").trim();
       if (!code || !state) return res.status(400).json({ error: "missing_code_or_state" });
 
-      const parsed = verifyState(state);
+      // ✅ state parse/verify com erro tratado (não vira 500)
+      let parsed;
+      try {
+        parsed = verifyState(state);
+      } catch (e) {
+        logger.warn(
+          {
+            reqId,
+            err: e?.message || String(e),
+            stateLen: state.length,
+            tenantReq: getTenantId(req) || null
+          },
+          "❌ Instagram callback invalid_state"
+        );
+        return res.status(400).json({ error: "invalid_state" });
+      }
+
       const tenantIdFromState = String(parsed?.tenantId || "").trim();
       const channel = String(parsed?.channel || "").trim();
 
@@ -817,11 +835,18 @@ router.post(
 
       const redirectUri = getInstagramOAuthRedirectUri();
 
-      // 1) code -> user short token
+      // 1) code -> short user token
       const tokenRes = await exchangeCodeForUserToken({ code, redirectUri });
+
       if (!tokenRes.ok || !tokenRes?.json?.access_token) {
         logger.warn(
-          { status: tokenRes.status, meta: tokenRes.json?.error || tokenRes.json },
+          {
+            reqId,
+            status: tokenRes.status,
+            meta: tokenRes.json?.error || tokenRes.json,
+            redirectUriUsed: redirectUri,
+            tenantId: tenantIdFromState
+          },
           "❌ Instagram code->token failed"
         );
         return res.status(400).json({
@@ -834,55 +859,31 @@ router.post(
 
       // 2) short -> long-lived
       const exchanged = await exchangeForLongLivedUserToken(shortUserToken);
-      if (!exchanged.ok || !exchanged.accessToken) {
+      if (!exchanged.ok) {
+        logger.warn(
+          { reqId, meta: exchanged.meta || null, tenantId: tenantIdFromState },
+          "❌ Instagram long-lived exchange failed"
+        );
         return res.status(400).json({
           error: "long_lived_exchange_failed",
           meta: exchanged.meta || null
         });
       }
 
-      const longUserToken = String(exchanged.accessToken);
-
-      // 3) lista páginas do usuário (Facebook Pages)
-      const url =
-        `https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts` +
-        `?fields=id,name` +
-        `&access_token=${encodeURIComponent(longUserToken)}`;
-
-      const r = await fetch(url, { method: "GET" });
-      const j = await r.json().catch(() => ({}));
-
-      if (!r.ok) {
-        logger.warn({ status: r.status, meta: j?.error || j }, "❌ Instagram pages list failed (callback)");
-        return res.status(400).json({ error: "meta_list_pages_failed", meta: j?.error || j });
-      }
-
-      const data = Array.isArray(j?.data) ? j.data : [];
-      const pages = data
-        .map((p) => ({ id: String(p?.id || ""), name: String(p?.name || "") }))
-        .filter((p) => p.id && p.name);
-
-      // 4) devolve connectState assinado (com token embutido) + pages
-      const connectState = signState({
-        tenantId: tenantIdFromState,
-        ts: Date.now(),
-        channel: "instagram_connect",
-        userAccessToken: longUserToken
-      });
-
+      // ✅ retorno “simples”: front usa esse token pra listar páginas e conectar
       return res.json({
         ok: true,
-        connectState,
-        pages,
-        graphVersion: META_GRAPH_VERSION
+        userAccessToken: exchanged.accessToken,
+        tokenKind: "long_lived",
+        expiresIn: exchanged.expiresIn ?? null,
+        exchangeMeta: null
       });
     } catch (e) {
-      logger.error({ err: e }, "❌ POST /settings/channels/instagram/callback");
+      logger.error({ reqId, err: e }, "❌ POST /settings/channels/instagram/callback");
       return res.status(500).json({ error: "internal_error" });
     }
   }
 );
-
 
 // POST /settings/channels/instagram/pages
 router.post(

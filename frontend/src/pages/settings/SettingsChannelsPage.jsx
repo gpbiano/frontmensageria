@@ -17,10 +17,9 @@ import {
   connectMessengerChannel,
   disconnectMessengerChannel,
 
-  // ✅ Instagram (Zenvia-like) — backend retorna authUrl pronta
+  // ✅ Instagram (start retorna authUrl pronta; finish retorna userAccessToken)
   startInstagramBusinessLogin,
   finishInstagramBusinessLogin,
-  connectInstagramChannel,
   disconnectInstagramChannel
 } from "../../api"; // pages/settings -> ../../api
 
@@ -196,13 +195,13 @@ export default function SettingsChannelsPage() {
   const [msSubFields, setMsSubFields] = useState("messages,messaging_postbacks");
   const [msUserToken, setMsUserToken] = useState("");
 
-  // ✅ Instagram state
+  // ✅ Instagram state (fluxo novo: token long-lived + pages + connect)
   const [igModalOpen, setIgModalOpen] = useState(false);
   const [igConnecting, setIgConnecting] = useState(false);
   const [igErr, setIgErr] = useState("");
   const [igPages, setIgPages] = useState([]);
   const [igSelectedPageId, setIgSelectedPageId] = useState("");
-  const [igConnectState, setIgConnectState] = useState(""); // ✅ state assinado do backend p/ conectar
+  const [igUserToken, setIgUserToken] = useState(""); // ✅ userAccessToken retornado no callback
 
   useEffect(() => {
     mountedRef.current = true;
@@ -218,6 +217,52 @@ export default function SettingsChannelsPage() {
       return false;
     }
   }, []);
+
+  const API_BASE = useMemo(() => {
+    const base =
+      import.meta.env.VITE_API_BASE ||
+      import.meta.env.VITE_API_BASE_URL ||
+      "http://localhost:3010";
+    return String(base || "").replace(/\/+$/, "");
+  }, []);
+
+  function getAuthToken() {
+    try {
+      return localStorage.getItem("gpLabsAuthToken") || sessionStorage.getItem("gpLabsAuthToken") || "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function postJson(path, bodyObj) {
+    const token = getAuthToken();
+    const url = `${API_BASE}${String(path || "").startsWith("/") ? "" : "/"}${String(path || "")}`;
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(bodyObj || {})
+    });
+
+    const raw = await resp.text().catch(() => "");
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { raw };
+    }
+
+    if (!resp.ok) {
+      const msg = data?.error || data?.message || `HTTP ${resp.status}`;
+      const err = new Error(String(msg));
+      err.response = { data };
+      throw err;
+    }
+    return data;
+  }
 
   const webchat = channelsState?.webchat || null;
   const whatsapp = channelsState?.whatsapp || null;
@@ -427,7 +472,6 @@ export default function SettingsChannelsPage() {
 
   const embedSnippet = snippet || embedFallbackFromDraft();
 
-  // ✅ Normaliza resposta do backend (aceita appId/app_id etc)
   function normalizeMetaStart(start) {
     const appId = start?.appId || start?.app_id || start?.clientId || start?.client_id;
     const state = start?.state;
@@ -471,9 +515,7 @@ export default function SettingsChannelsPage() {
       const redirectUri = start.redirectUri || buildFrontendCallbackUrl("whatsapp");
 
       if (!start.appId || !start.state) {
-        throw new Error(
-          `Resposta inválida do backend (appId/state). Recebido: ${JSON.stringify(startRaw)}`
-        );
+        throw new Error(`Resposta inválida do backend (appId/state). Recebido: ${JSON.stringify(startRaw)}`);
       }
 
       const params = new URLSearchParams({
@@ -637,65 +679,103 @@ export default function SettingsChannelsPage() {
   }
 
   function openInstagramModal() {
-    // ✅ evita mostrar erro/estado velho
     setIgErr("");
     setIgPages([]);
     setIgSelectedPageId("");
-    setIgConnectState("");
+    setIgUserToken("");
     setIgModalOpen(true);
   }
 
-  // ✅ AQUI está o fix definitivo:
-  // Backend retorna authUrl pronta (com client_id, redirect_uri, state, scope, version).
-async function startInstagramConnect() {
-  setIgErr("");
-  setIgConnecting(true);
+  // ✅ FIX: backend retorna authUrl pronta
+  async function startInstagramConnect() {
+    setIgErr("");
+    setIgConnecting(true);
 
-  try {
-    const start = await startInstagramBusinessLogin();
+    try {
+      const start = await startInstagramBusinessLogin();
 
-    const authUrl = String(start?.authUrl || start?.authURL || "").trim();
-    if (authUrl) {
-      window.location.href = authUrl;
-      return;
+      const authUrl = String(start?.authUrl || start?.authURL || "").trim();
+      if (authUrl) {
+        window.location.href = authUrl;
+        return;
+      }
+
+      // fallback antigo (se backend devolver appId/state algum dia)
+      const appId = start?.appId;
+      const state = start?.state;
+      const redirectUri = String(start?.redirectUri || "").trim() || buildFrontendCallbackUrl("instagram");
+      const scopes = Array.isArray(start?.scopes) ? start.scopes : [];
+      const authBaseUrl = String(start?.authBaseUrl || "https://www.facebook.com").trim();
+      const graphVersion = String(start?.graphVersion || "v21.0").trim();
+
+      if (!appId || !state) {
+        throw new Error(`Instagram start inválido (authUrl/appId/state). Recebido: ${JSON.stringify(start)}`);
+      }
+
+      const params = new URLSearchParams({
+        client_id: String(appId),
+        redirect_uri: redirectUri,
+        state: String(state),
+        response_type: "code",
+        scope: (scopes.length
+          ? scopes
+          : [
+              "pages_show_list",
+              "pages_read_engagement",
+              "pages_manage_metadata",
+              "pages_messaging",
+              "instagram_basic",
+              "instagram_manage_messages"
+            ]
+        ).join(",")
+      });
+
+      window.location.href = `${authBaseUrl}/${encodeURIComponent(graphVersion)}/dialog/oauth?${params.toString()}`;
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setIgErr(extractErr(e).msg || String(e));
+    } finally {
+      if (!mountedRef.current) return;
+      setIgConnecting(false);
     }
-
-    // fallback antigo (se algum dia o backend devolver appId/state)
-    const appId = start?.appId;
-    const state = start?.state;
-    const redirectUri = String(start?.redirectUri || "").trim() || buildFrontendCallbackUrl("instagram");
-    const scopes = Array.isArray(start?.scopes) ? start.scopes : [];
-    const authBaseUrl = String(start?.authBaseUrl || "https://www.facebook.com").trim();
-    const graphVersion = String(start?.graphVersion || "v21.0").trim();
-
-    if (!appId || !state) {
-      throw new Error(`Instagram start inválido (authUrl/appId/state). Recebido: ${JSON.stringify(start)}`);
-    }
-
-    const params = new URLSearchParams({
-      client_id: String(appId),
-      redirect_uri: redirectUri,
-      state: String(state),
-      response_type: "code",
-      scope: (scopes.length ? scopes : [
-        "pages_show_list",
-        "pages_read_engagement",
-        "pages_manage_metadata",
-        "pages_messaging",
-        "instagram_basic",
-        "instagram_manage_messages"
-      ]).join(",")
-    });
-
-    window.location.href = `${authBaseUrl}/${encodeURIComponent(graphVersion)}/dialog/oauth?${params.toString()}`;
-  } catch (e) {
-    if (!mountedRef.current) return;
-    setIgErr(extractErr(e).msg || String(e));
-  } finally {
-    if (!mountedRef.current) return;
-    setIgConnecting(false);
   }
-}
+
+  async function finalizeInstagramWithPage() {
+    setIgErr("");
+    setIgConnecting(true);
+
+    try {
+      const pageId = String(igSelectedPageId || "").trim();
+      if (!pageId) throw new Error("Selecione uma página.");
+
+      const userAccessToken = String(igUserToken || "").trim();
+      if (!userAccessToken) throw new Error("Token do Instagram ausente. Conecte novamente.");
+
+      // ✅ conecta de forma determinística direto no backend
+      await postJson("/settings/channels/instagram/connect", {
+        pageId,
+        userAccessToken,
+        subscribedFields: ["messages"]
+      });
+
+      await loadChannels();
+
+      if (!mountedRef.current) return;
+      setToast("Instagram conectado com sucesso.");
+      setTimeout(() => mountedRef.current && setToast(""), 2000);
+
+      setIgModalOpen(false);
+      setIgPages([]);
+      setIgSelectedPageId("");
+      setIgUserToken("");
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setIgErr(extractErr(e).msg || String(e));
+    } finally {
+      if (!mountedRef.current) return;
+      setIgConnecting(false);
+    }
+  }
 
   async function disconnectInstagram() {
     const ok = confirm("Deseja desconectar o Instagram deste tenant?");
@@ -728,14 +808,13 @@ async function startInstagramConnect() {
       const url = new URL(window.location.href);
 
       const channel = detectChannelByPath(url.pathname);
-      if (!channel) return; // ✅ não é callback
+      if (!channel) return;
 
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
 
       const err = url.searchParams.get("error");
-      const errDesc =
-        url.searchParams.get("error_description") || url.searchParams.get("error_message");
+      const errDesc = url.searchParams.get("error_description") || url.searchParams.get("error_message");
 
       if (err) {
         const msg = String(errDesc || err);
@@ -751,18 +830,25 @@ async function startInstagramConnect() {
           if (channel === "instagram") {
             setIgConnecting(true);
 
-            // ✅ backend valida state e devolve connectState + pages
+            // ✅ backend valida state e devolve userAccessToken long-lived
             const fin = await finishInstagramBusinessLogin({ code, state });
+            const userAccessToken = String(fin?.userAccessToken || "").trim();
 
-            const pages = safeArr(fin?.pages).filter((p) => p?.id && p?.name);
-            const cs = String(fin?.connectState || "").trim();
+            if (!userAccessToken) {
+              throw new Error("Instagram: userAccessToken não retornado no callback.");
+            }
 
-            if (!cs) throw new Error("Instagram: connectState não retornado no callback.");
+            // ✅ lista páginas via backend
+            const pagesRes = await postJson("/settings/channels/instagram/pages", {
+              userAccessToken
+            });
+
+            const pages = safeArr(pagesRes?.pages).filter((p) => p?.id && p?.name);
             if (!pages.length) throw new Error("Instagram: nenhuma página retornada (verifique permissões).");
 
             if (!mountedRef.current) return;
 
-            setIgConnectState(cs);
+            setIgUserToken(userAccessToken);
             setIgPages(pages);
             if (pages.length === 1) setIgSelectedPageId(String(pages[0].id));
             setIgModalOpen(true);
@@ -876,7 +962,7 @@ async function startInstagramConnect() {
           <div className="settings-channel-card">
             <div className="settings-channel-header">
               <span className="settings-channel-title">WhatsApp</span>
-              <Pill variant={whatsappVariant}>{whatsappLabel()}</Pill>
+              <Pill variant={waIsConnected ? "on" : "off"}>{whatsappLabel()}</Pill>
             </div>
 
             <p className="settings-channel-description">Conecte seu WhatsApp Business via Cadastro Incorporado (Meta).</p>
@@ -924,7 +1010,7 @@ async function startInstagramConnect() {
           <div className="settings-channel-card">
             <div className="settings-channel-header">
               <span className="settings-channel-title">Messenger</span>
-              <Pill variant={messengerVariant}>{messengerLabel()}</Pill>
+              <Pill variant={msIsConnected ? "on" : "off"}>{messengerLabel()}</Pill>
             </div>
 
             <p className="settings-channel-description">Integração com a caixa de mensagens da sua página do Facebook.</p>
@@ -983,12 +1069,10 @@ async function startInstagramConnect() {
           <div className="settings-channel-card">
             <div className="settings-channel-header">
               <span className="settings-channel-title">Instagram</span>
-              <Pill variant={instagramVariant}>{instagramLabel()}</Pill>
+              <Pill variant={igIsConnected ? "on" : "off"}>{instagramLabel()}</Pill>
             </div>
 
-            <p className="settings-channel-description">
-              Mensagens diretas (DM) do Instagram integradas no painel de atendimento.
-            </p>
+            <p className="settings-channel-description">Mensagens diretas (DM) do Instagram integradas no painel de atendimento.</p>
 
             {!!igErr && (
               <div
@@ -1058,7 +1142,7 @@ async function startInstagramConnect() {
         </div>
       </section>
 
-      {/* ✅ Modal WhatsApp (simples) */}
+      {/* ✅ Modal WhatsApp */}
       <Modal open={waModalOpen} title="WhatsApp — Detalhes da conexão" onClose={() => setWaModalOpen(false)}>
         <div style={{ display: "grid", gap: 10, fontSize: 13, opacity: 0.95 }}>
           <div>
@@ -1162,11 +1246,7 @@ async function startInstagramConnect() {
                 >
                   Cancelar
                 </button>
-                <button
-                  className="settings-primary-btn"
-                  onClick={connectMessenger}
-                  disabled={msConnecting || !msSelectedPageId}
-                >
+                <button className="settings-primary-btn" onClick={connectMessenger} disabled={msConnecting || !msSelectedPageId}>
                   {msConnecting ? "Conectando..." : "Conectar"}
                 </button>
               </div>
@@ -1175,12 +1255,7 @@ async function startInstagramConnect() {
 
           {msIsConnected && (
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <button
-                className="settings-primary-btn"
-                style={{ opacity: 0.9 }}
-                onClick={disconnectMessenger}
-                disabled={msConnecting}
-              >
+              <button className="settings-primary-btn" style={{ opacity: 0.9 }} onClick={disconnectMessenger} disabled={msConnecting}>
                 {msConnecting ? "..." : "Desconectar"}
               </button>
             </div>
@@ -1262,12 +1337,7 @@ async function startInstagramConnect() {
             </>
           ) : (
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <button
-                className="settings-primary-btn"
-                style={{ opacity: 0.9 }}
-                onClick={disconnectInstagram}
-                disabled={igConnecting}
-              >
+              <button className="settings-primary-btn" style={{ opacity: 0.9 }} onClick={disconnectInstagram} disabled={igConnecting}>
                 {igConnecting ? "..." : "Desconectar"}
               </button>
             </div>
@@ -1298,11 +1368,7 @@ async function startInstagramConnect() {
                 <div style={labelStyle()}>Chave do widget (widgetKey)</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <input style={fieldStyle()} value={webchatDraft.widgetKey || ""} readOnly />
-                  <button
-                    className="settings-primary-btn"
-                    onClick={() => copy(webchatDraft.widgetKey || "")}
-                    disabled={!webchatDraft.widgetKey}
-                  >
+                  <button className="settings-primary-btn" onClick={() => copy(webchatDraft.widgetKey || "")} disabled={!webchatDraft.widgetKey}>
                     Copiar
                   </button>
                 </div>
