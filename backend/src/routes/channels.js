@@ -15,6 +15,35 @@ const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION || "v21.0").tri
 // ======================================================
 // Helpers
 // ======================================================
+// ======================================================
+// Instagram OAuth helpers
+// ======================================================
+function getInstagramOAuthRedirectUri(req) {
+  // prioridade:
+  // 1) ENV explícita
+  // 2) domínio do tenant
+  // 3) fallback seguro
+
+  const envUri = String(process.env.INSTAGRAM_REDIRECT_URI || "").trim();
+  if (envUri) return envUri;
+
+  const origin =
+    req.headers.origin ||
+    req.headers.referer ||
+    process.env.APP_BASE_URL ||
+    "";
+
+  const cleanOrigin = String(origin)
+    .replace(/\/+$/, "")
+    .replace(/\/settings\/channels.*$/, "");
+
+  if (!cleanOrigin) {
+    throw new Error("Não foi possível determinar origin para redirect_uri do Instagram");
+  }
+
+  return `${cleanOrigin}/settings/channels/instagram/callback`;
+}
+
 function requireEnv(name) {
   const v = String(process.env[name] || "").trim();
   if (!v) throw new Error(`${name} não configurado`);
