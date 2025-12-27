@@ -19,7 +19,7 @@ import { requireTenant } from "./middleware/requireTenant.js";
 import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
 
 // ===============================
-// PATHS + ENV LOAD (FIX DEFINITIVO)
+// PATHS + ENV LOAD
 // ===============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,11 +29,6 @@ const ENV = process.env.NODE_ENV || "development";
 const envProdPath = path.join(__dirname, "..", ".env.production");
 const envDevPath = path.join(__dirname, "..", ".env");
 
-/**
- * ✅ FIX DEFINITIVO DE ENV
- * - Production: prioridade .env.production (override true)
- * - Dev: prioridade .env (override false)
- */
 if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath, override: true });
 } else if (fs.existsSync(envDevPath)) {
@@ -42,7 +37,6 @@ if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath, override: false });
 }
 
-// Base domain (tenant por subdomínio)
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
 // ===============================
@@ -53,9 +47,7 @@ const { default: logger } = await import("./logger.js");
 logger.info(
   {
     ENV,
-    TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN,
-    META_OAUTH_REDIRECT_URI: process.env.META_OAUTH_REDIRECT_URI || null,
-    META_EMBEDDED_REDIRECT_URI: process.env.META_EMBEDDED_REDIRECT_URI || null
+    TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN
   },
   "🧩 Env carregado"
 );
@@ -73,16 +65,12 @@ try {
   prismaReady = !!(
     prisma?.user &&
     prisma?.tenant &&
-    prisma?.userTenant &&
     prisma?.conversation &&
     prisma?.message &&
     prisma?.channelConfig
   );
 
-  logger.info(
-    { prismaReady, tenantBaseDomain: process.env.TENANT_BASE_DOMAIN },
-    "🧠 Prisma status"
-  );
+  logger.info({ prismaReady }, "🧠 Prisma status");
 } catch (err) {
   prismaReady = false;
   logger.error({ err }, "❌ Erro ao carregar Prisma");
@@ -92,25 +80,25 @@ try {
 // ROUTERS
 // ===============================
 
-// 🔐 Auth
+// Auth
 const { default: authRouter } = await import("./auth/authRouter.js");
 const { default: passwordRouter } = await import("./auth/passwordRouter.js");
 
-// ⚙️ Settings
+// Settings
 const { default: usersRouter } = await import("./settings/usersRouter.js");
 const { default: groupsRouter } = await import("./settings/groupsRouter.js");
 const { default: channelsRouter } = await import("./routes/channels.js");
 
-// 🤖 Atendimento
+// Atendimento
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
 const { default: humanRouter } = await import("./human/humanRouter.js");
 const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
 
-// 💬 Webchat + Conversas
+// Conversas / Webchat
 const { default: webchatRouter } = await import("./routes/webchat.js");
 const { default: conversationsRouter } = await import("./routes/conversations.js");
 
-// 📤 Outbound
+// Outbound
 const { default: outboundRouter } = await import("./outbound/outboundRouter.js");
 const { default: numbersRouter } = await import("./outbound/numbersRouter.js");
 const { default: templatesRouter } = await import("./outbound/templatesRouter.js");
@@ -119,19 +107,12 @@ const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
 const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
-// 📡 Webhooks (públicos)
+// Webhooks públicos
 const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
-
-// ✅ Instagram WEBHOOK (arquivo novo — NÃO é o settings/channels)
 const { default: instagramWebhookRouter } = await import(
   "./routes/webhooks/instagramWebhookRouter.js"
 );
-
-// ===============================
-// VARS
-// ===============================
-const PORT = Number(process.env.PORT || 3010);
 
 // ===============================
 // APP
@@ -139,8 +120,6 @@ const PORT = Number(process.env.PORT || 3010);
 const app = express();
 app.set("etag", false);
 app.disable("x-powered-by");
-
-// ✅ Importante em produção atrás de Cloudflare / proxy reverso
 app.set("trust proxy", 1);
 
 // ===============================
@@ -160,25 +139,31 @@ app.use(
 );
 
 // ===============================
-// CORS
+// CORS (GLOBAL)
 // ===============================
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Tenant-Id",
-      "X-Widget-Key",
-      "X-Webchat-Token"
-    ],
-    exposedHeaders: ["Authorization"]
-  })
-);
+const corsConfig = {
+  origin: true,
+  credentials: true,
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Tenant-Id",
+    "X-Widget-Key",
+    "X-Webchat-Token"
+  ],
+  exposedHeaders: ["Authorization"]
+};
+
+app.use(cors(corsConfig));
+
+/**
+ * 🔥 FIX DEFINITIVO DE CORS
+ * Preflight NÃO passa por auth
+ */
+app.options("*", cors(corsConfig));
 
 // ===============================
-// BODY PARSER (com rawBody p/ Meta)
+// BODY PARSER (rawBody p/ Meta)
 // ===============================
 app.use(
   express.json({
@@ -203,21 +188,15 @@ function requirePrisma(_req, res, next) {
 const PUBLIC_NO_TENANT_PATHS = [
   "/",
   "/health",
-
-  // Auth (mantemos ambos para compat)
   "/login",
   "/auth/login",
   "/auth/select-tenant",
   "/auth/password",
   "/auth/password/verify",
   "/auth/password/set",
-
-  // Webhooks (públicos)
   "/webhook/whatsapp",
   "/webhook/messenger",
   "/webhook/instagram",
-
-  // Webchat público
   "/webchat"
 ];
 
@@ -241,9 +220,7 @@ app.get("/health", async (_req, res) => {
     try {
       users = await prisma.user.count();
       tenants = await prisma.tenant.count();
-    } catch {
-      // não quebra health
-    }
+    } catch {}
   }
 
   res.json({
@@ -252,25 +229,24 @@ app.get("/health", async (_req, res) => {
     prismaReady,
     users,
     tenants,
-    tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
     uptime: process.uptime()
   });
 });
 
-// Auth público
-app.use("/", authRouter);          // /login, /auth/login, /auth/select-tenant...
-app.use("/auth", passwordRouter);  // /auth/password/*
+// Auth
+app.use("/", authRouter);
+app.use("/auth", passwordRouter);
 
-// 🌐 Webchat público (depende de DB)
+// Webchat público
 app.use("/webchat", requirePrisma, webchatRouter);
 
-// 📡 Webhooks públicos (NÃO passam por auth/tenant guard)
+// Webhooks públicos
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 app.use("/webhook/instagram", instagramWebhookRouter);
 
 // ===============================
-// 🔒 MIDDLEWARE GLOBAL (a partir daqui tudo é protegido)
+// 🔒 MIDDLEWARE GLOBAL
 // ===============================
 app.use(requireAuth);
 app.use(enforceTokenTenant);
@@ -295,7 +271,7 @@ app.use("/settings", usersRouter);
 app.use("/settings/groups", groupsRouter);
 app.use("/settings/channels", channelsRouter);
 
-// Conversas (inclui PATCH /conversations/:id/status)
+// Conversas
 app.use("/conversations", conversationsRouter);
 
 // Outbound
@@ -323,7 +299,7 @@ app.use((err, req, res, _next) => {
       err,
       url: req.url,
       method: req.method,
-      tenantId: req.tenant?.id || req.tenantId || null,
+      tenantId: req.tenant?.id || null,
       userId: req.user?.id || null
     },
     "❌ Erro não tratado"
@@ -335,6 +311,7 @@ app.use((err, req, res, _next) => {
 // ===============================
 // START
 // ===============================
+const PORT = Number(process.env.PORT || 3010);
 app.listen(PORT, () => {
   logger.info({ PORT, ENV, prismaReady }, "🚀 API rodando");
 });
