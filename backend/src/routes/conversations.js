@@ -51,12 +51,16 @@ function hasCol(obj, key) {
   return obj && Object.prototype.hasOwnProperty.call(obj, key);
 }
 
+// ✅ pega texto do front e também de formatos comuns
 function msgTextFromRaw(raw) {
   if (!raw) return "";
   if (typeof raw.text === "string") return raw.text;
   if (typeof raw.text?.body === "string") return raw.text.body;
+  if (typeof raw.message === "string") return raw.message; // ✅ fallback comum
+  if (typeof raw.body === "string") return raw.body; // ✅ fallback comum
   if (typeof raw.content === "string") return raw.content;
   if (typeof raw.caption === "string") return raw.caption;
+  if (typeof raw.value === "string") return raw.value; // ✅ fallback comum
   return "";
 }
 
@@ -145,8 +149,6 @@ function displayNameFallbackByChannel(channel, peerId) {
 
 // ======================================================
 // NORMALIZA PARA O SHAPE LEGADO DO FRONT
-// (⚠️ Seu schema pode NÃO ter colunas inbox/closed/etc,
-// então sempre priorizamos metadata + fallback)
 // ======================================================
 function normalizeConversationRow(convRow) {
   if (!convRow) return null;
@@ -186,7 +188,6 @@ function normalizeConversationRow(convRow) {
 
   const peerId = safeStr(m.peerId || "");
 
-  // ✅ título: metadata.title -> convRow.contact?.name (se veio include) -> fallback por canal
   const title =
     safeStr(m.title) ||
     safeStr(convRow?.contact?.name || "") ||
@@ -231,7 +232,6 @@ function normalizeConversationRow(convRow) {
       ""
   );
 
-  // ✅ FECHAMENTO: como seu schema pode não ter closed*, fica no metadata
   const closedAtMeta = m.closedAt ?? null;
   const closedByMeta = m.closedBy ?? null;
   const closedReasonMeta = m.closedReason ?? null;
@@ -306,7 +306,6 @@ function normalizeMessageRow(convNorm, msgRow) {
 
 // ======================================================
 // 🔌 CONEXÃO DO CANAL (DB) + SENDERS META
-// (robusto: seu schema pode não ter model "channel")
 // ======================================================
 async function getChannelConn(tenantId, type) {
   const channelModel =
@@ -345,8 +344,6 @@ async function maybeFetchPeerNameFromGraph({ tenantId, channel, peerId }) {
   const id = peerToPSID(peerId);
   if (!id) return "";
 
-  // Messenger normalmente responde com first_name/last_name (depende da permissão).
-  // Instagram pode não permitir ler nome/username; tentamos "name,username".
   const fields = ch === "messenger" ? "name,first_name,last_name" : "name,username";
   const url = `${META_GRAPH_BASE}/${encodeURIComponent(id)}?fields=${encodeURIComponent(
     fields
@@ -405,7 +402,8 @@ async function sendWhatsAppText({ tenantId, peerId, text }) {
     return {
       ok: false,
       error: json?.error?.message || `WhatsApp Graph ${resp.status}`,
-      meta: json?.error || json
+      meta: json?.error || json,
+      raw: json
     };
   }
 
@@ -441,7 +439,8 @@ async function sendMessengerText({ tenantId, peerId, text }) {
     return {
       ok: false,
       error: json?.error?.message || `Messenger Graph ${resp.status}`,
-      meta: json?.error || json
+      meta: json?.error || json,
+      raw: json
     };
   }
 
@@ -475,7 +474,8 @@ async function sendInstagramText({ tenantId, peerId, text }) {
     return {
       ok: false,
       error: json?.error?.message || `Instagram Graph ${resp.status}`,
-      meta: json?.error || json
+      meta: json?.error || json,
+      raw: json
     };
   }
 
@@ -494,7 +494,6 @@ async function dispatchOutboundToChannel({ convRow, msgText }) {
   if (channel === "messenger") return sendMessengerText({ tenantId, peerId, text: msgText });
   if (channel === "instagram") return sendInstagramText({ tenantId, peerId, text: msgText });
 
-  // webchat: outbound já “volta” via DB
   if (channel === "webchat") return { ok: true, providerMessageId: null };
 
   return { ok: false, error: `Canal não suportado para outbound: ${channel}` };
@@ -507,7 +506,6 @@ async function upsertContact({ tenantId, channel, peerId, title, phone, waId, vi
   const externalId = safeStr(peerId);
   if (!externalId) throw new Error("peerId obrigatório para criar/achar contato (externalId).");
 
-  // ✅ nunca grava nome vazio (evita “Sem nome” no painel)
   const finalName = safeStr(title) || displayNameFallbackByChannel(channel, peerId);
 
   return prisma.contact.upsert({
@@ -547,16 +545,13 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   if (!tenantId) return { ok: false, error: "tenantId obrigatório" };
   if (!source || !peerId) return { ok: false, error: "source e peerId obrigatórios" };
 
-  // 1) tenta resolver nome pelo payload/raw
   let resolvedName = resolveContactName(payload, payload.raw || payload);
 
-  // 2) se ainda for genérico em messenger/instagram, tenta Graph
   if (resolvedName === "Contato" && (channel === "messenger" || channel === "instagram")) {
     const graphName = await maybeFetchPeerNameFromGraph({ tenantId, channel, peerId });
     if (safeStr(graphName)) resolvedName = safeStr(graphName);
   }
 
-  // 3) fallback final: usa phone/psid pra nunca ficar “Sem nome”
   if (resolvedName === "Contato") {
     resolvedName = displayNameFallbackByChannel(channel, peerId);
   }
@@ -579,7 +574,6 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   if (!conv) {
     const convId = newId(getConvPrefixBySource(source));
 
-    // ⚠️ schema-safe: cria só o que é essencial e joga o resto no metadata
     const baseMeta = {
       source,
       channel,
@@ -619,8 +613,7 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   } else {
     const meta = getMeta(conv);
 
-    // ✅ se estava genérico, atualiza title + contact.name
-    if (safeStr(meta.title) === "Contato" || !safeStr(meta.title)) {
+    if (!safeStr(meta.title) || safeStr(meta.title) === "Contato") {
       conv = await prisma.conversation.update({
         where: { id: conv.id },
         data: { metadata: setMeta(conv, { title: resolvedName, peerId, channel, source }) }
@@ -653,7 +646,6 @@ async function promoteToInboxPrisma({ convRow, reason = "handoff" }) {
 
   const data = { metadata: setMeta(convRow, patch) };
 
-  // se existirem colunas no schema, também atualiza
   if (hasCol(convRow, "currentMode")) data.currentMode = "human";
   if (hasCol(convRow, "handoffActive")) data.handoffActive = true;
   if (hasCol(convRow, "handoffSince")) data.handoffSince = new Date(patch.handoffSince);
@@ -785,7 +777,6 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 
   const waMessageId = rawMsg?.waMessageId ? String(rawMsg.waMessageId) : null;
 
-  // ✅ DEDUPE por waMessageId
   if (waMessageId) {
     const dup = await prisma.message.findFirst({
       where: {
@@ -833,7 +824,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   });
 
-  // ✅ ENRIQUECE NOME (conversa + contato) SEMPRE QUE DER
+  // ✅ ENRIQUECE NOME (conversa + contato)
   const metaBefore = getMeta(convRow);
   let nameFromMsg = resolveContactName({}, rawMsg);
 
@@ -868,7 +859,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 }
 
 // ======================================================
-// ROTAS DO PAINEL (PRISMA)
+// ROTAS DO PAINEL
 // ======================================================
 
 // GET /conversations?inbox=all
@@ -877,7 +868,6 @@ router.get("/", async (req, res) => {
     const tenantId = requireTenantOr401(req, res);
     if (!tenantId) return;
 
-    // tenta incluir contact (se existir no schema). se não existir, cai no básico.
     let rows = [];
     try {
       rows = await prisma.conversation.findMany({
@@ -967,24 +957,44 @@ router.post("/:id/messages", async (req, res) => {
 
     if (!r.ok) return res.status(400).json({ error: r.error });
 
-    // 2) envia pro canal (WhatsApp/Messenger/Instagram)
-    const text = msgTextFromRaw(req.body);
-    if (safeStr(text)) {
-      const sendRes = await dispatchOutboundToChannel({ convRow, msgText: text });
+    // 2) resolve texto: req.body OU o salvo
+    const textFromReq = msgTextFromRaw(req.body);
+    const textFromSaved =
+      (typeof r.msgRow?.text === "string" ? r.msgRow.text : "") ||
+      (typeof r.msg?.text === "string" ? r.msg.text : "");
 
-      const providerMessageId = sendRes?.providerMessageId || null;
+    const textToSend = safeStr(textFromReq || textFromSaved || "");
 
-      const patchMeta = {
-        provider: safeStr(convRow.channel),
-        providerMessageId,
-        providerSendOk: sendRes?.ok === true,
-        providerError: sendRes?.ok ? null : sendRes?.meta || sendRes?.error || "send_failed",
-        sentAt: sendRes?.ok ? nowIso() : null
-      };
+    if (!textToSend) {
+      return res.status(201).json({
+        ...r.msg,
+        provider: {
+          attempted: false,
+          ok: false,
+          error: "Mensagem sem texto (body não trouxe text/content/caption/message/body/value)"
+        }
+      });
+    }
 
+    // 3) envia pro canal
+    const sendRes = await dispatchOutboundToChannel({ convRow, msgText: textToSend });
+
+    // 4) atualiza status/metadata SEMPRE
+    const msgIdToUpdate = String(r.msgRow?.id || r.msg?.id || "");
+
+    const patchMeta = {
+      provider: safeStr(convRow.channel),
+      providerMessageId: sendRes?.providerMessageId || null,
+      providerSendOk: sendRes?.ok === true,
+      providerError: sendRes?.ok ? null : (sendRes?.meta || sendRes?.error || "send_failed"),
+      sentAt: sendRes?.ok ? nowIso() : null,
+      providerRaw: sendRes?.raw || null
+    };
+
+    if (msgIdToUpdate) {
       await prisma.message
         .update({
-          where: { id: String(r.msgRow?.id || r.msg?.id) },
+          where: { id: msgIdToUpdate },
           data: {
             status: sendRes?.ok ? "sent" : "failed",
             metadata: setMeta(r.msgRow || {}, patchMeta)
@@ -993,7 +1003,43 @@ router.post("/:id/messages", async (req, res) => {
         .catch(() => {});
     }
 
-    return res.status(201).json(r.msg);
+    // ✅ log pro pm2
+    if (!sendRes?.ok) {
+      console.error("[OUTBOUND][META] send_failed", {
+        conversationId: convRow.id,
+        channel: convRow.channel,
+        tenantId: convRow.tenantId,
+        peerId: getMeta(convRow).peerId,
+        error: sendRes?.error,
+        meta: sendRes?.meta
+      });
+    } else {
+      console.log("[OUTBOUND][META] send_ok", {
+        conversationId: convRow.id,
+        channel: convRow.channel,
+        tenantId: convRow.tenantId,
+        providerMessageId: sendRes?.providerMessageId
+      });
+    }
+
+    // ✅ se falhou, retorna ERRO (pra você ver no DevTools)
+    if (!sendRes?.ok) {
+      return res.status(502).json({
+        error: "Falha ao enviar para o canal",
+        detail: sendRes?.error || "send_failed",
+        meta: sendRes?.meta || null
+      });
+    }
+
+    // sucesso
+    return res.status(201).json({
+      ...r.msg,
+      provider: {
+        attempted: true,
+        ok: true,
+        providerMessageId: sendRes?.providerMessageId || null
+      }
+    });
   } catch (e) {
     res.status(500).json({ error: "Falha ao enviar mensagem", detail: String(e?.message || e) });
   }
