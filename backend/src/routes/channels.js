@@ -16,21 +16,26 @@ const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION || "v21.0").tri
 // Helpers
 // ======================================================
 // ======================================================
-// Instagram OAuth helpers
+// Instagram OAuth helpers (SAFE)
 // ======================================================
 function getInstagramOAuthRedirectUri(req) {
-  // prioridade:
-  // 1) ENV explícita
-  // 2) domínio do tenant
-  // 3) fallback seguro
-
+  // 1) ENV sempre vence
   const envUri = String(process.env.INSTAGRAM_REDIRECT_URI || "").trim();
   if (envUri) return envUri;
 
+  // 2) Se req não existir, fallback seguro
+  if (!req || !req.headers) {
+    const base = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+    if (!base) {
+      throw new Error("APP_BASE_URL não definido e req ausente para Instagram redirect_uri");
+    }
+    return `${base}/settings/channels/instagram/callback`;
+  }
+
+  // 3) Detecta origem real
   const origin =
     req.headers.origin ||
     req.headers.referer ||
-    process.env.APP_BASE_URL ||
     "";
 
   const cleanOrigin = String(origin)
@@ -38,34 +43,16 @@ function getInstagramOAuthRedirectUri(req) {
     .replace(/\/settings\/channels.*$/, "");
 
   if (!cleanOrigin) {
-    throw new Error("Não foi possível determinar origin para redirect_uri do Instagram");
+    const base = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+    if (!base) {
+      throw new Error("Não foi possível determinar origin para redirect_uri do Instagram");
+    }
+    return `${base}/settings/channels/instagram/callback`;
   }
 
   return `${cleanOrigin}/settings/channels/instagram/callback`;
 }
 
-function requireEnv(name) {
-  const v = String(process.env[name] || "").trim();
-  if (!v) throw new Error(`${name} não configurado`);
-  return v;
-}
-
-function optionalEnv(name) {
-  const v = String(process.env[name] || "").trim();
-  return v || "";
-}
-
-function getTenantId(req) {
-  return req.tenant?.id || req.tenantId || null;
-}
-
-function newWidgetKey() {
-  return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
 
 // ======================================================
 // Resolve base URL do Front (fallback de redirectUri)
@@ -862,7 +849,7 @@ router.post(
         return res.status(403).json({ error: "tenant_mismatch" });
       }
 
-      const redirectUri = getInstagramOAuthRedirectUri();
+      const redirectUri = getInstagramOAuthRedirectUri(req);
 
       // 1) code -> short user token
       const tokenRes = await exchangeCodeForUserToken({ code, redirectUri });
