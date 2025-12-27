@@ -1,3 +1,4 @@
+// backend/src/routes/conversations.js
 import express from "express";
 import crypto from "crypto";
 import prisma from "../lib/prisma.js";
@@ -115,10 +116,17 @@ function normalizeConversationRow(convRow) {
     (hasCol(convRow, "handoffActive") ? convRow.handoffActive : undefined) ?? m.handoffActive
   );
 
-  const handoffSince =
+  const handoffSinceRaw =
     (hasCol(convRow, "handoffSince") ? convRow.handoffSince : undefined) ??
     m.handoffSince ??
     (handoffActive ? updatedAt : null);
+
+  const handoffSince =
+    handoffSinceRaw && handoffSinceRaw instanceof Date
+      ? handoffSinceRaw.toISOString()
+      : handoffSinceRaw
+      ? String(handoffSinceRaw)
+      : null;
 
   const peerId = safeStr(m.peerId || "");
   const title = safeStr(m.title || "Contato");
@@ -160,12 +168,10 @@ function normalizeConversationRow(convRow) {
       ""
   );
 
-  const closedAt = (hasCol(convRow, "closedAt") ? convRow.closedAt : undefined) ?? m.closedAt ?? null;
-  const closedBy = (hasCol(convRow, "closedBy") ? convRow.closedBy : undefined) ?? m.closedBy ?? null;
-  const closedReason =
-    (hasCol(convRow, "closedReason") ? convRow.closedReason : undefined) ??
-    m.closedReason ??
-    null;
+  // ✅ FECHAMENTO: preferimos metadata (pois no seu schema atual não existem colunas)
+  const closedAtMeta = m.closedAt ?? null;
+  const closedByMeta = m.closedBy ?? null;
+  const closedReasonMeta = m.closedReason ?? null;
 
   return {
     id: String(convRow.id),
@@ -180,11 +186,7 @@ function normalizeConversationRow(convRow) {
     botAttempts,
 
     handoffActive,
-    handoffSince: handoffSince
-      ? handoffSince instanceof Date
-        ? handoffSince.toISOString()
-        : handoffSince
-      : null,
+    handoffSince,
     handoffReason: m.handoffReason || null,
 
     tenantId: convRow.tenantId,
@@ -201,9 +203,14 @@ function normalizeConversationRow(convRow) {
     assignedGroupId: assignedGroupId || null,
     assignedUserId: assignedUserId || null,
 
-    closedAt: closedAt ? (closedAt instanceof Date ? closedAt.toISOString() : closedAt) : null,
-    closedBy: closedBy || null,
-    closedReason: closedReason || null
+    closedAt:
+      closedAtMeta && closedAtMeta instanceof Date
+        ? closedAtMeta.toISOString()
+        : closedAtMeta
+        ? String(closedAtMeta)
+        : null,
+    closedBy: closedByMeta || null,
+    closedReason: closedReasonMeta || null
   };
 }
 
@@ -244,8 +251,8 @@ async function upsertContact({ tenantId, channel, peerId, title, phone, waId, vi
       tenantId_channel_externalId: { tenantId, channel, externalId }
     },
     update: {
-      name: title || undefined,
-      phone: phone || undefined,
+      ...(title ? { name: title } : {}),
+      ...(phone ? { phone } : {}),
       metadata: {
         ...(waId ? { waId } : {}),
         ...(visitorId ? { visitorId } : {})
@@ -265,6 +272,16 @@ async function upsertContact({ tenantId, channel, peerId, title, phone, waId, vi
   });
 }
 
+/**
+ * ✅ EXPORTS USADOS PELOS 4 CANAIS:
+ * - getOrCreateChannelConversation
+ * - appendMessage
+ *
+ * ⚠️ IMPORTANTÍSSIMO:
+ * Seu schema NÃO tem colunas closedAt/closedBy/closedReason.
+ * Então:
+ * - create/update NUNCA podem enviar essas keys fora de metadata.
+ */
 export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) {
   const payload = maybePayload || dbOrPayload || {};
   const tenantId = safeStr(payload.tenantId);
@@ -304,7 +321,7 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
       peerId,
       title: resolvedName,
 
-      currentMode: payload.currentMode || "bot",
+      currentMode: safeStr(payload.currentMode || "bot").toLowerCase(),
       hadHuman: false,
       botAttempts: 0,
 
@@ -319,38 +336,41 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
       inboxStatus: "bot_only",
       queuedAt: null,
 
+      // ✅ FECHAMENTO SOMENTE NO METADATA
       closedAt: null,
       closedBy: null,
       closedReason: null
     };
 
-    conv = await prisma.conversation.create({
-      data: {
-        id: convId,
-        tenantId,
-        contactId: contact.id,
-        channel,
-        status: "open",
-        lastMessageAt: null,
+    // ✅ CREATE: só envia campos que EXISTEM no schema + metadata
+    // (NÃO envia closedAt/closedBy/closedReason fora do metadata)
+    const createData = {
+      id: convId,
+      tenantId,
+      contactId: contact.id,
+      channel,
+      status: "open",
+      lastMessageAt: null,
 
-        inboxVisible: false,
-        inboxStatus: "bot_only",
-        queuedAt: null,
-        currentMode: safeStr(payload.currentMode || "bot").toLowerCase(),
-        handoffActive: false,
-        handoffSince: null,
-        assignedGroupId: null,
-        assignedUserId: null,
+      inboxVisible: false,
+      inboxStatus: "bot_only",
+      queuedAt: null,
 
-        closedAt: null,
-        closedBy: null,
-        closedReason: null,
+      currentMode: safeStr(payload.currentMode || "bot").toLowerCase(),
+      handoffActive: false,
+      handoffSince: null,
 
-        metadata: baseMeta
-      }
-    });
+      assignedGroupId: null,
+      assignedUserId: null,
+
+      metadata: baseMeta
+    };
+
+    conv = await prisma.conversation.create({ data: createData });
   } else {
     const meta = getMeta(conv);
+
+    // Atualiza nome se ainda está genérico
     if (safeStr(meta.title) === "Contato" && resolvedName !== "Contato") {
       conv = await prisma.conversation.update({
         where: { id: conv.id },
@@ -455,19 +475,25 @@ async function addSystemMessage({ convRow, text, code = "system" }) {
 async function closeConversationPrisma({ convRow, closedBy, closedReason }) {
   const atIso = nowIso();
 
+  // ✅ FECHAMENTO SOMENTE NO METADATA (sem colunas no schema)
   const patch = {
+    status: "closed",
     closedAt: atIso,
     closedBy: closedBy || null,
     closedReason: closedReason || "manual_by_agent",
-    status: "closed"
+
+    // coerência de inbox
+    handoffActive: false,
+    inboxVisible: false,
+    inboxStatus: "closed"
   };
 
-  const data = { status: "closed", metadata: setMeta(convRow, patch) };
+  const data = {
+    status: "closed",
+    metadata: setMeta(convRow, patch)
+  };
 
-  if (hasCol(convRow, "closedAt")) data.closedAt = new Date(atIso);
-  if (hasCol(convRow, "closedBy")) data.closedBy = patch.closedBy;
-  if (hasCol(convRow, "closedReason")) data.closedReason = patch.closedReason;
-
+  // ✅ Atualiza apenas colunas que sabemos que existem (essas você já usa)
   if (hasCol(convRow, "handoffActive")) data.handoffActive = false;
   if (hasCol(convRow, "inboxStatus")) data.inboxStatus = "closed";
   if (hasCol(convRow, "inboxVisible")) data.inboxVisible = false;
@@ -501,8 +527,6 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 
   // ======================================================
   // ✅ FIX PRINCIPAL: inferência de inbound/outbound
-  // - Se webhook não manda from/direction, assume IN/client
-  // - Respeita flags comuns: isFromMe/fromMe
   // ======================================================
   let from = safeStr(rawMsg?.from || "");
   let direction = safeStr(rawMsg?.direction || "");
@@ -512,15 +536,13 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 
   const fromMe = rawMsg?.isFromMe === true || rawMsg?.fromMe === true || rawMsg?.sentByMe === true;
 
-  // Se não veio direction, tenta inferir
   if (!direction) {
     if (from === "client") direction = "in";
     else if (from === "agent") direction = "out";
     else if (fromMe) direction = "out";
-    else direction = "in"; // ✅ default seguro para webhook
+    else direction = "in";
   }
 
-  // Se não veio from, deriva do direction
   if (!from) {
     from = direction === "in" ? "client" : "agent";
   }
@@ -581,7 +603,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   });
 
-  // ✅ se ainda está "Contato", tenta enriquecer pelo rawMsg
+  // ✅ enriquecer título se ainda está "Contato"
   const nameFromMsg = resolveContactName({}, rawMsg);
   const metaBefore = getMeta(convRow);
   if (safeStr(metaBefore.title) === "Contato" && nameFromMsg !== "Contato") {
@@ -597,11 +619,8 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   }
 
-  // counters/estado
   if (from === "bot") await bumpBotAttempts({ convRow });
 
-  // ✅ se entrou mensagem do cliente, isso costuma disparar bot no pipeline externo
-  // aqui a gente só garante que a conversa “tocou” e que “agent_message” promove inbox
   if (from === "agent" || rawMsg?.handoff === true) {
     await promoteToInboxPrisma({ convRow, reason: "agent_message" });
   }
