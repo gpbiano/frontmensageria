@@ -13,46 +13,29 @@ const CHANNELS = ["whatsapp", "webchat", "messenger", "instagram"];
 const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION || "v21.0").trim();
 
 // ======================================================
-// Helpers
+// Helpers (MISSING FIXES + SAFETY)
 // ======================================================
-// ======================================================
-// Instagram OAuth helpers (SAFE)
-// ======================================================
-function getInstagramOAuthRedirectUri(req) {
-  // 1) ENV sempre vence
-  const envUri = String(process.env.INSTAGRAM_REDIRECT_URI || "").trim();
-  if (envUri) return envUri;
-
-  // 2) Se req não existir, fallback seguro
-  if (!req || !req.headers) {
-    const base = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
-    if (!base) {
-      throw new Error("APP_BASE_URL não definido e req ausente para Instagram redirect_uri");
-    }
-    return `${base}/settings/channels/instagram/callback`;
-  }
-
-  // 3) Detecta origem real
-  const origin =
-    req.headers.origin ||
-    req.headers.referer ||
-    "";
-
-  const cleanOrigin = String(origin)
-    .replace(/\/+$/, "")
-    .replace(/\/settings\/channels.*$/, "");
-
-  if (!cleanOrigin) {
-    const base = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
-    if (!base) {
-      throw new Error("Não foi possível determinar origin para redirect_uri do Instagram");
-    }
-    return `${base}/settings/channels/instagram/callback`;
-  }
-
-  return `${cleanOrigin}/settings/channels/instagram/callback`;
+function requireEnv(name) {
+  const v = String(process.env[name] || "").trim();
+  if (!v) throw new Error(`${name} não configurado`);
+  return v;
 }
 
+function optionalEnv(name) {
+  return String(process.env[name] || "").trim() || "";
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function getTenantId(req) {
+  return req.tenant?.id || req.tenantId || req.user?.tenantId || null;
+}
+
+function newWidgetKey() {
+  return `wkey_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
+}
 
 // ======================================================
 // Resolve base URL do Front (fallback de redirectUri)
@@ -64,19 +47,19 @@ function normalizeRedirectUri(input) {
 }
 
 function getFrontendBaseFromReq(req) {
-  // prioridade: env > Origin > Referer > Host headers
   const fromEnv =
     normalizeRedirectUri(process.env.PUBLIC_APP_BASE) ||
     normalizeRedirectUri(process.env.FRONTEND_BASE_URL) ||
     normalizeRedirectUri(process.env.WEB_APP_BASE) ||
+    normalizeRedirectUri(process.env.APP_BASE_URL) ||
     "";
 
   if (fromEnv) return fromEnv;
 
-  const origin = String(req.headers.origin || "").trim();
+  const origin = String(req?.headers?.origin || "").trim();
   if (origin) return normalizeRedirectUri(origin);
 
-  const referer = String(req.headers.referer || "").trim();
+  const referer = String(req?.headers?.referer || "").trim();
   if (referer) {
     try {
       const u = new URL(referer);
@@ -86,8 +69,12 @@ function getFrontendBaseFromReq(req) {
     }
   }
 
-  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || "https";
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "")
+  const proto =
+    String(req?.headers?.["x-forwarded-proto"] || "")
+      .split(",")[0]
+      .trim() || "https";
+
+  const host = String(req?.headers?.["x-forwarded-host"] || req?.headers?.host || "")
     .split(",")[0]
     .trim();
 
@@ -137,16 +124,14 @@ function signState(payload) {
     .update(raw)
     .digest("hex");
 
-  // ⚠️ Usa "." como separador, mas no verifyState vamos cortar PELO ÚLTIMO ponto
+  // ⚠️ separador "." — verify corta PELO ÚLTIMO ponto
   return base64urlEncode(`${raw}.${sig}`);
 }
 
 function verifyState(state) {
   const s = String(state || "").trim();
-
   const decoded = base64urlDecode(s);
 
-  // ✅ separador é o ÚLTIMO ponto (raw pode ter "https://...gplabs.com.br")
   const idx = String(decoded || "").lastIndexOf(".");
   if (idx <= 0) throw new Error("invalid_state");
 
@@ -173,7 +158,6 @@ function verifyState(state) {
 
   return payload;
 }
-
 
 // ======================================================
 // Normalização de saída (não vazar tokens)
@@ -205,6 +189,10 @@ function shapeChannels(list) {
   return out;
 }
 
+function safeArr(x) {
+  return Array.isArray(x) ? x : [];
+}
+
 // ======================================================
 // Graph helpers
 // ======================================================
@@ -213,6 +201,7 @@ async function graphGetJson(url, accessToken) {
     method: "GET",
     headers: { Authorization: `Bearer ${accessToken}` }
   });
+
   const raw = await resp.text().catch(() => "");
   let data = {};
   try {
@@ -220,6 +209,7 @@ async function graphGetJson(url, accessToken) {
   } catch {
     data = { raw };
   }
+
   return { ok: resp.ok, status: resp.status, data, raw };
 }
 
@@ -232,6 +222,7 @@ async function graphPostJson(url, accessToken, bodyObj = {}) {
     },
     body: JSON.stringify(bodyObj)
   });
+
   const raw = await resp.text().catch(() => "");
   let data = {};
   try {
@@ -239,6 +230,7 @@ async function graphPostJson(url, accessToken, bodyObj = {}) {
   } catch {
     data = { raw };
   }
+
   return { ok: resp.ok, status: resp.status, data, raw };
 }
 
@@ -258,13 +250,12 @@ async function exchangeForLongLivedUserToken(anyUserToken) {
 
   const r = await fetch(url, { method: "GET" });
   const raw = await r.text().catch(() => "");
-  const j = (() => {
-    try {
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return { raw };
-    }
-  })();
+  let j = {};
+  try {
+    j = raw ? JSON.parse(raw) : {};
+  } catch {
+    j = { raw };
+  }
 
   if (!r.ok || !j?.access_token) {
     return { ok: false, error: "long_lived_exchange_failed", meta: j?.error || j, status: r.status };
@@ -296,11 +287,7 @@ async function fetchPageAccessTokenFromUser(userToken, pageId) {
   const row = data.find((p) => String(p?.id || "") === String(pageId));
 
   if (!row?.access_token) {
-    return {
-      ok: false,
-      error: "page_token_not_found",
-      meta: { pagesCount: data.length }
-    };
+    return { ok: false, error: "page_token_not_found", meta: { pagesCount: data.length } };
   }
 
   return {
@@ -311,7 +298,7 @@ async function fetchPageAccessTokenFromUser(userToken, pageId) {
 }
 
 // ======================================================
-// Instagram OAuth (Zenvia-like) helpers
+// Instagram OAuth (Zenvia-like)
 // ======================================================
 function buildMetaOAuthUrl({ redirectUri, state, scopes }) {
   const appId = requireEnv("META_APP_ID");
@@ -415,19 +402,13 @@ router.patch(
       const cfg = req.body?.config || {};
       const sessionTtlSeconds = req.body?.sessionTtlSeconds;
 
-      const allowedOrigins = Array.isArray(req.body?.allowedOrigins)
-        ? req.body.allowedOrigins
-        : undefined;
+      const allowedOrigins = Array.isArray(req.body?.allowedOrigins) ? req.body.allowedOrigins : undefined;
 
       const current = await prisma.channelConfig.findUnique({
         where: { tenantId_channel: { tenantId, channel: "webchat" } }
       });
 
-      const mergedConfig = {
-        ...(current?.config || {}),
-        ...(cfg || {})
-      };
-
+      const mergedConfig = { ...(current?.config || {}), ...(cfg || {}) };
       if (allowedOrigins) mergedConfig.allowedOrigins = allowedOrigins;
       if (typeof sessionTtlSeconds === "number") mergedConfig.sessionTtlSeconds = sessionTtlSeconds;
 
@@ -435,12 +416,7 @@ router.patch(
         where: { tenantId_channel: { tenantId, channel: "webchat" } },
         update: {
           enabled: typeof enabled === "boolean" ? enabled : undefined,
-          status:
-            typeof enabled === "boolean"
-              ? enabled
-                ? "connected"
-                : "disabled"
-              : undefined,
+          status: typeof enabled === "boolean" ? (enabled ? "connected" : "disabled") : undefined,
           config: mergedConfig,
           updatedAt: new Date()
         },
@@ -564,7 +540,7 @@ router.get(
 );
 
 // ======================================================
-// ✅ MESSENGER — Produto (self-service multi-tenant)
+// ✅ MESSENGER
 // ======================================================
 
 // POST /settings/channels/messenger/pages
@@ -636,32 +612,18 @@ router.post(
       const vj = await v.json().catch(() => ({}));
 
       if (!v.ok || !vj?.id) {
-        logger.warn(
-          { status: v.status, meta: vj?.error || vj, tenantId, pageId },
-          "❌ Messenger connect validate failed"
-        );
+        logger.warn({ status: v.status, meta: vj?.error || vj, tenantId, pageId }, "❌ Messenger connect validate failed");
         return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
       }
 
       const displayName = String(vj?.name || "Facebook Page").trim();
 
-      const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
-        pageId
-      )}/subscribed_apps`;
-
-      const subRes = await graphPostJson(subUrl, pageAccessToken, {
-        subscribed_fields: subscribedFields
-      });
+      const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`;
+      const subRes = await graphPostJson(subUrl, pageAccessToken, { subscribed_fields: subscribedFields });
 
       if (!subRes.ok) {
-        logger.warn(
-          { status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId },
-          "❌ Messenger subscribe failed"
-        );
-        return res.status(400).json({
-          error: "meta_subscribe_failed",
-          meta: subRes.data?.error || subRes.data
-        });
+        logger.warn({ status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId }, "❌ Messenger subscribe failed");
+        return res.status(400).json({ error: "meta_subscribe_failed", meta: subRes.data?.error || subRes.data });
       }
 
       const current = await prisma.channelConfig.findUnique({
@@ -755,7 +717,7 @@ router.delete(
 );
 
 // ======================================================
-// ✅ INSTAGRAM — OAuth Zenvia-like
+// ✅ INSTAGRAM — OAuth Zenvia-like (ALINHADO COM FRONT: callback -> pages + connectState)
 // ======================================================
 
 // POST /settings/channels/instagram/start
@@ -799,7 +761,6 @@ router.post(
       });
     } catch (e) {
       logger.error({ err: e }, "❌ POST /settings/channels/instagram/start");
-      // ✅ devolve 400 se for erro de configuração
       const msg = String(e?.message || "internal_error");
       const isConfig = /não configurado|inferir base/i.test(msg);
       return res.status(isConfig ? 400 : 500).json({ error: msg });
@@ -807,7 +768,7 @@ router.post(
   }
 );
 
-// ✅ POST /settings/channels/instagram/callback
+// POST /settings/channels/instagram/callback
 router.post(
   "/instagram/callback",
   requireAuth,
@@ -821,25 +782,18 @@ router.post(
       const state = String(req.body?.state || "").trim();
       if (!code || !state) return res.status(400).json({ error: "missing_code_or_state" });
 
-      // ✅ state parse/verify com erro tratado (não vira 500)
+      // 0) verify state
       let parsed;
       try {
         parsed = verifyState(state);
       } catch (e) {
-        logger.warn(
-          {
-            reqId,
-            err: e?.message || String(e),
-            stateLen: state.length,
-            tenantReq: getTenantId(req) || null
-          },
-          "❌ Instagram callback invalid_state"
-        );
+        logger.warn({ reqId, err: e?.message || String(e), stateLen: state.length, tenantReq: getTenantId(req) || null }, "❌ Instagram callback invalid_state");
         return res.status(400).json({ error: "invalid_state" });
       }
 
       const tenantIdFromState = String(parsed?.tenantId || "").trim();
       const channel = String(parsed?.channel || "").trim();
+      const redirectUriFromState = String(parsed?.redirectUri || "").trim();
 
       if (!tenantIdFromState) return res.status(400).json({ error: "invalid_state" });
       if (channel && channel !== "instagram") return res.status(400).json({ error: "invalid_state" });
@@ -849,108 +803,67 @@ router.post(
         return res.status(403).json({ error: "tenant_mismatch" });
       }
 
-      const redirectUri = getInstagramOAuthRedirectUri(req);
+      // ✅ CRÍTICO: redirect_uri PRECISA ser o MESMO do start (state)
+      const redirectUri = redirectUriFromState || getOAuthRedirectUri(req, "instagram");
 
       // 1) code -> short user token
       const tokenRes = await exchangeCodeForUserToken({ code, redirectUri });
-
       if (!tokenRes.ok || !tokenRes?.json?.access_token) {
-        logger.warn(
-          {
-            reqId,
-            status: tokenRes.status,
-            meta: tokenRes.json?.error || tokenRes.json,
-            redirectUriUsed: redirectUri,
-            tenantId: tenantIdFromState
-          },
-          "❌ Instagram code->token failed"
-        );
-        return res.status(400).json({
-          error: "token_exchange_failed",
-          meta: tokenRes.json?.error || tokenRes.json
-        });
+        logger.warn({ reqId, status: tokenRes.status, meta: tokenRes.json?.error || tokenRes.json, redirectUriUsed: redirectUri, tenantId: tenantIdFromState }, "❌ Instagram code->token failed");
+        return res.status(400).json({ error: "token_exchange_failed", meta: tokenRes.json?.error || tokenRes.json });
       }
 
       const shortUserToken = String(tokenRes.json.access_token);
 
-      // 2) short -> long-lived
+      // 2) short -> long-lived (OBRIGATÓRIO aqui)
       const exchanged = await exchangeForLongLivedUserToken(shortUserToken);
-      if (!exchanged.ok) {
-        logger.warn(
-          { reqId, meta: exchanged.meta || null, tenantId: tenantIdFromState },
-          "❌ Instagram long-lived exchange failed"
-        );
-        return res.status(400).json({
-          error: "long_lived_exchange_failed",
-          meta: exchanged.meta || null
-        });
+      if (!exchanged.ok || !exchanged.accessToken) {
+        logger.warn({ reqId, meta: exchanged.meta || null, tenantId: tenantIdFromState }, "❌ Instagram long-lived exchange failed");
+        return res.status(400).json({ error: "long_lived_exchange_failed", meta: exchanged.meta || null });
       }
 
-      // ✅ retorno “simples”: front usa esse token pra listar páginas e conectar
+      const longUserToken = exchanged.accessToken;
+
+      // 3) lista pages (id,name) — front vai escolher
+      const meAccountsUrl =
+        `https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts` +
+        `?fields=id,name` +
+        `&access_token=${encodeURIComponent(longUserToken)}`;
+
+      const pagesResp = await fetch(meAccountsUrl, { method: "GET" });
+      const pagesJson = await pagesResp.json().catch(() => ({}));
+
+      if (!pagesResp.ok) {
+        logger.warn({ reqId, status: pagesResp.status, meta: pagesJson?.error || pagesJson, tenantId: tenantIdFromState }, "❌ Instagram /me/accounts failed");
+        return res.status(400).json({ error: "meta_list_pages_failed", meta: pagesJson?.error || pagesJson });
+      }
+
+      const pages = safeArr(pagesJson?.data)
+        .filter((p) => p?.id && p?.name)
+        .map((p) => ({ id: String(p.id), name: String(p.name) }));
+
+      if (!pages.length) {
+        return res.status(409).json({ error: "no_pages_returned", hint: "A conta não retornou nenhuma Página. Verifique permissões do app e se o usuário administra uma Página." });
+      }
+
+      // 4) connectState (assinado) com token long-lived
+      const connectState = signState({
+        tenantId: tenantIdFromState,
+        ts: Date.now(),
+        channel: "instagram_connect",
+        userAccessToken: longUserToken,
+        expiresIn: exchanged.expiresIn ?? null
+      });
+
       return res.json({
         ok: true,
-        userAccessToken: exchanged.accessToken,
+        pages,
+        connectState,
         tokenKind: "long_lived",
-        expiresIn: exchanged.expiresIn ?? null,
-        exchangeMeta: null
+        expiresIn: exchanged.expiresIn ?? null
       });
     } catch (e) {
       logger.error({ reqId, err: e }, "❌ POST /settings/channels/instagram/callback");
-      return res.status(500).json({ error: "internal_error" });
-    }
-  }
-);
-
-// POST /settings/channels/instagram/pages
-router.post(
-  "/instagram/pages",
-  requireAuth,
-  enforceTokenTenant,
-  requireRole("admin", "manager"),
-  async (req, res) => {
-    try {
-      const userAccessToken = String(req.body?.userAccessToken || "").trim();
-      if (!userAccessToken) return res.status(400).json({ error: "userAccessToken_required" });
-
-      // ✅ best-effort: tenta trocar, se falhar usa o token que já tem
-      let tokenToUse = userAccessToken;
-      try {
-        const exchanged = await exchangeForLongLivedUserToken(userAccessToken);
-        if (exchanged?.ok && exchanged?.accessToken) tokenToUse = exchanged.accessToken;
-      } catch {
-        // ignore
-      }
-
-      const url =
-        `https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts` +
-        `?fields=id,name,access_token` +
-        `&access_token=${encodeURIComponent(tokenToUse)}`;
-
-      const r = await fetch(url, { method: "GET" });
-      const j = await r.json().catch(() => ({}));
-
-      if (!r.ok) {
-        logger.warn(
-          { status: r.status, meta: j?.error || j },
-          "❌ Instagram pages list failed"
-        );
-
-        return res.status(400).json({
-          error: "meta_list_pages_failed",
-          meta: j?.error || j
-        });
-      }
-
-      const data = Array.isArray(j.data) ? j.data : [];
-      return res.json({
-        pages: data.map((p) => ({
-          id: String(p?.id || ""),
-          name: String(p?.name || ""),
-          pageAccessToken: String(p?.access_token || "")
-        }))
-      });
-    } catch (e) {
-      logger.error({ err: e }, "❌ POST /settings/channels/instagram/pages");
       return res.status(500).json({ error: "internal_error" });
     }
   }
@@ -968,57 +881,36 @@ router.post(
       if (!tenantId) return res.status(400).json({ error: "tenant_not_resolved" });
 
       const pageId = String(req.body?.pageId || "").trim();
-
-      // ✅ NOVO: aceita connectState OU token direto
       const connectState = String(req.body?.connectState || "").trim();
-
-      let userAccessToken = String(req.body?.userAccessToken || req.body?.accessToken || "").trim();
-
-      if (connectState) {
-        const parsed = verifyState(connectState);
-        const tid = String(parsed?.tenantId || "").trim();
-        const ch = String(parsed?.channel || "").trim();
-
-        if (!tid || tid !== String(tenantId)) return res.status(403).json({ error: "tenant_mismatch" });
-        if (ch && ch !== "instagram_connect") return res.status(400).json({ error: "invalid_state" });
-
-        userAccessToken = String(parsed?.userAccessToken || "").trim();
-      }
-
       const subscribedFields = Array.isArray(req.body?.subscribedFields)
         ? req.body.subscribedFields.map(String).map((s) => s.trim()).filter(Boolean)
         : ["messages"];
 
       if (!pageId) return res.status(400).json({ error: "pageId_required" });
+      if (!connectState) return res.status(400).json({ error: "connectState_required" });
+
+      let parsed;
+      try {
+        parsed = verifyState(connectState);
+      } catch {
+        return res.status(400).json({ error: "invalid_state" });
+      }
+
+      const tid = String(parsed?.tenantId || "").trim();
+      const ch = String(parsed?.channel || "").trim();
+      const userAccessToken = String(parsed?.userAccessToken || "").trim();
+      const userTokenExpiresIn = parsed?.expiresIn ?? null;
+
+      if (!tid || tid !== String(tenantId)) return res.status(403).json({ error: "tenant_mismatch" });
+      if (ch && ch !== "instagram_connect") return res.status(400).json({ error: "invalid_state" });
       if (!userAccessToken) return res.status(400).json({ error: "userAccessToken_required" });
 
-      // ... mantém TODO o resto do seu connect igual daqui pra baixo ...
-
-
-      // ✅ best-effort long-lived: se falhar, usa o token original
-      let userTokenToUse = userAccessToken;
-      let userTokenExpiresIn = null;
-
-      try {
-        const exchanged = await exchangeForLongLivedUserToken(userAccessToken);
-        if (exchanged?.ok && exchanged?.accessToken) {
-          userTokenToUse = exchanged.accessToken;
-          userTokenExpiresIn = exchanged.expiresIn ?? null;
-        } else {
-          logger.warn({ meta: exchanged?.meta || exchanged }, "⚠️ IG long-lived exchange failed (best-effort)");
-        }
-      } catch (e) {
-        logger.warn({ err: e }, "⚠️ IG long-lived exchange exception (best-effort)");
-      }
-
-      // 1) resolve PAGE TOKEN via /me/accounts
-      const pageTok = await fetchPageAccessTokenFromUser(userTokenToUse, pageId);
+      // 1) resolve PAGE TOKEN via /me/accounts?fields=...access_token
+      const pageTok = await fetchPageAccessTokenFromUser(userAccessToken, pageId);
       if (!pageTok.ok) {
-        return res.status(400).json({
-          error: pageTok.error,
-          meta: pageTok.meta || null
-        });
+        return res.status(400).json({ error: pageTok.error, meta: pageTok.meta || null });
       }
+
       const pageAccessToken = pageTok.pageAccessToken;
 
       // 2) valida Page token + resolve IG business account
@@ -1031,17 +923,12 @@ router.post(
       const vj = await v.json().catch(() => ({}));
 
       if (!v.ok || !vj?.id) {
-        logger.warn(
-          { status: v.status, meta: vj?.error || vj, tenantId, pageId },
-          "❌ Instagram connect validate failed"
-        );
+        logger.warn({ status: v.status, meta: vj?.error || vj, tenantId, pageId }, "❌ Instagram connect validate failed");
         return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
       }
 
       const displayName = String(vj?.name || pageTok.pageName || "Facebook Page").trim();
-      const instagramBusinessId = vj?.instagram_business_account?.id
-        ? String(vj.instagram_business_account.id)
-        : null;
+      const instagramBusinessId = vj?.instagram_business_account?.id ? String(vj.instagram_business_account.id) : null;
 
       if (!instagramBusinessId) {
         return res.status(409).json({
@@ -1054,9 +941,8 @@ router.post(
       let igUsername = "";
       try {
         const igInfoUrl =
-          `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
-            instagramBusinessId
-          )}?fields=id,username,name&access_token=${encodeURIComponent(pageAccessToken)}`;
+          `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(instagramBusinessId)}` +
+          `?fields=id,username,name&access_token=${encodeURIComponent(pageAccessToken)}`;
 
         const igResp = await fetch(igInfoUrl, { method: "GET" });
         const igJson = await igResp.json().catch(() => ({}));
@@ -1068,20 +954,12 @@ router.post(
       // 4) subscribe (best effort)
       let subscribeOk = false;
       try {
-        const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
-          pageId
-        )}/subscribed_apps`;
-
-        const subRes = await graphPostJson(subUrl, pageAccessToken, {
-          subscribed_fields: subscribedFields
-        });
+        const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`;
+        const subRes = await graphPostJson(subUrl, pageAccessToken, { subscribed_fields: subscribedFields });
 
         subscribeOk = !!subRes.ok;
         if (!subRes.ok) {
-          logger.warn(
-            { status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId },
-            "⚠️ Instagram subscribe failed (best effort)"
-          );
+          logger.warn({ status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId }, "⚠️ Instagram subscribe failed (best effort)");
         }
       } catch (e) {
         logger.warn({ err: e, tenantId, pageId }, "⚠️ Instagram subscribe exception (best effort)");
@@ -1208,7 +1086,6 @@ router.post(
       const appId = requireEnv("META_APP_ID");
       const redirectUri = getOAuthRedirectUri(req, "whatsapp");
 
-      // ✅ inclui channel no state (ajuda o front detectar)
       const state = signState({ tenantId, ts: Date.now(), channel: "whatsapp", redirectUri });
 
       logger.info({ tenantId, redirectUri }, "🟢 WhatsApp Embedded Signup start");
@@ -1231,7 +1108,7 @@ router.post(
 
 async function exchangeCodeForToken({ appId, appSecret, code, redirectUri }) {
   const url =
-    `https://graph.facebook.com/v19.0/oauth/access_token` +
+    `https://graph.facebook.com/${META_GRAPH_VERSION}/oauth/access_token` +
     `?client_id=${encodeURIComponent(appId)}` +
     `&client_secret=${encodeURIComponent(appSecret)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
@@ -1246,9 +1123,9 @@ async function fetchWabaAndPhoneNumber({ accessToken }) {
   const businessId = optionalEnv("META_BUSINESS_ID");
   if (!businessId) return { ok: false, reason: "META_BUSINESS_ID_not_set" };
 
-  const wabasUrl = `https://graph.facebook.com/v19.0/${encodeURIComponent(
-    businessId
-  )}/owned_whatsapp_business_accounts?fields=id,name`;
+  const wabasUrl =
+    `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(businessId)}` +
+    `/owned_whatsapp_business_accounts?fields=id,name`;
 
   const wabasRes = await graphGetJson(wabasUrl, accessToken);
   if (!wabasRes.ok) return { ok: false, step: "owned_wabas", ...wabasRes };
@@ -1256,9 +1133,9 @@ async function fetchWabaAndPhoneNumber({ accessToken }) {
   const wabaId = wabasRes.data?.data?.[0]?.id || null;
   if (!wabaId) return { ok: false, step: "owned_wabas_empty", data: wabasRes.data };
 
-  const phonesUrl = `https://graph.facebook.com/v19.0/${encodeURIComponent(
-    wabaId
-  )}/phone_numbers?fields=id,display_phone_number,verified_name`;
+  const phonesUrl =
+    `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(wabaId)}` +
+    `/phone_numbers?fields=id,display_phone_number,verified_name`;
 
   const phonesRes = await graphGetJson(phonesUrl, accessToken);
   if (!phonesRes.ok) return { ok: false, step: "phone_numbers", ...phonesRes };
@@ -1289,11 +1166,12 @@ router.post(
       }
 
       const tenantId = String(parsedState?.tenantId || "").trim();
+      const redirectUriFromState = String(parsedState?.redirectUri || "").trim();
       if (!tenantId) return res.status(400).json({ error: "invalid_state" });
 
       const appId = requireEnv("META_APP_ID");
       const appSecret = requireEnv("META_APP_SECRET");
-      const redirectUri = getOAuthRedirectUri(req, "whatsapp");
+      const redirectUri = redirectUriFromState || getOAuthRedirectUri(req, "whatsapp");
 
       logger.info({ tenantId, redirectUri }, "🟡 WhatsApp callback: exchanging code");
 
@@ -1301,12 +1179,7 @@ router.post(
 
       if (!tokenRes.ok || !tokenRes?.json?.access_token) {
         logger.error(
-          {
-            tokenRes: tokenRes?.json,
-            status: tokenRes?.status,
-            redirectUriUsed: redirectUri,
-            tenantId
-          },
+          { tokenRes: tokenRes?.json, status: tokenRes?.status, redirectUriUsed: redirectUri, tenantId },
           "❌ Meta token exchange failed"
         );
         return res.status(400).json({
@@ -1334,7 +1207,7 @@ router.post(
         phoneNumberId: sync.ok ? sync.phoneNumberId : null,
         displayPhoneNumber: sync.ok ? sync.displayPhoneNumber : null,
         verifiedName: sync.ok ? sync.verifiedName : null,
-        apiVersion: "v19.0"
+        apiVersion: META_GRAPH_VERSION
       };
 
       await prisma.channelConfig.upsert({
@@ -1420,8 +1293,12 @@ router.delete(
 export default router;
 
 /*
-✅ ENV (produção) — recomendado (mas agora tem fallback)
+✅ ENV (produção) — recomendado
 - PUBLIC_APP_BASE=https://cliente.gplabs.com.br
 - META_OAUTH_REDIRECT_URI=https://cliente.gplabs.com.br/settings/channels/whatsapp/callback
 - META_INSTAGRAM_OAUTH_REDIRECT_URI=https://cliente.gplabs.com.br/settings/channels/instagram/callback
+- META_APP_ID=...
+- META_APP_SECRET=...
+- META_BUSINESS_ID=... (opcional p/ sync WA)
+- JWT_SECRET=...
 */
