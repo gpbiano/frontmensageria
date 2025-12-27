@@ -37,6 +37,7 @@ if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath, override: false });
 }
 
+// default seguro
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
 // ===============================
@@ -62,13 +63,9 @@ try {
   const mod = await import("./lib/prisma.js");
   prisma = mod?.prisma || mod?.default || mod;
 
-  prismaReady = !!(
-    prisma?.user &&
-    prisma?.tenant &&
-    prisma?.conversation &&
-    prisma?.message &&
-    prisma?.channelConfig
-  );
+  // ⚠️ não amarro em model específico (channelConfig etc),
+  // só no básico que você SEMPRE usa no health/flows.
+  prismaReady = !!(prisma?.user && prisma?.tenant && prisma?.conversation && prisma?.message);
 
   logger.info({ prismaReady }, "🧠 Prisma status");
 } catch (err) {
@@ -139,11 +136,44 @@ app.use(
 );
 
 // ===============================
-// CORS (GLOBAL)
+// CORS (GLOBAL) — FIX DEFINITIVO
+// - garante CORS até em erro (porque vem antes de tudo)
+// - suporta credenciais
+// - whitelisting opcional via CORS_ORIGINS
 // ===============================
+function buildAllowedOrigins() {
+  const raw = String(process.env.CORS_ORIGINS || "").trim();
+  if (!raw) {
+    return [
+      "https://cliente.gplabs.com.br",
+      "https://app.gplabs.com.br",
+      "http://localhost:5173",
+      "http://localhost:3000"
+    ];
+  }
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const ALLOWED_ORIGINS = buildAllowedOrigins();
+
 const corsConfig = {
-  origin: true,
+  origin(origin, cb) {
+    // permite tools/curl (sem Origin) e chamadas server-to-server
+    if (!origin) return cb(null, true);
+
+    // se quiser wildcard total em dev:
+    if (ENV !== "production") return cb(null, true);
+
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+
+    // bloqueia origem não permitida (melhor que "true" em prod)
+    return cb(new Error(`CORS blocked: ${origin}`));
+  },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
     "Authorization",
@@ -151,20 +181,18 @@ const corsConfig = {
     "X-Widget-Key",
     "X-Webchat-Token"
   ],
-  exposedHeaders: ["Authorization"]
+  exposedHeaders: ["Authorization"],
+  maxAge: 86400
 };
 
 app.use(cors(corsConfig));
-
-/**
- * 🔥 FIX DEFINITIVO DE CORS
- * Preflight NÃO passa por auth
- */
+// preflight global
 app.options("*", cors(corsConfig));
 
 // ===============================
 // BODY PARSER (rawBody p/ Meta)
 // ===============================
+// ⚠️ Meta webhook signature precisa do rawBody
 app.use(
   express.json({
     limit: "5mb",
@@ -240,13 +268,13 @@ app.use("/auth", passwordRouter);
 // Webchat público
 app.use("/webchat", requirePrisma, webchatRouter);
 
-// Webhooks públicos
+// Webhooks públicos (NÃO passam por requireAuth)
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 app.use("/webhook/instagram", instagramWebhookRouter);
 
 // ===============================
-// 🔒 MIDDLEWARE GLOBAL
+// 🔒 MIDDLEWARE GLOBAL (PROTEGIDO)
 // ===============================
 app.use(requireAuth);
 app.use(enforceTokenTenant);
@@ -292,6 +320,7 @@ app.use((req, res) => {
 
 // ===============================
 // ERROR HANDLER
+// ✅ garante JSON consistente e ajuda a enxergar erro real
 // ===============================
 app.use((err, req, res, _next) => {
   logger.error(
@@ -299,19 +328,38 @@ app.use((err, req, res, _next) => {
       err,
       url: req.url,
       method: req.method,
+      origin: req.headers?.origin || null,
       tenantId: req.tenant?.id || null,
       userId: req.user?.id || null
     },
     "❌ Erro não tratado"
   );
 
-  res.status(500).json({ error: "internal_server_error" });
+  // se já enviou headers, delega pro express
+  if (res.headersSent) return;
+
+  const msg = err?.message ? String(err.message) : "internal_server_error";
+  const isCors = msg.toLowerCase().includes("cors blocked");
+
+  res.status(isCors ? 403 : 500).json({
+    error: isCors ? "cors_blocked" : "internal_server_error",
+    detail: ENV !== "production" ? msg : undefined
+  });
 });
 
 // ===============================
 // START
 // ===============================
 const PORT = Number(process.env.PORT || 3010);
+
 app.listen(PORT, () => {
-  logger.info({ PORT, ENV, prismaReady }, "🚀 API rodando");
+  logger.info(
+    {
+      PORT,
+      ENV,
+      prismaReady,
+      allowedOrigins: ENV === "production" ? ALLOWED_ORIGINS : "dev:allow-all"
+    },
+    "🚀 API rodando"
+  );
 });
