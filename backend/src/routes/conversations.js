@@ -51,16 +51,12 @@ function hasCol(obj, key) {
   return obj && Object.prototype.hasOwnProperty.call(obj, key);
 }
 
-// ✅ pega texto do front e também de formatos comuns
 function msgTextFromRaw(raw) {
   if (!raw) return "";
   if (typeof raw.text === "string") return raw.text;
   if (typeof raw.text?.body === "string") return raw.text.body;
-  if (typeof raw.message === "string") return raw.message; // ✅ fallback comum
-  if (typeof raw.body === "string") return raw.body; // ✅ fallback comum
   if (typeof raw.content === "string") return raw.content;
   if (typeof raw.caption === "string") return raw.caption;
-  if (typeof raw.value === "string") return raw.value; // ✅ fallback comum
   return "";
 }
 
@@ -83,7 +79,7 @@ function requireTenantOr401(req, res) {
 }
 
 // ======================================================
-// ✅ PATCH: NOME DO CONTATO (4 CANAIS) + FALLBACKS REAIS
+// NOME DO CONTATO (4 CANAIS) + FALLBACKS
 // ======================================================
 function resolveContactName(payload = {}, rawMsg = {}) {
   const waName =
@@ -149,6 +145,7 @@ function displayNameFallbackByChannel(channel, peerId) {
 
 // ======================================================
 // NORMALIZA PARA O SHAPE LEGADO DO FRONT
+// (se vier include: { contact: true }, usa contact.name)
 // ======================================================
 function normalizeConversationRow(convRow) {
   if (!convRow) return null;
@@ -194,11 +191,11 @@ function normalizeConversationRow(convRow) {
     displayNameFallbackByChannel(channel, peerId);
 
   const lastMessagePreview = safeStr(m.lastMessagePreview || "");
-  const lastMessageAt =
-    (hasCol(convRow, "lastMessageAt") && convRow.lastMessageAt
-      ? new Date(convRow.lastMessageAt).toISOString()
-      : null) ||
-    (m.lastMessageAt ? String(m.lastMessageAt) : null);
+  const lastMessageAt = convRow.lastMessageAt
+    ? new Date(convRow.lastMessageAt).toISOString()
+    : m.lastMessageAt
+    ? String(m.lastMessageAt)
+    : null;
 
   let inboxVisible =
     (hasCol(convRow, "inboxVisible") ? convRow.inboxVisible : undefined) ?? m.inboxVisible;
@@ -222,13 +219,11 @@ function normalizeConversationRow(convRow) {
   const assignedGroupId = safeStr(
     (hasCol(convRow, "assignedGroupId") ? convRow.assignedGroupId : undefined) ??
       m.assignedGroupId ??
-      m.groupId ??
       ""
   );
   const assignedUserId = safeStr(
     (hasCol(convRow, "assignedUserId") ? convRow.assignedUserId : undefined) ??
       m.assignedUserId ??
-      m.assignedAgentId ??
       ""
   );
 
@@ -282,8 +277,6 @@ function normalizeMessageRow(convNorm, msgRow) {
 
   const from = safeStr(mm.from || (msgRow.direction === "in" ? "client" : "agent"));
   const isBot = Boolean(mm.isBot || from === "bot");
-  const providerMessageId = mm.providerMessageId || null;
-  const waMessageId = mm.waMessageId || null;
 
   return {
     id: String(msgRow.id),
@@ -296,8 +289,8 @@ function normalizeMessageRow(convNorm, msgRow) {
     isBot,
     text: typeof msgRow.text === "string" ? msgRow.text : mm.text || "",
     createdAt: msgRow.createdAt ? new Date(msgRow.createdAt).toISOString() : nowIso(),
-    waMessageId,
-    providerMessageId,
+    waMessageId: mm.waMessageId || null,
+    providerMessageId: mm.providerMessageId || null,
     payload: mm.payload,
     delivery: mm.delivery,
     tenantId: msgRow.tenantId
@@ -305,61 +298,17 @@ function normalizeMessageRow(convNorm, msgRow) {
 }
 
 // ======================================================
-// 🔌 CONEXÃO DO CANAL (DB) + SENDERS META
+// ✅ CANAL: LÊ DO LUGAR CERTO (ChannelConfig)
 // ======================================================
-async function getChannelConn(tenantId, type) {
-  const channelModel =
-    prisma.channel ||
-    prisma.channels ||
-    prisma.tenantChannel ||
-    prisma.channelConnection ||
-    prisma.integration ||
-    null;
+async function getChannelConn(tenantId, channel) {
+  if (!prisma?.channelConfig?.findUnique) return null;
 
-  if (!channelModel?.findUnique && !channelModel?.findFirst) return null;
-
-  const row =
-    (channelModel.findUnique
-      ? await channelModel
-          .findUnique({ where: { tenantId_type: { tenantId, type } } })
-          .catch(() => null)
-      : null) ||
-    (channelModel.findFirst
-      ? await channelModel.findFirst({ where: { tenantId, type } }).catch(() => null)
-      : null);
+  const row = await prisma.channelConfig
+    .findUnique({ where: { tenantId_channel: { tenantId, channel } } })
+    .catch(() => null);
 
   if (!row) return null;
-  const m = asJson(row.metadata);
-  return { row, meta: m };
-}
-
-async function maybeFetchPeerNameFromGraph({ tenantId, channel, peerId }) {
-  const ch = safeStr(channel).toLowerCase();
-  if (ch !== "messenger" && ch !== "instagram") return "";
-
-  const conn = await getChannelConn(tenantId, ch);
-  const token = safeStr(conn?.meta?.pageAccessToken || conn?.meta?.accessToken || "");
-  if (!token) return "";
-
-  const id = peerToPSID(peerId);
-  if (!id) return "";
-
-  const fields = ch === "messenger" ? "name,first_name,last_name" : "name,username";
-  const url = `${META_GRAPH_BASE}/${encodeURIComponent(id)}?fields=${encodeURIComponent(
-    fields
-  )}&access_token=${encodeURIComponent(token)}`;
-
-  const resp = await fetch(url, { method: "GET" }).catch(() => null);
-  if (!resp || !resp.ok) return "";
-
-  const json = await resp.json().catch(() => ({}));
-  const full =
-    safeStr(json?.name) ||
-    safeStr([json?.first_name, json?.last_name].filter(Boolean).join(" ")) ||
-    safeStr(json?.username) ||
-    "";
-
-  return full;
+  return { row, config: asJson(row.config) };
 }
 
 // ======================================================
@@ -367,20 +316,20 @@ async function maybeFetchPeerNameFromGraph({ tenantId, channel, peerId }) {
 // ======================================================
 async function sendWhatsAppText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "whatsapp");
-  const accessToken = safeStr(conn?.meta?.accessToken || conn?.meta?.token || "");
-  const phoneNumberId = safeStr(conn?.meta?.phoneNumberId || conn?.meta?.phone_number_id || "");
+  const accessToken = safeStr(conn?.row?.accessToken || "");
+  const phoneNumberId = safeStr(conn?.row?.phoneNumberId || "");
 
   if (!accessToken || !phoneNumberId) {
     return {
       ok: false,
-      error: "WhatsApp não conectado (token/phoneNumberId ausentes no Channel.metadata)"
+      error: "WhatsApp não conectado (accessToken/phoneNumberId ausentes em ChannelConfig)"
     };
   }
 
   const to = peerToWhatsAppTo(peerId);
   if (!to) return { ok: false, error: "peerId inválido para WhatsApp (to vazio)" };
 
-  const url = `${META_GRAPH_BASE}/${phoneNumberId}/messages`;
+  const url = `${META_GRAPH_BASE}/${encodeURIComponent(phoneNumberId)}/messages`;
   const body = {
     messaging_product: "whatsapp",
     to,
@@ -402,8 +351,7 @@ async function sendWhatsAppText({ tenantId, peerId, text }) {
     return {
       ok: false,
       error: json?.error?.message || `WhatsApp Graph ${resp.status}`,
-      meta: json?.error || json,
-      raw: json
+      meta: json?.error || json
     };
   }
 
@@ -413,9 +361,9 @@ async function sendWhatsAppText({ tenantId, peerId, text }) {
 
 async function sendMessengerText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "messenger");
-  const pageAccessToken = safeStr(conn?.meta?.pageAccessToken || conn?.meta?.accessToken || "");
+  const pageAccessToken = safeStr(conn?.row?.accessToken || "");
   if (!pageAccessToken) {
-    return { ok: false, error: "Messenger não conectado (pageAccessToken ausente no Channel.metadata)" };
+    return { ok: false, error: "Messenger não conectado (accessToken ausente em ChannelConfig)" };
   }
 
   const psid = peerToPSID(peerId);
@@ -439,8 +387,7 @@ async function sendMessengerText({ tenantId, peerId, text }) {
     return {
       ok: false,
       error: json?.error?.message || `Messenger Graph ${resp.status}`,
-      meta: json?.error || json,
-      raw: json
+      meta: json?.error || json
     };
   }
 
@@ -449,9 +396,9 @@ async function sendMessengerText({ tenantId, peerId, text }) {
 
 async function sendInstagramText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "instagram");
-  const token = safeStr(conn?.meta?.pageAccessToken || conn?.meta?.accessToken || "");
+  const token = safeStr(conn?.row?.accessToken || "");
   if (!token) {
-    return { ok: false, error: "Instagram não conectado (token ausente no Channel.metadata)" };
+    return { ok: false, error: "Instagram não conectado (accessToken ausente em ChannelConfig)" };
   }
 
   const igUserId = peerToPSID(peerId);
@@ -474,8 +421,7 @@ async function sendInstagramText({ tenantId, peerId, text }) {
     return {
       ok: false,
       error: json?.error?.message || `Instagram Graph ${resp.status}`,
-      meta: json?.error || json,
-      raw: json
+      meta: json?.error || json
     };
   }
 
@@ -509,9 +455,7 @@ async function upsertContact({ tenantId, channel, peerId, title, phone, waId, vi
   const finalName = safeStr(title) || displayNameFallbackByChannel(channel, peerId);
 
   return prisma.contact.upsert({
-    where: {
-      tenantId_channel_externalId: { tenantId, channel, externalId }
-    },
+    where: { tenantId_channel_externalId: { tenantId, channel, externalId } },
     update: {
       ...(finalName ? { name: finalName } : {}),
       ...(phone ? { phone } : {}),
@@ -546,15 +490,7 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   if (!source || !peerId) return { ok: false, error: "source e peerId obrigatórios" };
 
   let resolvedName = resolveContactName(payload, payload.raw || payload);
-
-  if (resolvedName === "Contato" && (channel === "messenger" || channel === "instagram")) {
-    const graphName = await maybeFetchPeerNameFromGraph({ tenantId, channel, peerId });
-    if (safeStr(graphName)) resolvedName = safeStr(graphName);
-  }
-
-  if (resolvedName === "Contato") {
-    resolvedName = displayNameFallbackByChannel(channel, peerId);
-  }
+  if (resolvedName === "Contato") resolvedName = displayNameFallbackByChannel(channel, peerId);
 
   const contact = await upsertContact({
     tenantId,
@@ -619,9 +555,7 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
         data: { metadata: setMeta(conv, { title: resolvedName, peerId, channel, source }) }
       });
 
-      await prisma.contact
-        .update({ where: { id: contact.id }, data: { name: resolvedName } })
-        .catch(() => {});
+      await prisma.contact.update({ where: { id: contact.id }, data: { name: resolvedName } }).catch(() => {});
     }
   }
 
@@ -644,16 +578,18 @@ async function promoteToInboxPrisma({ convRow, reason = "handoff" }) {
     queuedAt: meta.queuedAt || now
   };
 
-  const data = { metadata: setMeta(convRow, patch) };
-
-  if (hasCol(convRow, "currentMode")) data.currentMode = "human";
-  if (hasCol(convRow, "handoffActive")) data.handoffActive = true;
-  if (hasCol(convRow, "handoffSince")) data.handoffSince = new Date(patch.handoffSince);
-  if (hasCol(convRow, "inboxVisible")) data.inboxVisible = true;
-  if (hasCol(convRow, "inboxStatus")) data.inboxStatus = "waiting_human";
-  if (hasCol(convRow, "queuedAt")) data.queuedAt = new Date(patch.queuedAt);
-
-  return prisma.conversation.update({ where: { id: convRow.id }, data });
+  return prisma.conversation.update({
+    where: { id: convRow.id },
+    data: {
+      currentMode: "human",
+      handoffActive: true,
+      handoffSince: new Date(patch.handoffSince),
+      inboxVisible: true,
+      inboxStatus: "waiting_human",
+      queuedAt: new Date(patch.queuedAt),
+      metadata: setMeta(convRow, patch)
+    }
+  });
 }
 
 async function touchConversationPrisma({ convRow, msgText }) {
@@ -662,71 +598,28 @@ async function touchConversationPrisma({ convRow, msgText }) {
 
   const patch = { lastMessageAt: atIso, lastMessagePreview: preview };
 
-  const data = { metadata: setMeta(convRow, patch) };
-  if (hasCol(convRow, "lastMessageAt")) data.lastMessageAt = new Date(atIso);
-
-  return prisma.conversation.update({ where: { id: convRow.id }, data });
+  return prisma.conversation.update({
+    where: { id: convRow.id },
+    data: {
+      lastMessageAt: new Date(atIso),
+      metadata: setMeta(convRow, patch)
+    }
+  });
 }
 
 async function bumpBotAttempts({ convRow }) {
   const meta = getMeta(convRow);
   const nextBotAttempts = Number(meta.botAttempts || 0) + 1;
 
-  const data = { metadata: setMeta(convRow, { botAttempts: nextBotAttempts, currentMode: "bot" }) };
-  if (hasCol(convRow, "currentMode")) data.currentMode = "bot";
-
-  await prisma.conversation.update({ where: { id: convRow.id }, data });
-  return nextBotAttempts;
-}
-
-async function addSystemMessage({ convRow, text, code = "system" }) {
-  const createdAtIso = nowIso();
-
-  const msgRow = await prisma.message.create({
+  await prisma.conversation.update({
+    where: { id: convRow.id },
     data: {
-      id: newId("msg"),
-      tenantId: convRow.tenantId,
-      conversationId: convRow.id,
-      direction: "out",
-      type: "system",
-      text: safeStr(text),
-      status: "sent",
-      metadata: {
-        from: "system",
-        isBot: false,
-        code,
-        source: getMeta(convRow).source || convRow.channel,
-        channel: convRow.channel,
-        tenantId: convRow.tenantId
-      },
-      createdAt: new Date(createdAtIso)
+      currentMode: "bot",
+      metadata: setMeta(convRow, { botAttempts: nextBotAttempts, currentMode: "bot" })
     }
   });
 
-  await touchConversationPrisma({ convRow, msgText: text });
-  return msgRow;
-}
-
-async function closeConversationPrisma({ convRow, closedBy, closedReason }) {
-  const atIso = nowIso();
-
-  const patch = {
-    status: "closed",
-    closedAt: atIso,
-    closedBy: closedBy || null,
-    closedReason: closedReason || "manual_by_agent",
-    handoffActive: false,
-    inboxVisible: false,
-    inboxStatus: "closed"
-  };
-
-  const data = { status: "closed", metadata: setMeta(convRow, patch) };
-
-  if (hasCol(convRow, "handoffActive")) data.handoffActive = false;
-  if (hasCol(convRow, "inboxStatus")) data.inboxStatus = "closed";
-  if (hasCol(convRow, "inboxVisible")) data.inboxVisible = false;
-
-  return prisma.conversation.update({ where: { id: convRow.id }, data });
+  return nextBotAttempts;
 }
 
 export async function appendMessage(dbOrConversationId, conversationIdOrRaw, maybeRaw) {
@@ -832,15 +725,15 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     nameFromMsg = displayNameFallbackByChannel(convNorm.channel, metaBefore.peerId || "");
   }
 
-  if (!safeStr(metaBefore.title) || safeStr(metaBefore.title) === "Contato") {
-    await prisma.conversation
-      .update({
-        where: { id: convRow.id },
-        data: { metadata: setMeta(convRow, { title: nameFromMsg }) }
-      })
-      .catch(() => {});
-  }
+  // atualiza metadata.title
+  await prisma.conversation
+    .update({
+      where: { id: convRow.id },
+      data: { metadata: setMeta(convRow, { title: nameFromMsg }) }
+    })
+    .catch(() => {});
 
+  // atualiza contato
   if (convRow.contactId) {
     await prisma.contact
       .update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } })
@@ -859,7 +752,7 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 }
 
 // ======================================================
-// ROTAS DO PAINEL
+// ROTAS
 // ======================================================
 
 // GET /conversations?inbox=all
@@ -868,19 +761,11 @@ router.get("/", async (req, res) => {
     const tenantId = requireTenantOr401(req, res);
     if (!tenantId) return;
 
-    let rows = [];
-    try {
-      rows = await prisma.conversation.findMany({
-        where: { tenantId },
-        orderBy: { updatedAt: "desc" },
-        include: { contact: true }
-      });
-    } catch {
-      rows = await prisma.conversation.findMany({
-        where: { tenantId },
-        orderBy: { updatedAt: "desc" }
-      });
-    }
+    const rows = await prisma.conversation.findMany({
+      where: { tenantId },
+      orderBy: { updatedAt: "desc" },
+      include: { contact: true }
+    });
 
     let items = rows.map(normalizeConversationRow).filter(Boolean);
 
@@ -906,17 +791,10 @@ router.get("/:id/messages", async (req, res) => {
     const tenantId = requireTenantOr401(req, res);
     if (!tenantId) return;
 
-    let convRow = null;
-    try {
-      convRow = await prisma.conversation.findFirst({
-        where: { id: req.params.id, tenantId },
-        include: { contact: true }
-      });
-    } catch {
-      convRow = await prisma.conversation.findFirst({
-        where: { id: req.params.id, tenantId }
-      });
-    }
+    const convRow = await prisma.conversation.findFirst({
+      where: { id: req.params.id, tenantId },
+      include: { contact: true }
+    });
 
     if (!convRow) return res.status(404).json({ error: "Conversa não encontrada" });
 
@@ -933,7 +811,7 @@ router.get("/:id/messages", async (req, res) => {
   }
 });
 
-// POST /conversations/:id/messages (mensagem do agente + ✅ ENVIO PARA META)
+// POST /conversations/:id/messages (mensagem do agente + ✅ tenta enviar pra Meta)
 router.post("/:id/messages", async (req, res) => {
   try {
     const tenantId = requireTenantOr401(req, res);
@@ -957,44 +835,31 @@ router.post("/:id/messages", async (req, res) => {
 
     if (!r.ok) return res.status(400).json({ error: r.error });
 
-    // 2) resolve texto: req.body OU o salvo
-    const textFromReq = msgTextFromRaw(req.body);
-    const textFromSaved =
-      (typeof r.msgRow?.text === "string" ? r.msgRow.text : "") ||
-      (typeof r.msg?.text === "string" ? r.msg.text : "");
+    // 2) tenta enviar pro canal (mas NÃO quebra a request se falhar)
+    const text = msgTextFromRaw(req.body);
+    if (safeStr(text)) {
+      let sendRes = null;
 
-    const textToSend = safeStr(textFromReq || textFromSaved || "");
+      try {
+        sendRes = await dispatchOutboundToChannel({ convRow, msgText: text });
+      } catch (err) {
+        sendRes = { ok: false, error: "send_exception", meta: String(err?.message || err) };
+      }
 
-    if (!textToSend) {
-      return res.status(201).json({
-        ...r.msg,
-        provider: {
-          attempted: false,
-          ok: false,
-          error: "Mensagem sem texto (body não trouxe text/content/caption/message/body/value)"
-        }
-      });
-    }
+      const providerMessageId = sendRes?.providerMessageId || null;
 
-    // 3) envia pro canal
-    const sendRes = await dispatchOutboundToChannel({ convRow, msgText: textToSend });
+      const patchMeta = {
+        provider: safeStr(convRow.channel),
+        providerMessageId,
+        providerSendOk: sendRes?.ok === true,
+        providerError: sendRes?.ok ? null : sendRes?.meta || sendRes?.error || "send_failed",
+        sentAt: sendRes?.ok ? nowIso() : null
+      };
 
-    // 4) atualiza status/metadata SEMPRE
-    const msgIdToUpdate = String(r.msgRow?.id || r.msg?.id || "");
-
-    const patchMeta = {
-      provider: safeStr(convRow.channel),
-      providerMessageId: sendRes?.providerMessageId || null,
-      providerSendOk: sendRes?.ok === true,
-      providerError: sendRes?.ok ? null : (sendRes?.meta || sendRes?.error || "send_failed"),
-      sentAt: sendRes?.ok ? nowIso() : null,
-      providerRaw: sendRes?.raw || null
-    };
-
-    if (msgIdToUpdate) {
+      // salva resultado do envio no metadata da Message
       await prisma.message
         .update({
-          where: { id: msgIdToUpdate },
+          where: { id: String(r.msgRow?.id || r.msg?.id) },
           data: {
             status: sendRes?.ok ? "sent" : "failed",
             metadata: setMeta(r.msgRow || {}, patchMeta)
@@ -1003,43 +868,8 @@ router.post("/:id/messages", async (req, res) => {
         .catch(() => {});
     }
 
-    // ✅ log pro pm2
-    if (!sendRes?.ok) {
-      console.error("[OUTBOUND][META] send_failed", {
-        conversationId: convRow.id,
-        channel: convRow.channel,
-        tenantId: convRow.tenantId,
-        peerId: getMeta(convRow).peerId,
-        error: sendRes?.error,
-        meta: sendRes?.meta
-      });
-    } else {
-      console.log("[OUTBOUND][META] send_ok", {
-        conversationId: convRow.id,
-        channel: convRow.channel,
-        tenantId: convRow.tenantId,
-        providerMessageId: sendRes?.providerMessageId
-      });
-    }
-
-    // ✅ se falhou, retorna ERRO (pra você ver no DevTools)
-    if (!sendRes?.ok) {
-      return res.status(502).json({
-        error: "Falha ao enviar para o canal",
-        detail: sendRes?.error || "send_failed",
-        meta: sendRes?.meta || null
-      });
-    }
-
-    // sucesso
-    return res.status(201).json({
-      ...r.msg,
-      provider: {
-        attempted: true,
-        ok: true,
-        providerMessageId: sendRes?.providerMessageId || null
-      }
-    });
+    // ✅ sempre retorna 201 com a msg do DB
+    return res.status(201).json(r.msg);
   } catch (e) {
     res.status(500).json({ error: "Falha ao enviar mensagem", detail: String(e?.message || e) });
   }
@@ -1069,16 +899,27 @@ router.patch("/:id/status", async (req, res) => {
     const userId = safeStr(req.user?.id || req.user?.userId || "", "agent");
     const reason = safeStr(req.body?.reason || "manual_by_agent");
 
-    await addSystemMessage({
-      convRow,
-      text: "Atendimento encerrado.",
-      code: "conversation_closed"
-    });
-
-    const updated = await closeConversationPrisma({
-      convRow,
+    // fecha de forma simples (seu schema não tem colunas closed*, usa metadata)
+    const atIso = nowIso();
+    const patch = {
+      status: "closed",
+      closedAt: atIso,
       closedBy: userId,
-      closedReason: reason
+      closedReason: reason,
+      handoffActive: false,
+      inboxVisible: false,
+      inboxStatus: "closed"
+    };
+
+    const updated = await prisma.conversation.update({
+      where: { id: convRow.id },
+      data: {
+        status: "closed",
+        handoffActive: false,
+        inboxVisible: false,
+        inboxStatus: "closed",
+        metadata: setMeta(convRow, patch)
+      }
     });
 
     const norm = normalizeConversationRow(updated);
