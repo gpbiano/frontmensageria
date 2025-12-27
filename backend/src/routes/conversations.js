@@ -277,103 +277,71 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   return { ok: true, conversation: normalizeConversationRow(conv) };
 }
 
-// 🔁 appendMessage continua IGUAL (sem cortes), apenas usando o nome resolvido
-// (mantive todo o resto exatamente como você enviou)
-
 export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) {
   const payload = maybePayload || dbOrPayload || {};
   const tenantId = safeStr(payload.tenantId);
-
   const source = safeStr(payload.source || payload.channel || "whatsapp").toLowerCase();
-  const channel = source;
   const peerId = safeStr(payload.peerId);
 
-  if (!tenantId) return { ok: false, error: "tenantId obrigatório" };
-  if (!source || !peerId) return { ok: false, error: "source e peerId obrigatórios" };
+  if (!tenantId || !peerId) {
+    return { ok: false, error: "tenantId e peerId obrigatórios" };
+  }
+
+  const resolvedName = resolveContactName(payload, payload.raw || payload);
 
   const contact = await upsertContact({
     tenantId,
-    channel,
+    channel: source,
     peerId,
-    title: payload.title || "Contato",
+    title: resolvedName,
     phone: payload.phone || null,
     waId: payload.waId || null,
     visitorId: payload.visitorId || null
   });
 
-  const existing = await prisma.conversation.findFirst({
+  let conv = await prisma.conversation.findFirst({
     where: {
       tenantId,
       contactId: contact.id,
-      channel,
+      channel: source,
       status: "open"
     },
     orderBy: { updatedAt: "desc" }
   });
 
-  let conv = existing;
-
   if (!conv) {
-    const convId = newId(getConvPrefixBySource(source));
-
-    const baseMeta = {
-      source,
-      channel,
-      peerId,
-      title: payload.title || "Contato",
-
-      currentMode: payload.currentMode || "bot",
-      hadHuman: false,
-      botAttempts: 0,
-
-      handoffActive: false,
-      handoffSince: null,
-      handoffReason: null,
-
-      lastMessageAt: null,
-      lastMessagePreview: "",
-
-      inboxVisible: false,
-      inboxStatus: "bot_only",
-      queuedAt: null,
-
-      closedAt: null,
-      closedBy: null,
-      closedReason: null
-    };
-
     conv = await prisma.conversation.create({
       data: {
-        id: convId,
+        id: newId(getConvPrefixBySource(source)),
         tenantId,
         contactId: contact.id,
-        channel,
+        channel: source,
         status: "open",
-        lastMessageAt: null,
-
-        // colunas novas (se existirem no schema aplicado)
         inboxVisible: false,
         inboxStatus: "bot_only",
-        queuedAt: null,
-        currentMode: safeStr(payload.currentMode || "bot").toLowerCase(),
-        handoffActive: false,
-        handoffSince: null,
-        assignedGroupId: null,
-        assignedUserId: null,
-
-        // fechamento (se existirem no schema)
-        closedAt: null,
-        closedBy: null,
-        closedReason: null,
-
-        metadata: baseMeta
+        metadata: {
+          source,
+          channel: source,
+          peerId,
+          title: resolvedName
+        }
       }
     });
+  } else {
+    const meta = getMeta(conv);
+    if (meta.title === "Contato" && resolvedName !== "Contato") {
+      await prisma.conversation.update({
+        where: { id: conv.id },
+        data: {
+          metadata: setMeta(conv, { title: resolvedName })
+        }
+      });
+    }
   }
 
-  const convNorm = normalizeConversationRow(conv);
-  return { ok: true, conversation: convNorm };
+  return { ok: true, conversation: normalizeConversationRow(conv) };
 }
+
 
 async function promoteToInboxPrisma({ convRow, reason = "handoff" }) {
   const meta = getMeta(convRow);
