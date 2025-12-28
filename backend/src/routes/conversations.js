@@ -145,7 +145,6 @@ function displayNameFallbackByChannel(channel, peerId) {
 
 // ======================================================
 // NORMALIZA PARA O SHAPE LEGADO DO FRONT
-// (se vier include: { contact: true }, usa contact.name)
 // ======================================================
 function normalizeConversationRow(convRow) {
   if (!convRow) return null;
@@ -397,14 +396,27 @@ async function sendMessengerText({ tenantId, peerId, text }) {
 async function sendInstagramText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "instagram");
   const token = safeStr(conn?.row?.accessToken || "");
-  if (!token) {
-    return { ok: false, error: "Instagram não conectado (accessToken ausente em ChannelConfig)" };
+  const cfg = asJson(conn?.config);
+
+  // ✅ IG DM precisa do instagramBusinessId (vem do connect)
+  const instagramBusinessId = safeStr(cfg.instagramBusinessId || "");
+
+  if (!token || !instagramBusinessId) {
+    return {
+      ok: false,
+      error:
+        "Instagram não conectado (accessToken ou config.instagramBusinessId ausente em ChannelConfig)"
+    };
   }
 
   const igUserId = peerToPSID(peerId);
   if (!igUserId) return { ok: false, error: "peerId inválido para Instagram (id vazio)" };
 
-  const url = `${META_GRAPH_BASE}/me/messages?access_token=${encodeURIComponent(token)}`;
+  // ✅ endpoint correto do Instagram: /{instagramBusinessId}/messages
+  const url = `${META_GRAPH_BASE}/${encodeURIComponent(
+    instagramBusinessId
+  )}/messages?access_token=${encodeURIComponent(token)}`;
+
   const body = {
     recipient: { id: igUserId },
     message: { text: safeStr(text) }
@@ -555,7 +567,9 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
         data: { metadata: setMeta(conv, { title: resolvedName, peerId, channel, source }) }
       });
 
-      await prisma.contact.update({ where: { id: contact.id }, data: { name: resolvedName } }).catch(() => {});
+      await prisma.contact
+        .update({ where: { id: contact.id }, data: { name: resolvedName } })
+        .catch(() => {});
     }
   }
 
@@ -735,14 +749,15 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 
   // atualiza contato
   if (convRow.contactId) {
-    await prisma.contact
-      .update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } })
-      .catch(() => {});
+    await prisma.contact.update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } }).catch(() => {});
   }
 
+  // ✅ contadores / inbox
   if (from === "bot") await bumpBotAttempts({ convRow });
+
   if (from === "agent" || rawMsg?.handoff === true) {
-    await promoteToInboxPrisma({ convRow, reason: "agent_message" });
+    const reason = rawMsg?.handoff === true ? "handoff" : "agent_message";
+    await promoteToInboxPrisma({ convRow, reason });
   }
 
   await touchConversationPrisma({ convRow, msgText: text });
@@ -856,19 +871,18 @@ router.post("/:id/messages", async (req, res) => {
         sentAt: sendRes?.ok ? nowIso() : null
       };
 
-      // salva resultado do envio no metadata da Message
+      // ✅ salva resultado do envio no metadata da Message (merge real)
       await prisma.message
         .update({
           where: { id: String(r.msgRow?.id || r.msg?.id) },
           data: {
             status: sendRes?.ok ? "sent" : "failed",
-            metadata: setMeta(r.msgRow || {}, patchMeta)
+            metadata: { ...(getMeta(r.msgRow) || {}), ...patchMeta }
           }
         })
         .catch(() => {});
     }
 
-    // ✅ sempre retorna 201 com a msg do DB
     return res.status(201).json(r.msg);
   } catch (e) {
     res.status(500).json({ error: "Falha ao enviar mensagem", detail: String(e?.message || e) });
@@ -899,7 +913,6 @@ router.patch("/:id/status", async (req, res) => {
     const userId = safeStr(req.user?.id || req.user?.userId || "", "agent");
     const reason = safeStr(req.body?.reason || "manual_by_agent");
 
-    // fecha de forma simples (seu schema não tem colunas closed*, usa metadata)
     const atIso = nowIso();
     const patch = {
       status: "closed",
