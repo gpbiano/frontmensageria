@@ -396,17 +396,19 @@ async function sendMessengerText({ tenantId, peerId, text }) {
 async function sendInstagramText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "instagram");
   const token = safeStr(conn?.row?.accessToken || "");
-  if (!token) {
-    return { ok: false, error: "Instagram não conectado (accessToken ausente)" };
-  }
+  const cfg = asJson(conn?.config);
+
+  const instagramBusinessId = safeStr(cfg.instagramBusinessId || "");
+  if (!token) return { ok: false, error: "Instagram não conectado (accessToken ausente)" };
+  if (!instagramBusinessId)
+    return { ok: false, error: "Instagram não configurado (config.instagramBusinessId ausente)" };
 
   const igUserId = peerToPSID(peerId);
-  if (!igUserId) {
-    return { ok: false, error: "peerId inválido para Instagram" };
-  }
+  if (!igUserId) return { ok: false, error: "peerId inválido para Instagram (id vazio)" };
 
-  // ✅ ENDPOINT CORRETO
-  const url = `https://graph.instagram.com/v21.0/me/messages`;
+  const url = `${META_GRAPH_BASE}/${encodeURIComponent(instagramBusinessId)}/messages?access_token=${encodeURIComponent(
+    token
+  )}`;
 
   const body = {
     recipient: { id: igUserId },
@@ -415,10 +417,7 @@ async function sendInstagramText({ tenantId, peerId, text }) {
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
 
@@ -431,12 +430,9 @@ async function sendInstagramText({ tenantId, peerId, text }) {
     };
   }
 
-  return {
-    ok: true,
-    providerMessageId: json?.message_id || null,
-    raw: json
-  };
+  return { ok: true, providerMessageId: json?.message_id || null, raw: json };
 }
+
 
 
 async function dispatchOutboundToChannel({ convRow, msgText }) {
