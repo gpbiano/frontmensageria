@@ -395,30 +395,18 @@ async function sendMessengerText({ tenantId, peerId, text }) {
 
 async function sendInstagramText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "instagram");
-
   const token = safeStr(conn?.row?.accessToken || "");
-  const cfg = asJson(conn?.config);
-
-  // ✅ esse é o cara que o IG webhook já usa/cobra
-  const instagramBusinessId = safeStr(cfg?.instagramBusinessId || "");
   if (!token) {
-    return { ok: false, error: "Instagram não conectado (accessToken ausente em ChannelConfig)" };
-  }
-  if (!instagramBusinessId) {
-    return {
-      ok: false,
-      error:
-        "Instagram não configurado (config.instagramBusinessId ausente). Refaça o connect e garanta que salvou o instagramBusinessAccountId."
-    };
+    return { ok: false, error: "Instagram não conectado (accessToken ausente)" };
   }
 
   const igUserId = peerToPSID(peerId);
-  if (!igUserId) return { ok: false, error: "peerId inválido para Instagram (id vazio)" };
+  if (!igUserId) {
+    return { ok: false, error: "peerId inválido para Instagram" };
+  }
 
-  // ✅ endpoint correto para IG DMs
-  const url = `${META_GRAPH_BASE}/${encodeURIComponent(
-    instagramBusinessId
-  )}/messages?access_token=${encodeURIComponent(token)}`;
+  // ✅ ENDPOINT CORRETO
+  const url = `https://graph.instagram.com/v21.0/me/messages`;
 
   const body = {
     recipient: { id: igUserId },
@@ -427,18 +415,14 @@ async function sendInstagramText({ tenantId, peerId, text }) {
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
     body: JSON.stringify(body)
   });
 
-  const raw = await resp.text().catch(() => "");
-  let json = {};
-  try {
-    json = raw ? JSON.parse(raw) : {};
-  } catch {
-    json = { raw };
-  }
-
+  const json = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     return {
       ok: false,
@@ -447,8 +431,11 @@ async function sendInstagramText({ tenantId, peerId, text }) {
     };
   }
 
-  // Meta costuma retornar message_id
-  return { ok: true, providerMessageId: json?.message_id || null, raw: json };
+  return {
+    ok: true,
+    providerMessageId: json?.message_id || null,
+    raw: json
+  };
 }
 
 
