@@ -6,7 +6,8 @@
 // 1) Libera CORS para o site institucional (gplabs.com.br e www.gplabs.com.br) por padrão
 // 2) Adiciona alias /br/webchat (porque seu widget está chamando /br/webchat/* no browser)
 // 3) Garante que /br/webchat também esteja em allowNoTenantPaths (tenant resolution não quebra widget)
-// 4) Mantém preflight global antes de qualquer guard (já estava OK)
+// 4) Mantém preflight global antes de qualquer guard
+// 5) ✅ FIX REAL: resolve tenant via header/query APENAS no webchat quando host não define tenant
 
 import express from "express";
 import cors from "cors";
@@ -66,8 +67,6 @@ try {
   const mod = await import("./lib/prisma.js");
   prisma = mod?.prisma || mod?.default || mod;
 
-  // ⚠️ não amarro em model específico (channelConfig etc),
-  // só no básico que você SEMPRE usa no health/flows.
   prismaReady = !!(prisma?.user && prisma?.tenant && prisma?.conversation && prisma?.message);
 
   logger.info({ prismaReady }, "🧠 Prisma status");
@@ -140,23 +139,15 @@ app.use(
 
 // ===============================
 // CORS (GLOBAL) — FIX DEFINITIVO
-// - garante CORS até em erro (porque vem antes de tudo)
-// - suporta credenciais
-// - whitelisting opcional via CORS_ORIGINS
 // ===============================
 function buildAllowedOrigins() {
   const raw = String(process.env.CORS_ORIGINS || "").trim();
 
-  // ✅ defaults seguros (inclui seu site institucional + app + tenant + dev)
   const defaults = [
     "https://cliente.gplabs.com.br",
     "https://app.gplabs.com.br",
-
-    // ✅ site institucional (onde o widget está rodando)
     "https://gplabs.com.br",
     "https://www.gplabs.com.br",
-
-    // dev
     "http://localhost:5173",
     "http://localhost:3000"
   ];
@@ -168,7 +159,6 @@ function buildAllowedOrigins() {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // evita duplicados
   return Array.from(new Set([...defaults, ...extra]));
 }
 
@@ -176,15 +166,9 @@ const ALLOWED_ORIGINS = buildAllowedOrigins();
 
 const corsConfig = {
   origin(origin, cb) {
-    // permite tools/curl (sem Origin) e chamadas server-to-server
     if (!origin) return cb(null, true);
-
-    // se quiser wildcard total em dev:
     if (ENV !== "production") return cb(null, true);
-
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-
-    // bloqueia origem não permitida (melhor que "true" em prod)
     return cb(new Error(`CORS blocked: ${origin}`));
   },
   credentials: true,
@@ -193,6 +177,7 @@ const corsConfig = {
     "Content-Type",
     "Authorization",
     "X-Tenant-Id",
+    "X-Tenant-Slug", // ✅ necessário pro webchat no domínio raiz
     "X-Widget-Key",
     "X-Webchat-Token"
   ],
@@ -201,13 +186,11 @@ const corsConfig = {
 };
 
 app.use(cors(corsConfig));
-// preflight global (antes de qualquer guard)
 app.options("*", cors(corsConfig));
 
 // ===============================
 // BODY PARSER (rawBody p/ Meta)
 // ===============================
-// ⚠️ Meta webhook signature precisa do rawBody
 app.use(
   express.json({
     limit: "5mb",
@@ -225,6 +208,48 @@ function requirePrisma(_req, res, next) {
   return res.status(503).json({ error: "db_not_ready" });
 }
 
+/**
+ * ✅ Webchat tenant fallback (quando host não define tenant)
+ * Usado só nas rotas públicas do webchat.
+ *
+ * Prioridade:
+ * - x-tenant-id / ?tenantId
+ * - x-tenant-slug / ?tenant
+ *
+ * Observação: só funciona se prismaReady (vem depois de requirePrisma)
+ */
+async function webchatTenantFallback(req, res, next) {
+  try {
+    if (req.tenant?.id) return next();
+
+    const headerTenantId = req.headers["x-tenant-id"];
+    const headerTenantSlug = req.headers["x-tenant-slug"];
+
+    const tenantId = String(req.query.tenantId || headerTenantId || "").trim();
+    const tenantSlug = String(req.query.tenant || headerTenantSlug || "").trim();
+
+    let t = null;
+
+    if (tenantId) {
+      t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    } else if (tenantSlug) {
+      t = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+    }
+
+    if (t?.isActive) {
+      req.tenant = t;
+      req.tenantId = t.id;
+      return next();
+    }
+
+    // se não resolveu, mantém erro explícito (igual ao que você já viu)
+    return res.status(400).json({ error: "missing_tenant_context" });
+  } catch (err) {
+    logger.error({ err }, "❌ webchatTenantFallback failed");
+    return res.status(500).json({ error: "internal_server_error" });
+  }
+}
+
 // ===============================
 // TENANT RESOLUTION (ANTES DE AUTH)
 // ===============================
@@ -240,10 +265,7 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/webhook/whatsapp",
   "/webhook/messenger",
   "/webhook/instagram",
-
-  // ✅ webchat público
   "/webchat",
-  // ✅ alias do widget (seu console mostra /br/webchat/*)
   "/br/webchat"
 ];
 
@@ -285,16 +307,12 @@ app.use("/", authRouter);
 app.use("/auth", passwordRouter);
 
 // ===============================
-// ✅ Webchat público
+// ✅ Webchat público (com tenant fallback)
 // ===============================
-// Mantém como público e ANTES do requireAuth
-app.use("/webchat", requirePrisma, webchatRouter);
+app.use("/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
+app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 
-// ✅ Alias: o widget do seu site está chamando /br/webchat/session e /br/webchat/messages
-// Então espelha as mesmas rotas aqui para não quebrar.
-app.use("/br/webchat", requirePrisma, webchatRouter);
-
-// Webhooks públicos (NÃO passam por requireAuth)
+// Webhooks públicos
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 app.use("/webhook/instagram", instagramWebhookRouter);
@@ -346,7 +364,6 @@ app.use((req, res) => {
 
 // ===============================
 // ERROR HANDLER
-// ✅ garante JSON consistente e ajuda a enxergar erro real
 // ===============================
 app.use((err, req, res, _next) => {
   logger.error(
