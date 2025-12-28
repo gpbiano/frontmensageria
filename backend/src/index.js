@@ -1,10 +1,13 @@
 // backend/src/index.js
 // ✅ PRISMA-FIRST (sem data.json)
 // Index consolidado: tenant resolve -> rotas públicas -> auth global -> tenant guard -> prisma guard -> rotas protegidas
+//
+// ✅ FIXES incluídos:
+// 1) Libera CORS para o site institucional (gplabs.com.br e www.gplabs.com.br) por padrão
+// 2) Adiciona alias /br/webchat (porque seu widget está chamando /br/webchat/* no browser)
+// 3) Garante que /br/webchat também esteja em allowNoTenantPaths (tenant resolution não quebra widget)
+// 4) Mantém preflight global antes de qualquer guard (já estava OK)
 
-// ===============================
-// IMPORTS (core/libs)
-// ===============================
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -143,18 +146,30 @@ app.use(
 // ===============================
 function buildAllowedOrigins() {
   const raw = String(process.env.CORS_ORIGINS || "").trim();
-  if (!raw) {
-    return [
-      "https://cliente.gplabs.com.br",
-      "https://app.gplabs.com.br",
-      "http://localhost:5173",
-      "http://localhost:3000"
-    ];
-  }
-  return raw
+
+  // ✅ defaults seguros (inclui seu site institucional + app + tenant + dev)
+  const defaults = [
+    "https://cliente.gplabs.com.br",
+    "https://app.gplabs.com.br",
+
+    // ✅ site institucional (onde o widget está rodando)
+    "https://gplabs.com.br",
+    "https://www.gplabs.com.br",
+
+    // dev
+    "http://localhost:5173",
+    "http://localhost:3000"
+  ];
+
+  if (!raw) return defaults;
+
+  const extra = raw
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+
+  // evita duplicados
+  return Array.from(new Set([...defaults, ...extra]));
 }
 
 const ALLOWED_ORIGINS = buildAllowedOrigins();
@@ -186,7 +201,7 @@ const corsConfig = {
 };
 
 app.use(cors(corsConfig));
-// preflight global
+// preflight global (antes de qualquer guard)
 app.options("*", cors(corsConfig));
 
 // ===============================
@@ -225,7 +240,11 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/webhook/whatsapp",
   "/webhook/messenger",
   "/webhook/instagram",
-  "/webchat"
+
+  // ✅ webchat público
+  "/webchat",
+  // ✅ alias do widget (seu console mostra /br/webchat/*)
+  "/br/webchat"
 ];
 
 app.use(
@@ -265,8 +284,15 @@ app.get("/health", async (_req, res) => {
 app.use("/", authRouter);
 app.use("/auth", passwordRouter);
 
-// Webchat público
+// ===============================
+// ✅ Webchat público
+// ===============================
+// Mantém como público e ANTES do requireAuth
 app.use("/webchat", requirePrisma, webchatRouter);
+
+// ✅ Alias: o widget do seu site está chamando /br/webchat/session e /br/webchat/messages
+// Então espelha as mesmas rotas aqui para não quebrar.
+app.use("/br/webchat", requirePrisma, webchatRouter);
 
 // Webhooks públicos (NÃO passam por requireAuth)
 app.use("/webhook/whatsapp", whatsappRouter);
@@ -335,7 +361,6 @@ app.use((err, req, res, _next) => {
     "❌ Erro não tratado"
   );
 
-  // se já enviou headers, delega pro express
   if (res.headersSent) return;
 
   const msg = err?.message ? String(err.message) : "internal_server_error";
