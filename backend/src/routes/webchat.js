@@ -124,12 +124,6 @@ function readWidgetKey(req) {
 /**
  * =========================
  * WEBCHAT CONFIG (Prisma only)
- * ChannelConfig:
- * - tenantId
- * - channel="webchat"
- * - enabled
- * - widgetKey
- * - config: { allowedOrigins: [], botEnabled?: boolean, widget?: {...} }
  * =========================
  */
 async function getWebchatConfig(tenantId) {
@@ -179,7 +173,7 @@ async function getWebchatConfig(tenantId) {
 /**
  * =========================
  * CORS Headers (sempre responde)
- * - IMPORTANTE: inclui X-Tenant-Slug também (pra compatibilidade)
+ * - inclui X-Tenant-Slug (compat)
  * =========================
  */
 async function setCorsHeaders(req, res, tenantId) {
@@ -190,9 +184,7 @@ async function setCorsHeaders(req, res, tenantId) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
     }
-  } catch {
-    // não quebra a request se o config não carregar
-  }
+  } catch {}
 
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
   res.setHeader(
@@ -215,8 +207,13 @@ async function setCorsHeaders(req, res, tenantId) {
  * =========================
  */
 function readAuthToken(req) {
-  const auth = String(req.headers.authorization || "");
-  if (auth.toLowerCase().startsWith("webchat ")) return auth.slice("Webchat ".length).trim();
+  const authRaw = String(req.headers.authorization || "").trim();
+  const auth = authRaw.toLowerCase();
+
+  // ✅ FIX: remove corretamente, independente de maiúsculas
+  if (auth.startsWith("webchat ")) {
+    return authRaw.slice("webchat ".length).trim();
+  }
 
   const xToken = String(req.headers["x-webchat-token"] || "").trim();
   if (xToken) return xToken;
@@ -227,10 +224,6 @@ function readAuthToken(req) {
   return "";
 }
 
-/**
- * Lê o token e devolve payload decodificado.
- * - Se inválido: lança erro.
- */
 function verifyWebchatToken(req) {
   const token = readAuthToken(req);
   if (!token) throw new Error("Token ausente");
@@ -240,20 +233,13 @@ function verifyWebchatToken(req) {
 /**
  * =========================
  * TENANT RESOLUTION (webchat)
- * ✅ prioridade:
- * 1) req.tenant (resolvido por subdomínio)
- * 2) X-Tenant-Id / query tenantId
- * 3) X-Tenant-Slug / query tenant
- * 4) ✅ token (tenantId dentro do JWT)  -> resolve para /messages e endpoints tokenados
  * =========================
  */
 async function resolveTenantContext(req) {
-  // 1) já veio do resolveTenant global
   if (req.tenant?.id) {
     return { tenantId: String(req.tenant.id), tenant: req.tenant, from: "req.tenant" };
   }
 
-  // 2) header/query tenantId
   const tenantId = String(req.headers["x-tenant-id"] || req.query.tenantId || "").trim();
   if (tenantId) {
     const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
@@ -264,7 +250,6 @@ async function resolveTenantContext(req) {
     }
   }
 
-  // 3) header/query slug
   const slug = String(req.headers["x-tenant-slug"] || req.query.tenant || "").trim();
   if (slug) {
     const t = await prisma.tenant.findUnique({ where: { slug } });
@@ -275,7 +260,7 @@ async function resolveTenantContext(req) {
     }
   }
 
-  // 4) token (para rotas que já exigem token)
+  // token (para rotas tokenadas)
   const token = readAuthToken(req);
   if (token) {
     try {
@@ -289,9 +274,7 @@ async function resolveTenantContext(req) {
           return { tenantId: String(t.id), tenant: t, from: "jwt" };
         }
       }
-    } catch {
-      // não seta tenant a partir de token inválido
-    }
+    } catch {}
   }
 
   return { tenantId: null, tenant: null, from: "none" };
@@ -345,7 +328,6 @@ async function assertWebchatAllowed(req, tenantId, { requireWidgetKey = true } =
 /**
  * =========================
  * BOT (opcional)
- * - habilitado por ChannelConfig.config.botEnabled === true
  * =========================
  */
 async function getLastMessagesForBot({ tenantId, conversationId, take = 10 }) {
@@ -368,7 +350,10 @@ async function getLastMessagesForBot({ tenantId, conversationId, take = 10 }) {
 async function maybeReplyWithBot({ tenantId, convRow, cleanText }) {
   const convMeta = asJson(convRow?.metadata);
   if (String(convRow?.status || "") !== "open") return { ok: true, didBot: false };
-  if (String(convMeta.currentMode || "") === "human") return { ok: true, didBot: false };
+
+  // ✅ FIX: respeita currentMode no metadata OU no campo currentMode
+  const mode = String(convMeta.currentMode || convRow?.currentMode || "").toLowerCase();
+  if (mode === "human") return { ok: true, didBot: false };
 
   // bot enabled per webchat config
   let cfg;
@@ -451,23 +436,17 @@ async function maybeReplyWithBot({ tenantId, convRow, cleanText }) {
  * =========================
  */
 
-// ✅ Preflight completo
+// Preflight
 router.options("*", async (req, res) => {
   try {
-    // tenta resolver tenant por headers/query pra conseguir allowedOrigins
     const ctx = await resolveTenantContext(req);
     await setCorsHeaders(req, res, ctx.tenantId);
   } catch {}
   return res.status(204).end();
 });
 
-// ----------------------------------------------------
 // POST /webchat/session
-// body: { visitorId }
-// headers: X-Widget-Key
-// ----------------------------------------------------
 router.post("/session", async (req, res) => {
-  // resolve tenant (host/header/query) — token ainda não existe aqui
   const ctx = await resolveTenantContext(req);
   const tenantId = ctx.tenantId;
 
@@ -491,9 +470,7 @@ router.post("/session", async (req, res) => {
 
   const { getOrCreateChannelConversation } = await getConversationsCore();
 
-  // separação por tenant no peerId
   const peerId = `wc:${tenantId}:${visitorId}`;
-
   const initialMode = allow?.cfg?.botEnabled === true ? "bot" : "human";
 
   const r = await getOrCreateChannelConversation({
@@ -529,12 +506,8 @@ router.post("/session", async (req, res) => {
   });
 });
 
-// ----------------------------------------------------
-// GET /webchat/conversations/:id/messages?after=<cursor>&limit=50
-// headers: Authorization: Webchat <token>  ou X-Webchat-Token
-// ----------------------------------------------------
+// GET /webchat/conversations/:id/messages
 router.get("/conversations/:id/messages", async (req, res) => {
-  // aqui pode resolver tenant pelo token (mais confiável)
   const ctx = await resolveTenantContext(req);
   const tenantId = ctx.tenantId;
 
@@ -577,9 +550,7 @@ router.get("/conversations/:id/messages", async (req, res) => {
 
   const convMeta = asJson(convRow.metadata);
   const source = String(convMeta.source || convRow.channel || "").toLowerCase();
-  if (source !== "webchat") {
-    return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
-  }
+  if (source !== "webchat") return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
 
   const query = {
     where: { tenantId, conversationId: convRow.id },
@@ -590,11 +561,7 @@ router.get("/conversations/:id/messages", async (req, res) => {
   let rows = [];
   if (after) {
     try {
-      rows = await prisma.message.findMany({
-        ...query,
-        cursor: { id: after },
-        skip: 1
-      });
+      rows = await prisma.message.findMany({ ...query, cursor: { id: after }, skip: 1 });
     } catch {
       rows = await prisma.message.findMany(query);
     }
@@ -618,13 +585,8 @@ router.get("/conversations/:id/messages", async (req, res) => {
   return res.json({ items, nextCursor });
 });
 
-// ----------------------------------------------------
 // POST /webchat/messages
-// headers: Authorization: Webchat <token>  ou X-Webchat-Token
-// body: { text }
-// ----------------------------------------------------
 router.post("/messages", async (req, res) => {
-  // resolve tenant pelo token/headers
   const ctx = await resolveTenantContext(req);
   const tenantId = ctx.tenantId;
 
@@ -655,10 +617,8 @@ router.post("/messages", async (req, res) => {
     return res.status(allow.status).json({ error: allow.error, details: allow.details });
   }
 
-  const conversationId = String(decoded.conversationId || "");
-  if (!conversationId) {
-    return res.status(400).json({ error: "conversationId ausente no token" });
-  }
+  const conversationId = String(decoded.conversationId || "").trim();
+  if (!conversationId) return res.status(400).json({ error: "conversationId ausente no token" });
 
   const convRow = await prisma.conversation.findFirst({
     where: { id: conversationId, tenantId }
@@ -668,9 +628,7 @@ router.post("/messages", async (req, res) => {
 
   const convMeta = asJson(convRow.metadata);
   const source = String(convMeta.source || convRow.channel || "").toLowerCase();
-  if (source !== "webchat") {
-    return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
-  }
+  if (source !== "webchat") return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
   if (String(convRow.status) !== "open") return res.status(410).json({ error: "Conversa encerrada" });
 
   const { appendMessage } = await getConversationsCore();
@@ -699,12 +657,92 @@ router.post("/messages", async (req, res) => {
   });
 });
 
-// ----------------------------------------------------
+// ✅ NOVO: POST /webchat/handoff  (bot -> human)
+router.post("/handoff", async (req, res) => {
+  const ctx = await resolveTenantContext(req);
+  const tenantId = ctx.tenantId;
+
+  let decoded;
+  try {
+    decoded = verifyWebchatToken(req);
+  } catch (e) {
+    await setCorsHeaders(req, res, tenantId);
+    return res.status(401).json({ error: e.message || "Token inválido" });
+  }
+
+  const tokenTenantId = String(decoded?.tenantId || "");
+  if (!tenantId || tokenTenantId !== tenantId) {
+    await setCorsHeaders(req, res, tenantId || tokenTenantId || null);
+    return res.status(403).json({ error: "Token não pertence ao tenant" });
+  }
+
+  await setCorsHeaders(req, res, tenantId);
+
+  const allow = await assertWebchatAllowed(req, tenantId, { requireWidgetKey: false });
+  if (!allow.ok) {
+    return res.status(allow.status).json({ error: allow.error, details: allow.details });
+  }
+
+  const conversationId = String(decoded?.conversationId || "").trim();
+  if (!conversationId) return res.status(400).json({ error: "conversationId ausente no token" });
+
+  const convRow = await prisma.conversation.findFirst({
+    where: { id: conversationId, tenantId }
+  });
+
+  if (!convRow) return res.status(404).json({ error: "Conversa não encontrada" });
+
+  const convMeta = asJson(convRow.metadata);
+  const source = String(convMeta.source || convRow.channel || "").toLowerCase();
+  if (source !== "webchat") return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
+
+  const reason = String(req.body?.reason || "user_request").trim();
+
+  const newMeta = mergeMeta(convRow.metadata, {
+    currentMode: "human",
+    handoffAt: nowIso(),
+    handoffReason: reason
+  });
+
+  // tenta atualizar campo currentMode se existir
+  try {
+    await prisma.conversation.update({
+      where: { id: convRow.id },
+      data: {
+        currentMode: "human",
+        updatedAt: new Date(),
+        metadata: newMeta
+      }
+    });
+  } catch {
+    await prisma.conversation.update({
+      where: { id: convRow.id },
+      data: {
+        updatedAt: new Date(),
+        metadata: newMeta
+      }
+    });
+  }
+
+  // mensagem system (ajuda inbox e timeline)
+  const { appendMessage } = await getConversationsCore();
+  await appendMessage(String(convRow.id), {
+    channel: "webchat",
+    source: "webchat",
+    type: "system",
+    from: "system",
+    direction: "out",
+    text: "Encaminhando você para um atendente humano…",
+    createdAt: nowIso(),
+    tenantId,
+    isSystem: true
+  });
+
+  return res.json({ ok: true, conversationId: String(convRow.id), currentMode: "human" });
+});
+
 // POST /webchat/conversations/:id/close
-// headers: Authorization: Webchat <token>  ou X-Webchat-Token
-// ----------------------------------------------------
 router.post("/conversations/:id/close", async (req, res) => {
-  // resolve tenant pelo token/headers
   const ctx = await resolveTenantContext(req);
   const tenantId = ctx.tenantId;
 
@@ -744,9 +782,7 @@ router.post("/conversations/:id/close", async (req, res) => {
 
   const convMeta = asJson(convRow.metadata);
   const source = String(convMeta.source || convRow.channel || "").toLowerCase();
-  if (source !== "webchat") {
-    return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
-  }
+  if (source !== "webchat") return res.status(409).json({ error: "Conversa não pertence ao Webchat" });
 
   if (String(convRow.status) === "closed") {
     return res.json({ ok: true, status: "closed" });
@@ -782,3 +818,4 @@ router.post("/conversations/:id/close", async (req, res) => {
 });
 
 export default router;
+
