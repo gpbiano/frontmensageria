@@ -2,7 +2,9 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import logger from "../logger.js";
-import prisma from "../lib/prisma.js";
+import prismaMod from "../lib/prisma.js";
+
+const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
 
@@ -130,9 +132,16 @@ function readWidgetKey(req) {
  * - config: { allowedOrigins: [], botEnabled?: boolean, widget?: {...} }
  * =========================
  */
-async function getWebchatConfig(req) {
-  const tenantId = req.tenant?.id ? String(req.tenant.id) : null;
-  if (!tenantId) return { enabled: false, widgetKey: "", allowedOrigins: [], config: {}, botEnabled: false };
+async function getWebchatConfig(tenantId) {
+  if (!tenantId) {
+    return {
+      enabled: false,
+      widgetKey: "",
+      allowedOrigins: [],
+      config: {},
+      botEnabled: false
+    };
+  }
 
   const row = await prisma.channelConfig.findFirst({
     where: { tenantId, channel: "webchat" },
@@ -140,12 +149,19 @@ async function getWebchatConfig(req) {
   });
 
   if (!row) {
-    return { enabled: false, widgetKey: "", allowedOrigins: [], config: {}, botEnabled: false };
+    return {
+      enabled: false,
+      widgetKey: "",
+      allowedOrigins: [],
+      config: {},
+      botEnabled: false
+    };
   }
 
   const cfg = row?.config && typeof row.config === "object" ? row.config : {};
   const allowedOrigins = Array.isArray(cfg.allowedOrigins) ? cfg.allowedOrigins : [];
 
+  // prioriza cfg.widget, mas aceita cfg direto
   const widgetConfig =
     (cfg.widget && typeof cfg.widget === "object" ? cfg.widget : null) || cfg || {};
 
@@ -160,8 +176,142 @@ async function getWebchatConfig(req) {
   };
 }
 
-async function assertWebchatAllowed(req, { requireWidgetKey = true } = {}) {
-  const cfg = await getWebchatConfig(req);
+/**
+ * =========================
+ * CORS Headers (sempre responde)
+ * - IMPORTANTE: inclui X-Tenant-Slug também (pra compatibilidade)
+ * =========================
+ */
+async function setCorsHeaders(req, res, tenantId) {
+  try {
+    const cfg = await getWebchatConfig(tenantId);
+    const origin = normalizeOrigin(req.headers.origin || "");
+    if (origin && isOriginAllowed(origin, cfg.allowedOrigins)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+  } catch {
+    // não quebra a request se o config não carregar
+  }
+
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    [
+      "Content-Type",
+      "Authorization",
+      "X-Widget-Key",
+      "X-Webchat-Token",
+      "X-Tenant-Id",
+      "X-Tenant-Slug"
+    ].join(", ")
+  );
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
+/**
+ * =========================
+ * AUTH (token do widget)
+ * =========================
+ */
+function readAuthToken(req) {
+  const auth = String(req.headers.authorization || "");
+  if (auth.toLowerCase().startsWith("webchat ")) return auth.slice("Webchat ".length).trim();
+
+  const xToken = String(req.headers["x-webchat-token"] || "").trim();
+  if (xToken) return xToken;
+
+  const qToken = String(req.query.token || "").trim();
+  if (qToken) return qToken;
+
+  return "";
+}
+
+/**
+ * Lê o token e devolve payload decodificado.
+ * - Se inválido: lança erro.
+ */
+function verifyWebchatToken(req) {
+  const token = readAuthToken(req);
+  if (!token) throw new Error("Token ausente");
+  return jwt.verify(token, getWebchatJwtSecret());
+}
+
+/**
+ * =========================
+ * TENANT RESOLUTION (webchat)
+ * ✅ prioridade:
+ * 1) req.tenant (resolvido por subdomínio)
+ * 2) X-Tenant-Id / query tenantId
+ * 3) X-Tenant-Slug / query tenant
+ * 4) ✅ token (tenantId dentro do JWT)  -> resolve para /messages e endpoints tokenados
+ * =========================
+ */
+async function resolveTenantContext(req) {
+  // 1) já veio do resolveTenant global
+  if (req.tenant?.id) {
+    return { tenantId: String(req.tenant.id), tenant: req.tenant, from: "req.tenant" };
+  }
+
+  // 2) header/query tenantId
+  const tenantId = String(req.headers["x-tenant-id"] || req.query.tenantId || "").trim();
+  if (tenantId) {
+    const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (t?.isActive) {
+      req.tenant = t;
+      req.tenantId = t.id;
+      return { tenantId: String(t.id), tenant: t, from: "x-tenant-id" };
+    }
+  }
+
+  // 3) header/query slug
+  const slug = String(req.headers["x-tenant-slug"] || req.query.tenant || "").trim();
+  if (slug) {
+    const t = await prisma.tenant.findUnique({ where: { slug } });
+    if (t?.isActive) {
+      req.tenant = t;
+      req.tenantId = t.id;
+      return { tenantId: String(t.id), tenant: t, from: "x-tenant-slug" };
+    }
+  }
+
+  // 4) token (para rotas que já exigem token)
+  const token = readAuthToken(req);
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, getWebchatJwtSecret());
+      const tid = String(decoded?.tenantId || "").trim();
+      if (tid) {
+        const t = await prisma.tenant.findUnique({ where: { id: tid } });
+        if (t?.isActive) {
+          req.tenant = t;
+          req.tenantId = t.id;
+          return { tenantId: String(t.id), tenant: t, from: "jwt" };
+        }
+      }
+    } catch {
+      // não seta tenant a partir de token inválido
+    }
+  }
+
+  return { tenantId: null, tenant: null, from: "none" };
+}
+
+function asJson(v) {
+  return v && typeof v === "object" ? v : {};
+}
+
+function mergeMeta(oldMeta, patch) {
+  return { ...asJson(oldMeta), ...asJson(patch) };
+}
+
+/**
+ * =========================
+ * WEBCHAT ALLOW (enabled + origin + widgetKey)
+ * =========================
+ */
+async function assertWebchatAllowed(req, tenantId, { requireWidgetKey = true } = {}) {
+  const cfg = await getWebchatConfig(tenantId);
 
   if (cfg.enabled === false) {
     return { ok: false, status: 403, error: "WebChat desativado" };
@@ -190,68 +340,6 @@ async function assertWebchatAllowed(req, { requireWidgetKey = true } = {}) {
   }
 
   return { ok: true, cfg };
-}
-
-async function setCorsHeaders(req, res) {
-  const cfg = await getWebchatConfig(req);
-  const origin = normalizeOrigin(req.headers.origin || "");
-
-  if (origin && isOriginAllowed(origin, cfg.allowedOrigins)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-  }
-
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Widget-Key, X-Webchat-Token, X-Tenant-Id"
-  );
-  res.setHeader("Access-Control-Max-Age", "86400");
-}
-
-/**
- * =========================
- * AUTH (token do widget)
- * =========================
- */
-function readAuthToken(req) {
-  const auth = String(req.headers.authorization || "");
-  if (auth.startsWith("Webchat ")) return auth.slice("Webchat ".length).trim();
-
-  const xToken = String(req.headers["x-webchat-token"] || "").trim();
-  if (xToken) return xToken;
-
-  const qToken = String(req.query.token || "").trim();
-  if (qToken) return qToken;
-
-  return "";
-}
-
-function verifyWebchatToken(req) {
-  const token = readAuthToken(req);
-  if (!token) throw new Error("Token ausente");
-  return jwt.verify(token, getWebchatJwtSecret());
-}
-
-/**
- * =========================
- * MULTI-TENANT GUARDA
- * =========================
- */
-function requireTenant(req, res) {
-  if (!req.tenant?.id) {
-    res.status(400).json({ error: "missing_tenant_context" });
-    return false;
-  }
-  return true;
-}
-
-function asJson(v) {
-  return v && typeof v === "object" ? v : {};
-}
-
-function mergeMeta(oldMeta, patch) {
-  return { ...asJson(oldMeta), ...asJson(patch) };
 }
 
 /**
@@ -321,7 +409,7 @@ async function maybeReplyWithBot({ tenantId, convRow, cleanText }) {
     if (typeof botEngine === "function") {
       botText = await botEngine({
         channel: "webchat",
-        conversation: convRow, // engine pode usar metadata
+        conversation: convRow,
         userText: cleanText,
         messages: history
       });
@@ -366,7 +454,9 @@ async function maybeReplyWithBot({ tenantId, convRow, cleanText }) {
 // ✅ Preflight completo
 router.options("*", async (req, res) => {
   try {
-    await setCorsHeaders(req, res);
+    // tenta resolver tenant por headers/query pra conseguir allowedOrigins
+    const ctx = await resolveTenantContext(req);
+    await setCorsHeaders(req, res, ctx.tenantId);
   } catch {}
   return res.status(204).end();
 });
@@ -377,15 +467,24 @@ router.options("*", async (req, res) => {
 // headers: X-Widget-Key
 // ----------------------------------------------------
 router.post("/session", async (req, res) => {
-  if (!requireTenant(req, res)) return;
+  // resolve tenant (host/header/query) — token ainda não existe aqui
+  const ctx = await resolveTenantContext(req);
+  const tenantId = ctx.tenantId;
 
-  const tenantId = String(req.tenant.id);
+  if (!tenantId) {
+    await setCorsHeaders(req, res, null);
+    return res.status(400).json({ error: "missing_tenant_context" });
+  }
+
   const { visitorId } = req.body || {};
-  if (!visitorId) return res.status(400).json({ error: "visitorId obrigatório" });
+  if (!visitorId) {
+    await setCorsHeaders(req, res, tenantId);
+    return res.status(400).json({ error: "visitorId obrigatório" });
+  }
 
-  await setCorsHeaders(req, res);
+  await setCorsHeaders(req, res, tenantId);
 
-  const allow = await assertWebchatAllowed(req, { requireWidgetKey: true });
+  const allow = await assertWebchatAllowed(req, tenantId, { requireWidgetKey: true });
   if (!allow.ok) {
     return res.status(allow.status).json({ error: allow.error, details: allow.details });
   }
@@ -435,30 +534,34 @@ router.post("/session", async (req, res) => {
 // headers: Authorization: Webchat <token>  ou X-Webchat-Token
 // ----------------------------------------------------
 router.get("/conversations/:id/messages", async (req, res) => {
-  if (!requireTenant(req, res)) return;
+  // aqui pode resolver tenant pelo token (mais confiável)
+  const ctx = await resolveTenantContext(req);
+  const tenantId = ctx.tenantId;
 
   let decoded;
   try {
     decoded = verifyWebchatToken(req);
   } catch (e) {
+    await setCorsHeaders(req, res, tenantId);
     return res.status(401).json({ error: e.message || "Token inválido" });
   }
 
-  const tenantId = String(req.tenant.id);
-
-  if (String(decoded?.tenantId || "") !== tenantId) {
+  const tokenTenantId = String(decoded?.tenantId || "");
+  if (!tenantId || tokenTenantId !== tenantId) {
+    await setCorsHeaders(req, res, tenantId || tokenTenantId || null);
     return res.status(403).json({ error: "Token não pertence ao tenant" });
   }
 
   const { id } = req.params;
 
   if (decoded?.conversationId && String(decoded.conversationId) !== String(id)) {
+    await setCorsHeaders(req, res, tenantId);
     return res.status(403).json({ error: "Token não pertence à conversa" });
   }
 
-  await setCorsHeaders(req, res);
+  await setCorsHeaders(req, res, tenantId);
 
-  const allow = await assertWebchatAllowed(req, { requireWidgetKey: false });
+  const allow = await assertWebchatAllowed(req, tenantId, { requireWidgetKey: false });
   if (!allow.ok) {
     return res.status(allow.status).json({ error: allow.error, details: allow.details });
   }
@@ -486,7 +589,6 @@ router.get("/conversations/:id/messages", async (req, res) => {
 
   let rows = [];
   if (after) {
-    // usa cursor por id quando possível
     try {
       rows = await prisma.message.findMany({
         ...query,
@@ -494,7 +596,6 @@ router.get("/conversations/:id/messages", async (req, res) => {
         skip: 1
       });
     } catch {
-      // fallback: se cursor inválido, retorna do começo (ou você pode filtrar por createdAt)
       rows = await prisma.message.findMany(query);
     }
   } else {
@@ -523,33 +624,41 @@ router.get("/conversations/:id/messages", async (req, res) => {
 // body: { text }
 // ----------------------------------------------------
 router.post("/messages", async (req, res) => {
-  if (!requireTenant(req, res)) return;
+  // resolve tenant pelo token/headers
+  const ctx = await resolveTenantContext(req);
+  const tenantId = ctx.tenantId;
 
   let decoded;
   try {
     decoded = verifyWebchatToken(req);
   } catch (e) {
+    await setCorsHeaders(req, res, tenantId);
     return res.status(401).json({ error: e.message || "Token inválido" });
   }
 
-  const tenantId = String(req.tenant.id);
-
-  if (String(decoded?.tenantId || "") !== tenantId) {
+  const tokenTenantId = String(decoded?.tenantId || "");
+  if (!tenantId || tokenTenantId !== tenantId) {
+    await setCorsHeaders(req, res, tenantId || tokenTenantId || null);
     return res.status(403).json({ error: "Token não pertence ao tenant" });
   }
 
   const cleanText = String(req.body?.text || "").trim();
-  if (!cleanText) return res.status(400).json({ error: "Mensagem vazia" });
+  if (!cleanText) {
+    await setCorsHeaders(req, res, tenantId);
+    return res.status(400).json({ error: "Mensagem vazia" });
+  }
 
-  await setCorsHeaders(req, res);
+  await setCorsHeaders(req, res, tenantId);
 
-  const allow = await assertWebchatAllowed(req, { requireWidgetKey: false });
+  const allow = await assertWebchatAllowed(req, tenantId, { requireWidgetKey: false });
   if (!allow.ok) {
     return res.status(allow.status).json({ error: allow.error, details: allow.details });
   }
 
   const conversationId = String(decoded.conversationId || "");
-  if (!conversationId) return res.status(400).json({ error: "conversationId ausente no token" });
+  if (!conversationId) {
+    return res.status(400).json({ error: "conversationId ausente no token" });
+  }
 
   const convRow = await prisma.conversation.findFirst({
     where: { id: conversationId, tenantId }
@@ -595,30 +704,34 @@ router.post("/messages", async (req, res) => {
 // headers: Authorization: Webchat <token>  ou X-Webchat-Token
 // ----------------------------------------------------
 router.post("/conversations/:id/close", async (req, res) => {
-  if (!requireTenant(req, res)) return;
+  // resolve tenant pelo token/headers
+  const ctx = await resolveTenantContext(req);
+  const tenantId = ctx.tenantId;
 
   let decoded;
   try {
     decoded = verifyWebchatToken(req);
   } catch (e) {
+    await setCorsHeaders(req, res, tenantId);
     return res.status(401).json({ error: e.message || "Token inválido" });
   }
 
-  const tenantId = String(req.tenant.id);
-
-  if (String(decoded?.tenantId || "") !== tenantId) {
+  const tokenTenantId = String(decoded?.tenantId || "");
+  if (!tenantId || tokenTenantId !== tenantId) {
+    await setCorsHeaders(req, res, tenantId || tokenTenantId || null);
     return res.status(403).json({ error: "Token não pertence ao tenant" });
   }
 
   const { id } = req.params;
 
   if (decoded?.conversationId && String(decoded.conversationId) !== String(id)) {
+    await setCorsHeaders(req, res, tenantId);
     return res.status(403).json({ error: "Token não pertence à conversa" });
   }
 
-  await setCorsHeaders(req, res);
+  await setCorsHeaders(req, res, tenantId);
 
-  const allow = await assertWebchatAllowed(req, { requireWidgetKey: false });
+  const allow = await assertWebchatAllowed(req, tenantId, { requireWidgetKey: false });
   if (!allow.ok) {
     return res.status(allow.status).json({ error: allow.error, details: allow.details });
   }
