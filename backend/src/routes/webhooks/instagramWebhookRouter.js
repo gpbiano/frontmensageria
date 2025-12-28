@@ -1,3 +1,4 @@
+// backend/src/routes/webhooks/instagramWebhookRouter.js
 import express from "express";
 import fetch from "node-fetch";
 import prismaMod from "../../lib/prisma.js";
@@ -24,6 +25,13 @@ const HANDOFF_MESSAGE = String(
     "Aguarde um momento, vou te transferir para um atendente humano."
 ).trim();
 
+// ===============================
+// Helpers
+// ===============================
+function nowIso() {
+  return new Date().toISOString();
+}
+
 function safeStr(v, fallback = "") {
   const s = typeof v === "string" ? v : v == null ? "" : String(v);
   return s.trim() || fallback;
@@ -33,17 +41,15 @@ function asJson(v) {
   return v && typeof v === "object" ? v : {};
 }
 
-// Mensagem texto (apenas quando existir)
 function msgTextFromIGEvent(ev) {
   return safeStr(ev?.message?.text || ev?.message?.body || ev?.text || "");
 }
 
-// Ignora eventos que não são mensagem de texto do usuário
 function isValidIncomingTextEvent(ev) {
   const text = msgTextFromIGEvent(ev);
   if (!text) return false;
 
-  // IG/Messenger podem mandar "echo" do que o app enviou
+  // echo do app
   if (ev?.message?.is_echo === true) return false;
 
   const senderId = safeStr(ev?.sender?.id);
@@ -54,6 +60,17 @@ function isValidIncomingTextEvent(ev) {
   return true;
 }
 
+function parseBotReplyToText(botReply) {
+  if (!botReply) return "";
+  if (typeof botReply === "string") return safeStr(botReply);
+  if (typeof botReply?.replyText === "string") return safeStr(botReply.replyText);
+  if (typeof botReply?.text === "string") return safeStr(botReply.text);
+  return safeStr(botReply?.message || "");
+}
+
+// ===============================
+// Graph send
+// ===============================
 async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, text }) {
   if (!instagramBusinessId) throw new Error("instagramBusinessId ausente");
   if (!pageAccessToken) throw new Error("pageAccessToken ausente");
@@ -69,7 +86,7 @@ async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, t
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      recipient: { id: recipientId },
+      recipient: { id: String(recipientId) },
       message: { text: body }
     })
   });
@@ -81,19 +98,18 @@ async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, t
   } catch {
     json = { raw };
   }
+
   return { ok: resp.ok, status: resp.status, json };
 }
 
-/**
- * Resolve ChannelConfig pelo instagramBusinessId (recipient)
- * - Prioridade: config.instagramBusinessId
- * - Fallback: coluna pageId igual ao recipient (se você tiver esse formato em algum momento)
- */
+// ===============================
+// Resolve ChannelConfig
+// ===============================
 async function resolveChannelByInstagramRecipient(instagramBusinessId) {
   const rid = String(instagramBusinessId || "").trim();
   if (!rid) return null;
 
-  // config.instagramBusinessId
+  // ✅ prioridade: config.instagramBusinessId
   const byCfg = await prisma.channelConfig.findFirst({
     where: {
       channel: "instagram",
@@ -105,21 +121,28 @@ async function resolveChannelByInstagramRecipient(instagramBusinessId) {
   });
   if (byCfg) return byCfg;
 
-  // fallback (se algum dia o recipient bater com pageId)
+  // fallback: pageId == recipientId (se existir)
   const byPageId = await prisma.channelConfig.findFirst({
     where: { channel: "instagram", enabled: true, status: "connected", pageId: rid },
     orderBy: { updatedAt: "desc" }
   });
+
   return byPageId || null;
 }
 
-function parseBotReplyToText(botReply) {
-  // suporta botEngine retornando string ou objeto
-  if (!botReply) return "";
-  if (typeof botReply === "string") return safeStr(botReply);
-  if (typeof botReply?.replyText === "string") return safeStr(botReply.replyText);
-  if (typeof botReply?.text === "string") return safeStr(botReply.text);
-  return safeStr(botReply?.message || "");
+// ✅ botEnabled default ON (só OFF se botEnabled === false)
+async function isInstagramBotEnabled(tenantId) {
+  try {
+    const row = await prisma.channelConfig.findFirst({
+      where: { tenantId: String(tenantId), channel: "instagram", enabled: true },
+      select: { config: true }
+    });
+
+    const cfg = row?.config && typeof row.config === "object" ? row.config : {};
+    return cfg.botEnabled !== false;
+  } catch {
+    return true;
+  }
 }
 
 // ======================================================
@@ -145,7 +168,7 @@ router.get("/", (req, res) => {
 // POST /webhook/instagram (events)
 // ======================================================
 router.post("/", async (req, res) => {
-  // responde rápido pra Meta
+  // Meta quer 200 rápido
   res.sendStatus(200);
 
   try {
@@ -158,12 +181,12 @@ router.post("/", async (req, res) => {
       for (const ev of events) {
         if (!isValidIncomingTextEvent(ev)) continue;
 
-        const senderId = safeStr(ev?.sender?.id); // user
-        const recipientId = safeStr(ev?.recipient?.id); // IG business id (recipient)
+        const senderId = safeStr(ev?.sender?.id); // user id
+        const recipientId = safeStr(ev?.recipient?.id); // instagramBusinessId
         const text = msgTextFromIGEvent(ev);
         const mid = ev?.message?.mid ? String(ev.message.mid) : "";
 
-        // 1) resolve channelConfig via recipientId (instagramBusinessId)
+        // 1) resolve ChannelConfig via recipientId (instagramBusinessId)
         const ch = await resolveChannelByInstagramRecipient(recipientId);
         if (!ch?.tenantId) {
           logger.warn({ recipientId }, "⚠️ IG webhook: tenant não encontrado para recipientId");
@@ -184,15 +207,17 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // ✅ fonte de verdade: botEnabled no ChannelConfig(channel="instagram")
-        const botEnabled = cfg.botEnabled === true;
+        // ✅ botEnabled default ON
+        const botEnabled = await isInstagramBotEnabled(tenantId);
 
-        // 2) upsert conversa (peerId consistente)
+        // 2) upsert conversa (peerId SEMPRE com prefixo ig:)
+        const peerId = `ig:${senderId}`;
+
         const convRes = await getOrCreateChannelConversation({
           tenantId,
           source: "instagram",
           channel: "instagram",
-          peerId: `ig:${senderId}`,
+          peerId,
           title: "Contato Instagram",
           accountId: instagramBusinessId || null,
           meta: {
@@ -202,7 +227,10 @@ router.post("/", async (req, res) => {
           }
         });
 
-        if (!convRes?.ok || !convRes?.conversation?.id) continue;
+        if (!convRes?.ok || !convRes?.conversation?.id) {
+          logger.warn({ tenantId, recipientId }, "❌ IG webhook: falha ao criar/achar conversa");
+          continue;
+        }
 
         const conversation = convRes.conversation;
         const conversationId = String(conversation.id);
@@ -216,12 +244,12 @@ router.post("/", async (req, res) => {
           direction: "in",
           type: "text",
           text,
-          createdAt: new Date().toISOString(),
+          createdAt: nowIso(),
           waMessageId: mid || undefined,
           payload: ev
         });
 
-        // 4) se já está em humano/handoff ativo → não roda bot
+        // 4) se já está em humano/handoff/inbox → não responde bot
         if (
           String(conversation?.currentMode || "").toLowerCase() === "human" ||
           conversation?.handoffActive === true ||
@@ -230,9 +258,8 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // 5) se bot está OFF → força handoff/inbox
+        // 5) bot OFF → handoff + promove inbox
         if (!botEnabled) {
-          // manda mensagem de handoff (best-effort)
           try {
             await igSendText({
               instagramBusinessId,
@@ -241,10 +268,12 @@ router.post("/", async (req, res) => {
               text: HANDOFF_MESSAGE
             });
           } catch (e) {
-            logger.error({ err: String(e), tenantId }, "❌ IG webhook: falha ao enviar handoff (bot disabled)");
+            logger.error(
+              { err: String(e), tenantId },
+              "❌ IG webhook: falha ao enviar handoff (bot disabled)"
+            );
           }
 
-          // promove para Inbox via handoff:true
           await appendMessage(conversationId, {
             tenantId,
             source: "instagram",
@@ -255,22 +284,22 @@ router.post("/", async (req, res) => {
             type: "text",
             text: HANDOFF_MESSAGE,
             handoff: true,
-            createdAt: new Date().toISOString(),
+            createdAt: nowIso(),
             payload: { kind: "handoff_disabled_bot", instagramBusinessId }
           });
 
           continue;
         }
 
-        // 6) decide rota (bot vs handoff)
+        // 6) rules: bot vs handoff
         const accountSettings = { channel: "instagram", tenantId, instagramBusinessId };
+
         const route = await decideRoute({
           accountSettings,
           conversation,
           messageText: text
         });
 
-        // ✅ HANDOFF REAL
         if (route?.target && route.target !== "bot") {
           try {
             await igSendText({
@@ -280,7 +309,10 @@ router.post("/", async (req, res) => {
               text: HANDOFF_MESSAGE
             });
           } catch (e) {
-            logger.error({ err: String(e), tenantId }, "❌ IG webhook: falha ao enviar handoff (route)");
+            logger.error(
+              { err: String(e), tenantId },
+              "❌ IG webhook: falha ao enviar handoff (route)"
+            );
           }
 
           await appendMessage(conversationId, {
@@ -293,8 +325,8 @@ router.post("/", async (req, res) => {
             type: "text",
             text: HANDOFF_MESSAGE,
             handoff: true,
-            createdAt: new Date().toISOString(),
-            payload: { kind: "handoff", instagramBusinessId }
+            createdAt: nowIso(),
+            payload: { kind: "handoff", instagramBusinessId, route }
           });
 
           continue;
@@ -307,7 +339,7 @@ router.post("/", async (req, res) => {
             accountSettings,
             conversation: { ...conversation, id: conversationId },
             messageText: text,
-            history: [] // opcional no futuro
+            history: []
           });
 
           botText = parseBotReplyToText(botReply);
@@ -317,7 +349,7 @@ router.post("/", async (req, res) => {
           botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
         }
 
-        // 8) envia pro usuário
+        // 8) envia pro usuário (Graph)
         const sendRes = await igSendText({
           instagramBusinessId,
           recipientId: senderId,
@@ -327,12 +359,16 @@ router.post("/", async (req, res) => {
 
         if (!sendRes.ok) {
           logger.warn(
-            { tenantId, status: sendRes.status, meta: sendRes.json?.error || sendRes.json },
+            {
+              tenantId,
+              status: sendRes.status,
+              meta: sendRes.json?.error || sendRes.json
+            },
             "⚠️ IG webhook: falha ao enviar mensagem (Graph)"
           );
         }
 
-        // 9) salva bot no histórico
+        // 9) salva bot no histórico (SEM handoff)
         await appendMessage(conversationId, {
           tenantId,
           source: "instagram",
@@ -342,8 +378,8 @@ router.post("/", async (req, res) => {
           direction: "out",
           type: "text",
           text: botText,
-          createdAt: new Date().toISOString(),
-          payload: { kind: "bot" }
+          createdAt: nowIso(),
+          payload: { kind: "bot", sendOk: sendRes.ok, sendStatus: sendRes.status }
         });
       }
     }
