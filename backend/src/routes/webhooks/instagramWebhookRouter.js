@@ -1,5 +1,6 @@
 // backend/src/routes/webhooks/instagramWebhookRouter.js
 import express from "express";
+import crypto from "crypto";
 import fetch from "node-fetch";
 import prismaMod from "../../lib/prisma.js";
 import logger from "../../logger.js";
@@ -18,6 +19,8 @@ const VERIFY_TOKEN = String(
     process.env.VERIFY_TOKEN ||
     ""
 ).trim();
+
+const META_APP_SECRET = String(process.env.META_APP_SECRET || "").trim();
 
 const HANDOFF_MESSAGE = String(
   process.env.INSTAGRAM_HANDOFF_MESSAGE ||
@@ -39,6 +42,32 @@ function safeStr(v, fallback = "") {
 
 function asJson(v) {
   return v && typeof v === "object" ? v : {};
+}
+
+function timingSafeEqualHex(aHex, bHex) {
+  try {
+    const a = Buffer.from(String(aHex || "").replace(/^sha256=/, ""), "hex");
+    const b = Buffer.from(String(bHex || "").replace(/^sha256=/, ""), "hex");
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+function validateMetaSignature(req) {
+  const sig = String(req.headers["x-hub-signature-256"] || "").trim();
+  if (!META_APP_SECRET) return { ok: true, skipped: true, reason: "no_app_secret" };
+  if (!sig) return { ok: false, reason: "missing_signature" };
+  if (!req.rawBody) return { ok: true, skipped: true, reason: "no_raw_body" };
+
+  const digest = crypto
+    .createHmac("sha256", META_APP_SECRET)
+    .update(req.rawBody)
+    .digest("hex");
+
+  const ok = timingSafeEqualHex(sig, `sha256=${digest}`);
+  return ok ? { ok: true } : { ok: false, reason: "invalid_signature" };
 }
 
 function msgTextFromIGEvent(ev) {
@@ -110,16 +139,20 @@ async function resolveChannelByInstagramRecipient(instagramBusinessId) {
   if (!rid) return null;
 
   // ✅ prioridade: config.instagramBusinessId
-  const byCfg = await prisma.channelConfig.findFirst({
-    where: {
-      channel: "instagram",
-      enabled: true,
-      status: "connected",
-      config: { path: ["instagramBusinessId"], equals: rid }
-    },
-    orderBy: { updatedAt: "desc" }
-  });
-  if (byCfg) return byCfg;
+  try {
+    const byCfg = await prisma.channelConfig.findFirst({
+      where: {
+        channel: "instagram",
+        enabled: true,
+        status: "connected",
+        config: { path: ["instagramBusinessId"], equals: rid }
+      },
+      orderBy: { updatedAt: "desc" }
+    });
+    if (byCfg) return byCfg;
+  } catch {
+    // ignore json-path incompat
+  }
 
   // fallback: pageId == recipientId (se existir)
   const byPageId = await prisma.channelConfig.findFirst({
@@ -130,18 +163,42 @@ async function resolveChannelByInstagramRecipient(instagramBusinessId) {
   return byPageId || null;
 }
 
-// ✅ botEnabled default ON (só OFF se botEnabled === false)
-async function isInstagramBotEnabled(tenantId) {
+async function ensureConversationMeta(conversationId, patch) {
   try {
-    const row = await prisma.channelConfig.findFirst({
-      where: { tenantId: String(tenantId), channel: "instagram", enabled: true },
-      select: { config: true }
+    const row = await prisma.conversation.findUnique({
+      where: { id: String(conversationId) },
+      select: { id: true, metadata: true }
     });
+    if (!row) return;
 
-    const cfg = row?.config && typeof row.config === "object" ? row.config : {};
-    return cfg.botEnabled !== false;
-  } catch {
-    return true;
+    const curr = row.metadata && typeof row.metadata === "object" ? row.metadata : {};
+    const next = { ...curr, ...asJson(patch) };
+
+    // só escreve se mudou algo relevante
+    const changed =
+      JSON.stringify({
+        instagramBusinessId: curr.instagramBusinessId,
+        recipientId: curr.recipientId,
+        peerId: curr.peerId,
+        source: curr.source,
+        channel: curr.channel
+      }) !==
+      JSON.stringify({
+        instagramBusinessId: next.instagramBusinessId,
+        recipientId: next.recipientId,
+        peerId: next.peerId,
+        source: next.source,
+        channel: next.channel
+      });
+
+    if (!changed) return;
+
+    await prisma.conversation.update({
+      where: { id: row.id },
+      data: { metadata: next }
+    });
+  } catch (e) {
+    logger.warn({ err: String(e) }, "⚠️ IG ensureConversationMeta falhou");
   }
 }
 
@@ -171,6 +228,13 @@ router.post("/", async (req, res) => {
   // Meta quer 200 rápido
   res.sendStatus(200);
 
+  // (opcional) valida assinatura se META_APP_SECRET estiver configurado
+  const sig = validateMetaSignature(req);
+  if (!sig.ok) {
+    logger.warn({ sig }, "❌ IG webhook assinatura inválida");
+    return;
+  }
+
   try {
     const body = req.body || {};
     const entries = Array.isArray(body.entry) ? body.entry : [];
@@ -186,7 +250,7 @@ router.post("/", async (req, res) => {
         const text = msgTextFromIGEvent(ev);
         const mid = ev?.message?.mid ? String(ev.message.mid) : "";
 
-        // 1) resolve ChannelConfig via recipientId (instagramBusinessId)
+        // 1) resolve ChannelConfig via recipientId
         const ch = await resolveChannelByInstagramRecipient(recipientId);
         if (!ch?.tenantId) {
           logger.warn({ recipientId }, "⚠️ IG webhook: tenant não encontrado para recipientId");
@@ -207,10 +271,10 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // ✅ botEnabled default ON
-        const botEnabled = await isInstagramBotEnabled(tenantId);
+        // ✅ botEnabled default ON (só OFF se botEnabled === false)
+        const botEnabled = cfg.botEnabled !== false;
 
-        // 2) upsert conversa (peerId SEMPRE com prefixo ig:)
+        // 2) upsert conversa (peerId sempre com prefixo ig:)
         const peerId = `ig:${senderId}`;
 
         const convRes = await getOrCreateChannelConversation({
@@ -218,13 +282,7 @@ router.post("/", async (req, res) => {
           source: "instagram",
           channel: "instagram",
           peerId,
-          title: "Contato Instagram",
-          accountId: instagramBusinessId || null,
-          meta: {
-            instagramBusinessId,
-            recipientId,
-            pageId: ch.pageId || null
-          }
+          title: "Contato Instagram"
         });
 
         if (!convRes?.ok || !convRes?.conversation?.id) {
@@ -234,6 +292,15 @@ router.post("/", async (req, res) => {
 
         const conversation = convRes.conversation;
         const conversationId = String(conversation.id);
+
+        // garante meta útil p/ outbound e debugging
+        await ensureConversationMeta(conversationId, {
+          source: "instagram",
+          channel: "instagram",
+          peerId,
+          instagramBusinessId,
+          recipientId
+        });
 
         // 3) salva inbound (dedupe via waMessageId)
         await appendMessage(conversationId, {
@@ -274,6 +341,7 @@ router.post("/", async (req, res) => {
             );
           }
 
+          // ⚠️ handoff:true promove para Inbox (conversations.js)
           await appendMessage(conversationId, {
             tenantId,
             source: "instagram",
@@ -309,10 +377,7 @@ router.post("/", async (req, res) => {
               text: HANDOFF_MESSAGE
             });
           } catch (e) {
-            logger.error(
-              { err: String(e), tenantId },
-              "❌ IG webhook: falha ao enviar handoff (route)"
-            );
+            logger.error({ err: String(e), tenantId }, "❌ IG webhook: falha ao enviar handoff (route)");
           }
 
           await appendMessage(conversationId, {
@@ -359,11 +424,7 @@ router.post("/", async (req, res) => {
 
         if (!sendRes.ok) {
           logger.warn(
-            {
-              tenantId,
-              status: sendRes.status,
-              meta: sendRes.json?.error || sendRes.json
-            },
+            { tenantId, status: sendRes.status, meta: sendRes.json?.error || sendRes.json },
             "⚠️ IG webhook: falha ao enviar mensagem (Graph)"
           );
         }
@@ -379,7 +440,7 @@ router.post("/", async (req, res) => {
           type: "text",
           text: botText,
           createdAt: nowIso(),
-          payload: { kind: "bot", sendOk: sendRes.ok, sendStatus: sendRes.status }
+          payload: { kind: "bot", sendOk: sendRes.ok, sendStatus: sendRes.status, graph: sendRes.json }
         });
       }
     }
