@@ -10,6 +10,9 @@ const router = express.Router();
 const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION || "v21.0").trim();
 const META_GRAPH_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 
+// ✅ Para Instagram DM via Messaging API (o que funcionou no seu teste)
+const IG_GRAPH_BASE = `https://graph.instagram.com/${META_GRAPH_VERSION}`;
+
 // ======================================================
 // HELPERS
 // ======================================================
@@ -368,7 +371,7 @@ async function sendMessengerText({ tenantId, peerId, text }) {
   const psid = peerToPSID(peerId);
   if (!psid) return { ok: false, error: "peerId inválido para Messenger (PSID vazio)" };
 
-  const url = `${META_GRAPH_BASE}/me/messages?access_token=${encodeURIComponent(pageAccessToken)}`;
+  const url = `${META_GRAPH_BASE}/me/messages`;
   const body = {
     messaging_type: "RESPONSE",
     recipient: { id: psid },
@@ -377,7 +380,10 @@ async function sendMessengerText({ tenantId, peerId, text }) {
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${pageAccessToken}`
+    },
     body: JSON.stringify(body)
   });
 
@@ -393,47 +399,89 @@ async function sendMessengerText({ tenantId, peerId, text }) {
   return { ok: true, providerMessageId: json?.message_id || null, raw: json };
 }
 
+/**
+ * ✅ Instagram DM
+ * - Primário: graph.instagram.com/vXX.X/me/messages + Authorization Bearer (o que funcionou no seu teste)
+ * - Fallback: graph.facebook.com/vXX.X/{instagramBusinessId}/messages?access_token=...
+ */
 async function sendInstagramText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "instagram");
   const token = safeStr(conn?.row?.accessToken || "");
   const cfg = asJson(conn?.config);
 
-  const instagramBusinessId = safeStr(cfg.instagramBusinessId || "");
   if (!token) return { ok: false, error: "Instagram não conectado (accessToken ausente)" };
-  if (!instagramBusinessId)
-    return { ok: false, error: "Instagram não configurado (config.instagramBusinessId ausente)" };
 
   const igUserId = peerToPSID(peerId);
   if (!igUserId) return { ok: false, error: "peerId inválido para Instagram (id vazio)" };
 
-  const url = `${META_GRAPH_BASE}/${encodeURIComponent(instagramBusinessId)}/messages?access_token=${encodeURIComponent(
-    token
-  )}`;
-
   const body = {
-    recipient: { id: igUserId },
+    recipient: { id: String(igUserId) },
     message: { text: safeStr(text) }
   };
 
-  const resp = await fetch(url, {
+  // ✅ Primário (igual seu teste que deu 200)
+  try {
+    const url = `${IG_GRAPH_BASE}/me/messages`;
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    const json = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      return { ok: true, providerMessageId: json?.message_id || null, raw: json };
+    }
+
+    // cai pro fallback abaixo
+    const primaryErr = json?.error || json;
+
+    // ⚠️ Se não tiver business id, retorna erro do primário
+    const instagramBusinessId = safeStr(cfg.instagramBusinessId || "");
+    if (!instagramBusinessId) {
+      return {
+        ok: false,
+        error: json?.error?.message || `Instagram Graph ${resp.status}`,
+        meta: primaryErr
+      };
+    }
+
+    // 🔁 fallback tenta também (pra compat)
+  } catch (e) {
+    // fallback abaixo
+  }
+
+  // 🔁 Fallback (compat)
+  const instagramBusinessId = safeStr(cfg.instagramBusinessId || "");
+  if (!instagramBusinessId) {
+    return { ok: false, error: "Instagram não configurado (config.instagramBusinessId ausente)" };
+  }
+
+  const fallbackUrl = `${META_GRAPH_BASE}/${encodeURIComponent(
+    instagramBusinessId
+  )}/messages?access_token=${encodeURIComponent(token)}`;
+
+  const resp2 = await fetch(fallbackUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
 
-  const json = await resp.json().catch(() => ({}));
-  if (!resp.ok) {
+  const json2 = await resp2.json().catch(() => ({}));
+  if (!resp2.ok) {
     return {
       ok: false,
-      error: json?.error?.message || `Instagram Graph ${resp.status}`,
-      meta: json?.error || json
+      error: json2?.error?.message || `Instagram Graph ${resp2.status}`,
+      meta: json2?.error || json2
     };
   }
 
-  return { ok: true, providerMessageId: json?.message_id || null, raw: json };
+  return { ok: true, providerMessageId: json2?.message_id || null, raw: json2 };
 }
-
-
 
 async function dispatchOutboundToChannel({ convRow, msgText }) {
   const tenantId = convRow.tenantId;
@@ -734,7 +782,6 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     nameFromMsg = displayNameFallbackByChannel(convNorm.channel, metaBefore.peerId || "");
   }
 
-  // atualiza metadata.title
   await prisma.conversation
     .update({
       where: { id: convRow.id },
@@ -742,12 +789,12 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     })
     .catch(() => {});
 
-  // atualiza contato
   if (convRow.contactId) {
-    await prisma.contact.update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } }).catch(() => {});
+    await prisma.contact
+      .update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } })
+      .catch(() => {});
   }
 
-  // ✅ contadores / inbox
   if (from === "bot") await bumpBotAttempts({ convRow });
 
   if (from === "agent" || rawMsg?.handoff === true) {
@@ -866,10 +913,11 @@ router.post("/:id/messages", async (req, res) => {
         sentAt: sendRes?.ok ? nowIso() : null
       };
 
-      // ✅ salva resultado do envio no metadata da Message (merge real)
+      // ✅ merge real (mantém from/source/channel etc)
+      const msgId = String(r.msgRow?.id || r.msg?.id);
       await prisma.message
         .update({
-          where: { id: String(r.msgRow?.id || r.msg?.id) },
+          where: { id: msgId },
           data: {
             status: sendRes?.ok ? "sent" : "failed",
             metadata: { ...(getMeta(r.msgRow) || {}), ...patchMeta }
