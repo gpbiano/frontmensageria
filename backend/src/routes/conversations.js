@@ -10,7 +10,7 @@ const router = express.Router();
 const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION || "v21.0").trim();
 const META_GRAPH_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 
-// ✅ Para Instagram DM via Messaging API (o que funcionou no seu teste)
+// ✅ Instagram DM via Messaging API (o que funcionou no seu teste)
 const IG_GRAPH_BASE = `https://graph.instagram.com/${META_GRAPH_VERSION}`;
 
 // ======================================================
@@ -361,6 +361,10 @@ async function sendWhatsAppText({ tenantId, peerId, text }) {
   return { ok: true, providerMessageId: wamid, raw: json };
 }
 
+/**
+ * ✅ Messenger (Page Messaging)
+ * - usa /me/messages?access_token=... (forma mais compatível)
+ */
 async function sendMessengerText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "messenger");
   const pageAccessToken = safeStr(conn?.row?.accessToken || "");
@@ -371,7 +375,7 @@ async function sendMessengerText({ tenantId, peerId, text }) {
   const psid = peerToPSID(peerId);
   if (!psid) return { ok: false, error: "peerId inválido para Messenger (PSID vazio)" };
 
-  const url = `${META_GRAPH_BASE}/me/messages`;
+  const url = `${META_GRAPH_BASE}/me/messages?access_token=${encodeURIComponent(pageAccessToken)}`;
   const body = {
     messaging_type: "RESPONSE",
     recipient: { id: psid },
@@ -380,10 +384,7 @@ async function sendMessengerText({ tenantId, peerId, text }) {
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${pageAccessToken}`
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
 
@@ -437,22 +438,18 @@ async function sendInstagramText({ tenantId, peerId, text }) {
       return { ok: true, providerMessageId: json?.message_id || null, raw: json };
     }
 
-    // cai pro fallback abaixo
-    const primaryErr = json?.error || json;
-
-    // ⚠️ Se não tiver business id, retorna erro do primário
+    // sem businessId -> retorna erro do primário
     const instagramBusinessId = safeStr(cfg.instagramBusinessId || "");
     if (!instagramBusinessId) {
       return {
         ok: false,
         error: json?.error?.message || `Instagram Graph ${resp.status}`,
-        meta: primaryErr
+        meta: json?.error || json
       };
     }
-
-    // 🔁 fallback tenta também (pra compat)
-  } catch (e) {
-    // fallback abaixo
+    // 🔁 tenta fallback abaixo
+  } catch {
+    // 🔁 tenta fallback abaixo
   }
 
   // 🔁 Fallback (compat)
@@ -610,9 +607,7 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
         data: { metadata: setMeta(conv, { title: resolvedName, peerId, channel, source }) }
       });
 
-      await prisma.contact
-        .update({ where: { id: contact.id }, data: { name: resolvedName } })
-        .catch(() => {});
+      await prisma.contact.update({ where: { id: contact.id }, data: { name: resolvedName } }).catch(() => {});
     }
   }
 
@@ -790,14 +785,19 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     .catch(() => {});
 
   if (convRow.contactId) {
-    await prisma.contact
-      .update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } })
-      .catch(() => {});
+    await prisma.contact.update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } }).catch(() => {});
   }
 
+  // ✅ bot attempts não pode “virar humano”
   if (from === "bot") await bumpBotAttempts({ convRow });
 
-  if (from === "agent" || rawMsg?.handoff === true) {
+  // ✅ IMPORTANTÍSSIMO:
+  // Só promove para Inbox quando:
+  // - agente humano envia (from === "agent" e NÃO é bot)
+  // - ou evento explicitamente marcou handoff:true
+  const shouldPromoteInbox = (from === "agent" && isBot !== true) || rawMsg?.handoff === true;
+
+  if (shouldPromoteInbox) {
     const reason = rawMsg?.handoff === true ? "handoff" : "agent_message";
     await promoteToInboxPrisma({ convRow, reason });
   }
