@@ -74,30 +74,26 @@ function parseBotReplyToText(botReply) {
 }
 
 /**
- * Alguns ambientes acabam salvando token com aspas, "null", objetos stringify etc.
- * Este helper tenta normalizar e rejeitar tokens obviamente inválidos.
+ * Sanitiza token (remove aspas, whitespace e valores inválidos)
  */
 function sanitizeAccessToken(raw) {
   let t = safeStr(raw);
   if (!t) return "";
 
-  // remove aspas simples/duplas ao redor
   if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
     t = t.slice(1, -1).trim();
   }
 
-  // remove whitespace invisível (muito comum quebrar token no copy/paste)
   t = t.replace(/\s+/g, "");
 
-  // elimina tokens “fake”
   const bad = ["null", "undefined", "[objectobject]"];
   if (bad.includes(t.toLowerCase())) return "";
 
-  // se for JSON {access_token: "..."} (ou algo similar)
   if (t.startsWith("{") && t.endsWith("}")) {
     try {
       const obj = JSON.parse(t);
-      const inner = obj?.access_token || obj?.pageAccessToken || obj?.token || obj?.accessToken || "";
+      const inner =
+        obj?.access_token || obj?.pageAccessToken || obj?.token || obj?.accessToken || "";
       t = safeStr(inner).replace(/\s+/g, "");
     } catch {
       return "";
@@ -108,15 +104,13 @@ function sanitizeAccessToken(raw) {
 }
 
 /**
- * Heurística simples: tokens válidos costumam ser longos e sem espaços.
- * Aceita tanto EA... quanto IGAA... (Meta Assistant usa IGAA nos testes).
+ * Aceita tokens longos (EA..., IGAA..., etc)
  */
 function looksLikeMetaToken(t) {
   const s = sanitizeAccessToken(t);
   if (!s) return false;
   if (s.length < 40) return false;
   if (/\s/.test(s)) return false;
-  // aceita EA..., IGAA..., e outros tokens longos
   return true;
 }
 
@@ -147,7 +141,7 @@ function validateMetaSignature(req) {
   const sigHeader = String(req.headers["x-hub-signature-256"] || "").trim();
   if (!sigHeader) return { ok: false, reason: "missing_signature" };
 
-  const raw = req.rawBody; // Buffer exato do index (express.raw)
+  const raw = req.rawBody;
   if (!raw || !Buffer.isBuffer(raw)) return { ok: false, reason: "missing_raw_body" };
 
   const gotHex = normalizeSigHeader(sigHeader);
@@ -170,7 +164,6 @@ function validateMetaSignature(req) {
 }
 
 function parseIncomingBody(req) {
-  // Com express.raw, req.body é Buffer
   if (Buffer.isBuffer(req.body)) {
     const txt = req.body.toString("utf8");
     if (!txt) return {};
@@ -185,7 +178,7 @@ function parseIncomingBody(req) {
 }
 
 // ===============================
-// Graph send (try Meta Assistant style first)
+// Graph send (Meta Assistant style first)
 // ===============================
 async function igSendText({ instagramBusinessId, recipientId, accessToken, text }) {
   if (!accessToken) throw new Error("accessToken ausente");
@@ -224,16 +217,13 @@ async function igSendText({ instagramBusinessId, recipientId, accessToken, text 
     return { ok: resp.ok, status: resp.status, json, url };
   };
 
-  // 1) igual ao Meta Assistant
   const r1 = await tryPost(`https://graph.instagram.com/${META_GRAPH_VERSION}/me/messages`);
   if (r1.ok) return r1;
 
-  // 2) fallback tradicional
   if (instagramBusinessId) {
-    const r2 = await tryPost(
+    return tryPost(
       `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(instagramBusinessId)}/messages`
     );
-    return r2;
   }
 
   return r1;
@@ -281,7 +271,7 @@ async function isInstagramBotEnabled(tenantId) {
 function pickInstagramAccessToken(channelRow) {
   const cfg = asJson(channelRow?.config);
   const candidates = [
-    channelRow?.accessToken, // coluna principal
+    channelRow?.accessToken,
     cfg?.accessToken,
     cfg?.pageAccessToken,
     cfg?.token
@@ -291,8 +281,27 @@ function pickInstagramAccessToken(channelRow) {
     const t = sanitizeAccessToken(c);
     if (t && looksLikeMetaToken(t)) return t;
   }
-
   return "";
+}
+
+/**
+ * ✅ ESSENCIAL: trava a conversa em modo humano depois que o handoff foi enviado com sucesso.
+ * Sem isso, o webhook não tem como “parar o bot”, porque a guarda olha currentMode/handoffActive/inboxVisible.
+ */
+async function activateHandoff(conversationId) {
+  try {
+    await prisma.conversation.update({
+      where: { id: String(conversationId) },
+      data: {
+        currentMode: "human",
+        handoffActive: true,
+        inboxVisible: true,
+        updatedAt: new Date()
+      }
+    });
+  } catch (e) {
+    logger.warn({ err: String(e), conversationId }, "⚠️ IG: falha ao ativar handoff no DB");
+  }
 }
 
 // ======================================================
@@ -416,7 +425,7 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // helper local: envia e loga erro detalhado
+        // helper: envia e loga
         const sendAndLog = async ({ kind, outText, extra = {} }) => {
           let sendRes = { ok: false, status: 0, json: {}, url: "" };
           try {
@@ -465,7 +474,7 @@ router.post("/", async (req, res) => {
           return sendRes;
         };
 
-        // Bot desabilitado → tenta mandar handoff (mas só ativa handoff se enviar OK)
+        // BOT DESLIGADO → HANDOFF
         if (!botEnabled) {
           const sendRes = await sendAndLog({
             kind: "handoff_disabled_bot",
@@ -486,6 +495,9 @@ router.post("/", async (req, res) => {
             });
             continue;
           }
+
+          // ✅ trava modo humano
+          await activateHandoff(conversationId);
 
           await appendMessage(conversationId, {
             tenantId,
@@ -512,7 +524,12 @@ router.post("/", async (req, res) => {
           messageText: text
         });
 
-        // rota para humano → mesma regra: só ativa handoff se enviar OK
+        logger.info(
+          { kind: "route_decision", tenantId, senderId, instagramBusinessId, route },
+          "🤖 IG decideRoute"
+        );
+
+        // HANDOFF (keyword/max attempts/etc)
         if (route?.target && route.target !== "bot") {
           const sendRes = await sendAndLog({
             kind: "handoff",
@@ -534,6 +551,9 @@ router.post("/", async (req, res) => {
             });
             continue;
           }
+
+          // ✅ trava modo humano
+          await activateHandoff(conversationId);
 
           await appendMessage(conversationId, {
             tenantId,
