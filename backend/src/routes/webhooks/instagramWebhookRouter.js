@@ -21,7 +21,7 @@ const VERIFY_TOKEN = String(
     ""
 ).trim();
 
-// ✅ App Secret correto (o mesmo do app na Meta)
+// ✅ App Secret do MESMO APP que configurou o Webhook na Meta
 const META_APP_SECRET = String(
   process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET || ""
 ).trim();
@@ -38,26 +38,19 @@ const HANDOFF_MESSAGE = String(
 function nowIso() {
   return new Date().toISOString();
 }
-
 function safeStr(v, fallback = "") {
   const s = typeof v === "string" ? v : v == null ? "" : String(v);
   return s.trim() || fallback;
 }
-
 function asJson(v) {
   return v && typeof v === "object" ? v : {};
 }
-
 function msgTextFromIGEvent(ev) {
-  // IG Webhooks: message.text geralmente
   return safeStr(ev?.message?.text || ev?.message?.body || ev?.text || "");
 }
-
 function isValidIncomingTextEvent(ev) {
   const text = msgTextFromIGEvent(ev);
   if (!text) return false;
-
-  // echo do app
   if (ev?.message?.is_echo === true) return false;
 
   const senderId = safeStr(ev?.sender?.id);
@@ -67,7 +60,6 @@ function isValidIncomingTextEvent(ev) {
 
   return true;
 }
-
 function parseBotReplyToText(botReply) {
   if (!botReply) return "";
   if (typeof botReply === "string") return safeStr(botReply);
@@ -79,30 +71,36 @@ function parseBotReplyToText(botReply) {
 // ===============================
 // ✅ Signature validation (Meta)
 // ===============================
-function timingSafeEqualHex(aHex, bHex) {
-  try {
-    const a = Buffer.from(String(aHex || "").replace(/^sha256=/, ""), "hex");
-    const b = Buffer.from(String(bHex || "").replace(/^sha256=/, ""), "hex");
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
+function normalizeSigHeader(sig) {
+  const s = String(sig || "").trim();
+  return s.startsWith("sha256=") ? s.slice("sha256=".length) : s;
 }
 
 function validateMetaSignature(req) {
-  const sig = String(req.headers["x-hub-signature-256"] || "").trim();
+  const sigHeader = String(req.headers["x-hub-signature-256"] || "").trim();
 
-  // Se não tem secret, não valida (modo dev)
+  // modo dev: sem secret, não bloqueia
   if (!META_APP_SECRET) return { ok: true, skipped: true, reason: "no_app_secret" };
 
-  if (!sig) return { ok: false, reason: "missing_signature" };
-  if (!req.rawBody) return { ok: false, reason: "missing_raw_body" };
+  if (!sigHeader) return { ok: false, reason: "missing_signature" };
 
-  const digest = crypto.createHmac("sha256", META_APP_SECRET).update(req.rawBody).digest("hex");
-  const ok = timingSafeEqualHex(sig, `sha256=${digest}`);
+  const raw = req.rawBody; // Buffer setado no express.json verify()
+  if (!raw || !Buffer.isBuffer(raw)) {
+    return { ok: false, reason: "missing_raw_body" };
+  }
 
-  return ok ? { ok: true } : { ok: false, reason: "invalid_signature" };
+  const expectedHex = crypto.createHmac("sha256", META_APP_SECRET).update(raw).digest("hex");
+  const gotHex = normalizeSigHeader(sigHeader);
+
+  try {
+    const a = Buffer.from(expectedHex, "hex");
+    const b = Buffer.from(gotHex, "hex");
+    if (a.length !== b.length) return { ok: false, reason: "invalid_signature_len" };
+    const ok = crypto.timingSafeEqual(a, b);
+    return ok ? { ok: true } : { ok: false, reason: "invalid_signature" };
+  } catch {
+    return { ok: false, reason: "invalid_signature_parse" };
+  }
 }
 
 // ===============================
@@ -112,9 +110,8 @@ async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, t
   if (!instagramBusinessId) throw new Error("instagramBusinessId ausente");
   if (!pageAccessToken) throw new Error("pageAccessToken ausente");
   if (!recipientId) throw new Error("recipientId ausente");
-
-  const bodyText = safeStr(text);
-  if (!bodyText) return { ok: true, skipped: true };
+  const body = safeStr(text);
+  if (!body) return { ok: true, skipped: true };
 
   const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
     instagramBusinessId
@@ -125,64 +122,19 @@ async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, t
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       recipient: { id: String(recipientId) },
-      message: { text: bodyText }
+      message: { text: body }
     })
   });
 
-  const raw = await resp.text().catch(() => "");
+  const rawText = await resp.text().catch(() => "");
   let json = {};
   try {
-    json = raw ? JSON.parse(raw) : {};
+    json = rawText ? JSON.parse(rawText) : {};
   } catch {
-    json = { raw };
+    json = { raw: rawText };
   }
 
   return { ok: resp.ok, status: resp.status, json };
-}
-
-// ===============================
-// ✅ Persist send status into Message.metadata (providerSendOk/providerError/providerMessageId)
-// ===============================
-async function patchMessageProviderResult(messageId, sendRes, provider = "instagram") {
-  if (!messageId) return;
-
-  const ok = sendRes?.ok === true;
-
-  const providerMessageId =
-    sendRes?.json?.message_id ||
-    sendRes?.json?.messageId ||
-    sendRes?.json?.id ||
-    null;
-
-  const providerError = ok
-    ? null
-    : sendRes?.json?.error || sendRes?.json || sendRes?.status || "send_failed";
-
-  try {
-    const current = await prisma.message.findUnique({
-      where: { id: String(messageId) },
-      select: { metadata: true }
-    });
-
-    const meta = current?.metadata && typeof current.metadata === "object" ? current.metadata : {};
-
-    await prisma.message.update({
-      where: { id: String(messageId) },
-      data: {
-        status: ok ? "sent" : "failed",
-        metadata: {
-          ...meta,
-          provider,
-          providerSendOk: ok,
-          providerError,
-          providerMessageId,
-          sentAt: ok ? nowIso() : null
-        }
-      }
-    });
-  } catch (e) {
-    logger.warn({ err: String(e), messageId }, "⚠️ IG webhook: falha ao patch provider result na message");
-  }
 }
 
 // ===============================
@@ -192,7 +144,6 @@ async function resolveChannelByInstagramRecipient(instagramBusinessId) {
   const rid = String(instagramBusinessId || "").trim();
   if (!rid) return null;
 
-  // ✅ prioridade: config.instagramBusinessId
   const byCfg = await prisma.channelConfig.findFirst({
     where: {
       channel: "instagram",
@@ -204,7 +155,6 @@ async function resolveChannelByInstagramRecipient(instagramBusinessId) {
   });
   if (byCfg) return byCfg;
 
-  // fallback: pageId == recipientId (se existir)
   const byPageId = await prisma.channelConfig.findFirst({
     where: { channel: "instagram", enabled: true, status: "connected", pageId: rid },
     orderBy: { updatedAt: "desc" }
@@ -240,11 +190,9 @@ router.get("/", (req, res) => {
       logger.info("✅ IG webhook verificado");
       return res.status(200).send(String(challenge || ""));
     }
-
-    logger.warn({ mode, tokenLen: token?.length || 0 }, "❌ IG webhook verify failed");
     return res.status(403).send("forbidden");
   } catch (e) {
-    logger.error({ err: String(e?.message || e) }, "❌ IG webhook verify error");
+    logger.error({ err: e }, "❌ IG webhook verify error");
     return res.status(500).send("error");
   }
 });
@@ -255,7 +203,15 @@ router.get("/", (req, res) => {
 router.post("/", async (req, res) => {
   const sig = validateMetaSignature(req);
   if (!sig.ok) {
-    logger.warn({ sig }, "❌ IG webhook assinatura inválida");
+    logger.warn(
+      {
+        sig,
+        hasSecret: !!META_APP_SECRET,
+        hasRawBody: !!req.rawBody,
+        rawLen: Buffer.isBuffer(req.rawBody) ? req.rawBody.length : 0
+      },
+      "❌ IG webhook assinatura inválida"
+    );
     return res.sendStatus(403);
   }
 
@@ -277,14 +233,11 @@ router.post("/", async (req, res) => {
       for (const ev of events) {
         if (!isValidIncomingTextEvent(ev)) continue;
 
-        const senderId = safeStr(ev?.sender?.id); // user id
-        const recipientId = safeStr(ev?.recipient?.id); // instagramBusinessId
+        const senderId = safeStr(ev?.sender?.id);
+        const recipientId = safeStr(ev?.recipient?.id);
         const text = msgTextFromIGEvent(ev);
         const mid = ev?.message?.mid ? String(ev.message.mid) : "";
 
-        logger.info({ senderId, recipientId, mid }, "📩 IG message event");
-
-        // 1) resolve ChannelConfig via recipientId (instagramBusinessId)
         const ch = await resolveChannelByInstagramRecipient(recipientId);
         if (!ch?.tenantId) {
           logger.warn({ recipientId }, "⚠️ IG webhook: tenant não encontrado para recipientId");
@@ -302,10 +255,8 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // ✅ botEnabled default ON
         const botEnabled = await isInstagramBotEnabled(tenantId);
 
-        // 2) upsert conversa (peerId SEMPRE com prefixo ig:)
         const peerId = `ig:${senderId}`;
 
         const convRes = await getOrCreateChannelConversation({
@@ -326,7 +277,7 @@ router.post("/", async (req, res) => {
         const conversation = convRes.conversation;
         const conversationId = String(conversation.id);
 
-        // 3) salva inbound (dedupe via waMessageId)
+        // inbound
         await appendMessage(conversationId, {
           tenantId,
           source: "instagram",
@@ -340,7 +291,7 @@ router.post("/", async (req, res) => {
           payload: ev
         });
 
-        // 4) se já está em humano/handoff/inbox → não responde bot
+        // se já está em humano/handoff/inbox → não responde bot
         if (
           String(conversation?.currentMode || "").toLowerCase() === "human" ||
           conversation?.handoffActive === true ||
@@ -349,25 +300,20 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // 5) bot OFF → handoff + promove inbox
+        // bot OFF → handoff + promove inbox
         if (!botEnabled) {
-          let sendRes = null;
           try {
-            sendRes = await igSendText({
+            await igSendText({
               instagramBusinessId,
               recipientId: senderId,
               pageAccessToken,
               text: HANDOFF_MESSAGE
             });
           } catch (e) {
-            sendRes = { ok: false, status: 0, json: { error: { message: String(e) } } };
-            logger.error(
-              { err: String(e), tenantId },
-              "❌ IG webhook: handoff (bot disabled) falhou"
-            );
+            logger.error({ err: String(e), tenantId }, "❌ IG webhook: handoff (bot disabled) falhou");
           }
 
-          const botMsg = await appendMessage(conversationId, {
+          await appendMessage(conversationId, {
             tenantId,
             source: "instagram",
             channel: "instagram",
@@ -381,11 +327,10 @@ router.post("/", async (req, res) => {
             payload: { kind: "handoff_disabled_bot", instagramBusinessId }
           });
 
-          await patchMessageProviderResult(botMsg?.msgRow?.id || botMsg?.msg?.id, sendRes, "instagram");
           continue;
         }
 
-        // 6) rules: bot vs handoff
+        // rules: bot vs handoff
         const accountSettings = { channel: "instagram", tenantId, instagramBusinessId };
 
         const route = await decideRoute({
@@ -395,20 +340,18 @@ router.post("/", async (req, res) => {
         });
 
         if (route?.target && route.target !== "bot") {
-          let sendRes = null;
           try {
-            sendRes = await igSendText({
+            await igSendText({
               instagramBusinessId,
               recipientId: senderId,
               pageAccessToken,
               text: HANDOFF_MESSAGE
             });
           } catch (e) {
-            sendRes = { ok: false, status: 0, json: { error: { message: String(e) } } };
             logger.error({ err: String(e), tenantId }, "❌ IG webhook: handoff (route) falhou");
           }
 
-          const botMsg = await appendMessage(conversationId, {
+          await appendMessage(conversationId, {
             tenantId,
             source: "instagram",
             channel: "instagram",
@@ -422,11 +365,10 @@ router.post("/", async (req, res) => {
             payload: { kind: "handoff", instagramBusinessId, route }
           });
 
-          await patchMessageProviderResult(botMsg?.msgRow?.id || botMsg?.msg?.id, sendRes, "instagram");
           continue;
         }
 
-        // 7) BOT
+        // BOT
         let botText = "";
         try {
           const botReply = await callGenAIBot({
@@ -435,7 +377,6 @@ router.post("/", async (req, res) => {
             messageText: text,
             history: []
           });
-
           botText = parseBotReplyToText(botReply);
           if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
         } catch (e) {
@@ -443,17 +384,12 @@ router.post("/", async (req, res) => {
           botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
         }
 
-        let sendRes = null;
-        try {
-          sendRes = await igSendText({
-            instagramBusinessId,
-            recipientId: senderId,
-            pageAccessToken,
-            text: botText
-          });
-        } catch (e) {
-          sendRes = { ok: false, status: 0, json: { error: { message: String(e) } } };
-        }
+        const sendRes = await igSendText({
+          instagramBusinessId,
+          recipientId: senderId,
+          pageAccessToken,
+          text: botText
+        });
 
         if (!sendRes.ok) {
           logger.warn(
@@ -462,7 +398,7 @@ router.post("/", async (req, res) => {
           );
         }
 
-        const botMsg = await appendMessage(conversationId, {
+        await appendMessage(conversationId, {
           tenantId,
           source: "instagram",
           channel: "instagram",
@@ -472,14 +408,12 @@ router.post("/", async (req, res) => {
           type: "text",
           text: botText,
           createdAt: nowIso(),
-          payload: { kind: "bot" }
+          payload: { kind: "bot", sendOk: sendRes.ok, sendStatus: sendRes.status }
         });
-
-        await patchMessageProviderResult(botMsg?.msgRow?.id || botMsg?.msg?.id, sendRes, "instagram");
       }
     }
   } catch (e) {
-    logger.error({ err: String(e?.message || e) }, "❌ IG webhook POST error");
+    logger.error({ err: e }, "❌ IG webhook POST error");
   }
 });
 
