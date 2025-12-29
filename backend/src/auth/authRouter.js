@@ -171,11 +171,47 @@ async function getTenantsForUser(userId) {
 }
 
 // ======================================================
-// ✅ POST /login (auto-tenant)
+// ✅ POST /login (auto-tenant) — compat email/senha/password + body buffer
 // ======================================================
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    // ✅ body pode vir como Buffer/string se algum middleware mudou
+    let body = req.body;
+
+    if (Buffer.isBuffer(body)) {
+      try {
+        body = JSON.parse(body.toString("utf8"));
+      } catch {
+        body = {};
+      }
+    } else if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        body = {};
+      }
+    }
+
+    body = body && typeof body === "object" ? body : {};
+
+    // ✅ compatibilidade de campos
+    const email =
+      String(body.email || body.login || body.username || body?.user?.email || body?.data?.email || "")
+        .trim()
+        .toLowerCase();
+
+    const password =
+      String(
+        body.password ||
+          body.senha ||
+          body.pass ||
+          body?.user?.password ||
+          body?.user?.senha ||
+          body?.data?.password ||
+          body?.data?.senha ||
+          ""
+      ).trim();
+
     if (!email || !password) {
       return res.status(400).json({ error: "Informe e-mail e senha." });
     }
@@ -221,10 +257,7 @@ router.post("/login", async (req, res) => {
       tenantSlug: chosen.slug
     });
 
-    logger.info(
-      { userId: user.id, email: user.email, tenant: chosen.slug },
-      "✅ Login realizado"
-    );
+    logger.info({ userId: user.id, email: user.email, tenant: chosen.slug }, "✅ Login realizado");
 
     return res.json({
       token,
@@ -236,6 +269,7 @@ router.post("/login", async (req, res) => {
     return res.status(500).json({ error: "Erro ao fazer login." });
   }
 });
+
 
 // ======================================================
 // ✅ GET /auth/me
