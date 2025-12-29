@@ -43,16 +43,20 @@ const HANDOFF_MESSAGE = String(
 function nowIso() {
   return new Date().toISOString();
 }
+
 function safeStr(v, fallback = "") {
   const s = typeof v === "string" ? v : v == null ? "" : String(v);
   return s.trim() || fallback;
 }
+
 function asJson(v) {
   return v && typeof v === "object" ? v : {};
 }
+
 function msgTextFromIGEvent(ev) {
   return safeStr(ev?.message?.text || ev?.message?.body || ev?.text || "");
 }
+
 function isValidIncomingTextEvent(ev) {
   const text = msgTextFromIGEvent(ev);
   if (!text) return false;
@@ -65,12 +69,36 @@ function isValidIncomingTextEvent(ev) {
 
   return true;
 }
+
 function parseBotReplyToText(botReply) {
   if (!botReply) return "";
   if (typeof botReply === "string") return safeStr(botReply);
   if (typeof botReply?.replyText === "string") return safeStr(botReply.replyText);
   if (typeof botReply?.text === "string") return safeStr(botReply.text);
   return safeStr(botReply?.message || "");
+}
+
+/**
+ * Extrai username do payload (best-effort).
+ * Isso pode resolver o "nome" sem depender de Graph.
+ */
+function extractIgUsernameFromEvent(ev) {
+  return safeStr(
+    ev?.sender?.username ||
+      ev?.from?.username ||
+      ev?.message?.from?.username ||
+      ev?.message?.sender?.username ||
+      ev?.username ||
+      ""
+  );
+}
+
+function normalizeDisplayName({ username, name }) {
+  const u = safeStr(username).replace(/^@/, "");
+  if (u) return `@${u}`;
+  const n = safeStr(name);
+  if (n) return n;
+  return "Contato Instagram";
 }
 
 /**
@@ -125,9 +153,11 @@ function normalizeSigHeader(sigHeader) {
   const s = String(sigHeader || "").trim();
   return s.startsWith("sha256=") ? s.slice("sha256=".length) : s;
 }
+
 function hmacSha256Hex(secret, rawBuffer) {
   return crypto.createHmac("sha256", secret).update(rawBuffer).digest("hex");
 }
+
 function safeTimingEqualHex(aHex, bHex) {
   try {
     const a = Buffer.from(String(aHex || ""), "hex");
@@ -307,6 +337,11 @@ async function activateHandoff(conversationId) {
 // ===============================
 // ✅ Profile fetch (Instagram) + cache
 // Regra mantida: tenta IG Graph (graph.instagram.com) primeiro.
+// IMPORTANTE: para IGBusinessScopedID, profile_picture_url pode NÃO existir.
+// Então:
+// 0) tenta username do evento
+// 1) tenta IG Graph com fields=username
+// 2) fallback FB Graph name/username/profile_pic
 // ===============================
 const igProfileCache = new Map(); // senderId -> { ts, name, avatarUrl, username }
 const IG_PROFILE_TTL_MS = 1000 * 60 * 60 * 6;
@@ -320,11 +355,12 @@ function cacheGetIg(senderId) {
   }
   return v;
 }
+
 function cacheSetIg(senderId, data) {
   igProfileCache.set(senderId, { ts: Date.now(), ...data });
 }
 
-async function fetchInstagramProfile({ accessToken, senderId }) {
+async function fetchInstagramProfile({ accessToken, senderId, ev }) {
   try {
     if (!accessToken || !senderId) return null;
 
@@ -334,24 +370,38 @@ async function fetchInstagramProfile({ accessToken, senderId }) {
     const token = sanitizeAccessToken(accessToken);
     if (!token) return null;
 
-    // ✅ 1) Instagram Graph API primeiro
-    // Campos comuns no IG Graph: username, profile_picture_url (pode variar por permissão)
+    // ✅ 0) username direto do evento
+    const eventUsername = extractIgUsernameFromEvent(ev);
+    if (eventUsername) {
+      const data = {
+        username: eventUsername,
+        name: normalizeDisplayName({ username: eventUsername })
+      };
+      cacheSetIg(senderId, data);
+      return data;
+    }
+
+    // ✅ 1) Instagram Graph API primeiro (SEM profile_picture_url)
     const urlIg = `https://graph.instagram.com/${encodeURIComponent(
       senderId
-    )}?fields=username,profile_picture_url&access_token=${encodeURIComponent(token)}`;
+    )}?fields=username&access_token=${encodeURIComponent(token)}`;
 
     try {
       const respIg = await fetch(urlIg);
       const jsonIg = await respIg.json().catch(() => ({}));
       if (respIg.ok) {
         const username = safeStr(jsonIg?.username);
-        const avatarUrl = safeStr(jsonIg?.profile_picture_url);
-        const name = username ? `@${username.replace(/^@/, "")}` : "Contato Instagram";
-        const data = { name, avatarUrl, username };
+        const data = {
+          username,
+          name: normalizeDisplayName({ username })
+        };
         cacheSetIg(senderId, data);
         return data;
       }
-      logger.warn({ senderId, status: respIg.status, error: jsonIg?.error || jsonIg }, "⚠️ IG profile (instagram.com) falhou");
+      logger.warn(
+        { senderId, status: respIg.status, error: jsonIg?.error || jsonIg },
+        "⚠️ IG profile (instagram.com) falhou"
+      );
     } catch (e1) {
       logger.warn({ err: String(e1), senderId }, "⚠️ IG profile (instagram.com) exception");
     }
@@ -365,15 +415,22 @@ async function fetchInstagramProfile({ accessToken, senderId }) {
     const json = await resp.json().catch(() => ({}));
 
     if (!resp.ok) {
-      logger.warn({ senderId, status: resp.status, error: json?.error || json }, "⚠️ IG profile fetch (facebook.com) falhou");
+      logger.warn(
+        { senderId, status: resp.status, error: json?.error || json },
+        "⚠️ IG profile fetch (facebook.com) falhou"
+      );
       return null;
     }
 
     const username = safeStr(json?.username);
-    const name = safeStr(json?.name || (username ? `@${username}` : ""), "Contato Instagram");
+    const name = safeStr(json?.name);
     const avatarUrl = safeStr(json?.profile_pic);
 
-    const data = { name, avatarUrl, username };
+    const data = {
+      username,
+      name: normalizeDisplayName({ username, name }),
+      avatarUrl
+    };
     cacheSetIg(senderId, data);
     return data;
   } catch (e) {
@@ -413,9 +470,7 @@ async function upsertConversationIdentity({
         update: {
           ...(cleanTitle ? { name: cleanTitle } : {}),
           ...(cleanAvatar ? { avatarUrl: cleanAvatar } : {}),
-          ...(metaExtra && Object.keys(metaExtra).length
-            ? { metadata: { ...(asJson(metaExtra)) } }
-            : {})
+          ...(metaExtra && Object.keys(metaExtra).length ? { metadata: asJson(metaExtra) } : {})
         },
         create: {
           tenantId: tid,
@@ -428,8 +483,7 @@ async function upsertConversationIdentity({
       })
       .catch(() => null);
 
-    // 2) Atualiza Conversation.metadata (para refletir no listing/normalize)
-    //    mantém o que já existe
+    // 2) Atualiza Conversation.metadata (reflete no listing/normalize)
     const current = await prisma.conversation
       .findUnique({ where: { id: cid }, select: { metadata: true } })
       .catch(() => null);
@@ -451,7 +505,7 @@ async function upsertConversationIdentity({
         .catch(() => {});
     }
 
-    // 3) garante vínculo da conversa com o contact (se conv já tem contactId ok; se não tiver, ignore)
+    // 3) garante vínculo da conversa com o contact
     if (contact?.id) {
       await prisma.conversation
         .update({
@@ -553,8 +607,8 @@ router.post("/", async (req, res) => {
         const peerId = `ig:${senderId}`;
 
         // ✅ nome + avatar (best-effort) - IG API first
-        const prof = await fetchInstagramProfile({ accessToken, senderId });
-        const displayName = safeStr(prof?.name, "Contato Instagram");
+        const prof = await fetchInstagramProfile({ accessToken, senderId, ev });
+        const displayName = normalizeDisplayName({ username: prof?.username, name: prof?.name });
         const avatarUrl = safeStr(prof?.avatarUrl);
         const username = safeStr(prof?.username);
 
@@ -582,7 +636,7 @@ router.post("/", async (req, res) => {
         const conversation = convRes.conversation;
         const conversationId = String(conversation.id);
 
-        // ✅ Detecta título genérico via metadata.title (ou fallback)
+        // ✅ Detecta título genérico via metadata.title (normalizeConversationRow usa metadata.title)
         const currentTitle = safeStr(conversation?.title);
         const isGenericTitle =
           !currentTitle || ["contato", "contato instagram"].includes(currentTitle.toLowerCase());
@@ -663,7 +717,14 @@ router.post("/", async (req, res) => {
             );
           } else {
             logger.info(
-              { kind, tenantId, senderId, instagramBusinessId, status: sendRes.status, sendUrl: sendRes.url },
+              {
+                kind,
+                tenantId,
+                senderId,
+                instagramBusinessId,
+                status: sendRes.status,
+                sendUrl: sendRes.url
+              },
               "✅ IG send ok"
             );
           }
@@ -673,7 +734,10 @@ router.post("/", async (req, res) => {
 
         // BOT DESLIGADO → HANDOFF
         if (!botEnabled) {
-          const sendRes = await sendAndLog({ kind: "handoff_disabled_bot", outText: HANDOFF_MESSAGE });
+          const sendRes = await sendAndLog({
+            kind: "handoff_disabled_bot",
+            outText: HANDOFF_MESSAGE
+          });
           if (!sendRes.ok) continue;
 
           await activateHandoff(conversationId);
@@ -700,13 +764,24 @@ router.post("/", async (req, res) => {
         const route = await decideRoute({ accountSettings, conversation, messageText: text });
 
         logger.info(
-          { kind: "route_decision", tenantId, senderId, instagramBusinessId, route, textPreview: text.slice(0, 40) },
+          {
+            kind: "route_decision",
+            tenantId,
+            senderId,
+            instagramBusinessId,
+            route,
+            textPreview: text.slice(0, 40)
+          },
           "🤖 IG decideRoute"
         );
 
         // HANDOFF
         if (route?.target && route.target !== "bot") {
-          const sendRes = await sendAndLog({ kind: "handoff", outText: HANDOFF_MESSAGE, extra: { route } });
+          const sendRes = await sendAndLog({
+            kind: "handoff",
+            outText: HANDOFF_MESSAGE,
+            extra: { route }
+          });
           if (!sendRes.ok) continue;
 
           await activateHandoff(conversationId);
