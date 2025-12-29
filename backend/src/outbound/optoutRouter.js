@@ -48,6 +48,10 @@ function normalizeTarget(raw) {
   return s.toLowerCase();
 }
 
+// ======================================================
+// GET /outbound/optout
+// List opt-out entries (paged)
+// ======================================================
 router.get("/", requireAuth, async (req, res) => {
   const model = resolveModel(MODEL_CANDIDATES);
   const modelName = model ? model._model || model.name || "unknown" : null;
@@ -93,6 +97,109 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
+// ======================================================
+// ✅ GET /outbound/optout/whatsapp-contacts
+// Lista contatos vindos do WhatsApp para seleção no Opt-out
+// Query: ?query=&page=1&limit=25
+// ======================================================
+router.get("/whatsapp-contacts", requireAuth, async (req, res) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const CONTACT_MODEL_CANDIDATES = [
+      "contact",
+      "Contact",
+      "contacts",
+      "Contacts",
+      "waContact",
+      "WaContact",
+      "whatsAppContact",
+      "WhatsAppContact"
+    ];
+
+    const contactModel = resolveModel(CONTACT_MODEL_CANDIDATES);
+    const contactModelName = contactModel ? contactModel._model || contactModel.name || "unknown" : null;
+
+    if (!assertPrisma(res, contactModel, CONTACT_MODEL_CANDIDATES)) return;
+
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 25)));
+    const skip = (page - 1) * limit;
+
+    const q = String(req.query.query || "").trim();
+    const qDigits = q.replace(/\D/g, "");
+
+    const where = {};
+
+    // multi-tenant
+    if (modelHasField(contactModelName, "tenantId")) where.tenantId = tenantId;
+
+    // se existir o campo channel, filtra whatsapp
+    if (modelHasField(contactModelName, "channel")) where.channel = "whatsapp";
+
+    // busca por nome / telefone / ids
+    if (q) {
+      const OR = [];
+
+      if (modelHasField(contactModelName, "name")) {
+        OR.push({ name: { contains: q, mode: "insensitive" } });
+      }
+
+      if (qDigits) {
+        if (modelHasField(contactModelName, "phone")) OR.push({ phone: { contains: qDigits } });
+        if (modelHasField(contactModelName, "waId")) OR.push({ waId: { contains: qDigits } });
+        if (modelHasField(contactModelName, "externalId")) OR.push({ externalId: { contains: qDigits } });
+      } else {
+        if (modelHasField(contactModelName, "phone")) OR.push({ phone: { contains: q } });
+        if (modelHasField(contactModelName, "waId")) OR.push({ waId: { contains: q } });
+        if (modelHasField(contactModelName, "externalId")) OR.push({ externalId: { contains: q } });
+      }
+
+      if (OR.length) where.OR = OR;
+    }
+
+    const orderBy =
+      modelHasField(contactModelName, "updatedAt") ? { updatedAt: "desc" } :
+      modelHasField(contactModelName, "lastSeenAt") ? { lastSeenAt: "desc" } :
+      undefined;
+
+    const [total, items] = await Promise.all([
+      contactModel.count({ where }),
+      contactModel.findMany({
+        where,
+        orderBy,
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          ...(modelHasField(contactModelName, "name") ? { name: true } : {}),
+          ...(modelHasField(contactModelName, "phone") ? { phone: true } : {}),
+          ...(modelHasField(contactModelName, "waId") ? { waId: true } : {}),
+          ...(modelHasField(contactModelName, "externalId") ? { externalId: true } : {}),
+          ...(modelHasField(contactModelName, "createdAt") ? { createdAt: true } : {}),
+          ...(modelHasField(contactModelName, "updatedAt") ? { updatedAt: true } : {})
+        }
+      })
+    ]);
+
+    const normalized = items.map((c) => {
+      const raw = c.phone || c.waId || c.externalId || "";
+      const target = normalizeTarget(raw);
+      return { ...c, target };
+    });
+
+    return res.json({ ok: true, page, limit, total, items: normalized });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ optoutRouter GET /whatsapp-contacts failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// ======================================================
+// POST /outbound/optout
+// Create / Upsert opt-out entry (manual/csv)
+// ======================================================
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   const model = resolveModel(MODEL_CANDIDATES);
   const modelName = model ? model._model || model.name || "unknown" : null;
@@ -109,9 +216,9 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
 
     if (!target) return res.status(400).json({ ok: false, error: "target_required" });
 
-    // se existir unique composto, tenta upsert, senão create
     let item = null;
 
+    // se existir unique composto, tenta upsert, senão create
     if (model === prisma.optOutEntry && prisma.optOutEntry?.upsert) {
       item = await prisma.optOutEntry.upsert({
         where: { tenantId_channel_target: { tenantId, channel, target } },
@@ -136,6 +243,9 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
   }
 });
 
+// ======================================================
+// DELETE /outbound/optout/:id
+// ======================================================
 router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   const model = resolveModel(MODEL_CANDIDATES);
 
