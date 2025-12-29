@@ -4,10 +4,6 @@ import jwt from "jsonwebtoken";
 import logger from "../logger.js";
 import prismaMod from "../lib/prisma.js";
 
-// ✅ Alinha com os outros canais
-import { decideRoute } from "../chatbot/rulesEngine.js";
-import { callGenAIBot } from "../chatbot/botEngine.js";
-
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 const router = express.Router();
@@ -20,13 +16,32 @@ function nowUnix() {
 function nowIso() {
   return new Date().toISOString();
 }
+
+/**
+ * =========================
+ * Helpers base
+ * =========================
+ */
 function safeStr(v, fallback = "") {
   const s = typeof v === "string" ? v : v == null ? "" : String(v);
   return s.trim() || fallback;
 }
+
 function asJson(v) {
   return v && typeof v === "object" ? v : {};
 }
+
+function toBool(v) {
+  if (v === true) return true;
+  if (v === false) return false;
+  if (v == null) return false;
+
+  if (typeof v === "number") return v === 1;
+
+  const s = String(v).trim().toLowerCase();
+  return ["1", "true", "yes", "y", "on", "sim"].includes(s);
+}
+
 function mergeMeta(oldMeta, patch) {
   return { ...asJson(oldMeta), ...asJson(patch) };
 }
@@ -41,7 +56,9 @@ function getWebchatJwtSecret() {
 
   if (!secret || !String(secret).trim()) {
     if ((process.env.NODE_ENV || "development") !== "production") {
-      logger.warn("⚠️ WEBCHAT_JWT_SECRET/JWT_SECRET ausente. Usando secret dev APENAS em development.");
+      logger.warn(
+        "⚠️ WEBCHAT_JWT_SECRET/JWT_SECRET ausente. Usando secret dev APENAS em development."
+      );
       return "webchat_secret_dev_only";
     }
     throw new Error("WEBCHAT_JWT_SECRET/JWT_SECRET não definido.");
@@ -73,7 +90,10 @@ async function getConversationsCore() {
         mod?.getOrCreateChannelConversation || mod?.default?.getOrCreateChannelConversation;
       const appendMessage = mod?.appendMessage || mod?.default?.appendMessage;
 
-      if (typeof getOrCreateChannelConversation === "function" && typeof appendMessage === "function") {
+      if (
+        typeof getOrCreateChannelConversation === "function" &&
+        typeof appendMessage === "function"
+      ) {
         __coreCache = { getOrCreateChannelConversation, appendMessage };
         return __coreCache;
       }
@@ -137,7 +157,13 @@ function readWidgetKey(req) {
  */
 async function getWebchatConfig(tenantId) {
   if (!tenantId) {
-    return { enabled: false, widgetKey: "", allowedOrigins: [], config: {}, botEnabled: false };
+    return {
+      enabled: false,
+      widgetKey: "",
+      allowedOrigins: [],
+      config: {},
+      botEnabled: false
+    };
   }
 
   const row = await prisma.channelConfig.findFirst({
@@ -146,7 +172,13 @@ async function getWebchatConfig(tenantId) {
   });
 
   if (!row) {
-    return { enabled: false, widgetKey: "", allowedOrigins: [], config: {}, botEnabled: false };
+    return {
+      enabled: false,
+      widgetKey: "",
+      allowedOrigins: [],
+      config: {},
+      botEnabled: false
+    };
   }
 
   const cfg = row?.config && typeof row.config === "object" ? row.config : {};
@@ -156,8 +188,8 @@ async function getWebchatConfig(tenantId) {
   const widgetConfig =
     (cfg.widget && typeof cfg.widget === "object" ? cfg.widget : null) || cfg || {};
 
-  // ✅ Regra consistente: botEnabled true somente quando explicitamente true
-  const botEnabled = cfg.botEnabled === true;
+  // ✅ IMPORTANTÍSSIMO: tolerante a string "true"
+  const botEnabled = toBool(cfg.botEnabled);
 
   return {
     enabled: row.enabled !== false,
@@ -208,6 +240,7 @@ function readAuthToken(req) {
   const authRaw = String(req.headers.authorization || "").trim();
   const auth = authRaw.toLowerCase();
 
+  // remove corretamente, independente de maiúsculas
   if (auth.startsWith("webchat ")) {
     return authRaw.slice("webchat ".length).trim();
   }
@@ -257,6 +290,7 @@ async function resolveTenantContext(req) {
     }
   }
 
+  // token (para rotas tokenadas)
   const token = readAuthToken(req);
   if (token) {
     try {
@@ -315,20 +349,17 @@ async function assertWebchatAllowed(req, tenantId, { requireWidgetKey = true } =
 
 /**
  * =========================
- * BOT HELPERS
+ * BOT helpers
  * =========================
  */
 async function getLastMessagesForBot({ tenantId, conversationId, take = 10 }) {
-  // ✅ pega as ÚLTIMAS mensagens (desc) e retorna em ordem cronológica (asc)
   const rows = await prisma.message.findMany({
     where: { tenantId, conversationId },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: Math.max(1, Math.min(Number(take) || 10, 50))
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take
   });
 
-  const ordered = rows.slice().reverse();
-
-  return ordered.map((m) => ({
+  return rows.map((m) => ({
     id: String(m.id),
     type: String(m.type || "text"),
     direction: String(m.direction || "in"),
@@ -338,124 +369,142 @@ async function getLastMessagesForBot({ tenantId, conversationId, take = 10 }) {
   }));
 }
 
-function isConvInHumanMode(convRow) {
-  const meta = asJson(convRow?.metadata);
-  const mode = String(meta.currentMode || convRow?.currentMode || "").toLowerCase();
-  const inboxVisible =
-    typeof convRow?.inboxVisible === "boolean"
-      ? convRow.inboxVisible
-      : typeof meta.inboxVisible === "boolean"
-      ? meta.inboxVisible
-      : false;
-  const handoffActive =
-    typeof convRow?.handoffActive === "boolean"
-      ? convRow.handoffActive
-      : typeof meta.handoffActive === "boolean"
-      ? meta.handoffActive
-      : false;
+async function loadBotInvoker() {
+  // tenta casar com o que você já usa nos outros canais (callGenAIBot)
+  try {
+    const mod = await import("../chatbot/botEngine.js");
 
-  if (mode === "human") return true;
-  if (handoffActive) return true;
-  if (inboxVisible) return true;
-  return false;
+    if (typeof mod?.callGenAIBot === "function") {
+      return async ({ tenantId, conversation, messageText, history }) =>
+        mod.callGenAIBot({
+          accountSettings: { tenantId, channel: "webchat" },
+          conversation,
+          messageText,
+          history: Array.isArray(history) ? history : []
+        });
+    }
+
+    // fallback: default export function
+    const fn = mod?.default;
+    if (typeof fn === "function") {
+      return async ({ conversation, messageText, history }) =>
+        fn({
+          channel: "webchat",
+          conversation,
+          userText: messageText,
+          messages: Array.isArray(history) ? history : []
+        });
+    }
+
+    // fallback: botEngine.run
+    const be = mod?.botEngine || mod;
+    if (typeof be?.run === "function") {
+      return async ({ conversation, messageText, history }) =>
+        be.run({
+          channel: "webchat",
+          conversation,
+          userText: messageText,
+          messages: Array.isArray(history) ? history : []
+        });
+    }
+  } catch (e) {
+    logger.warn({ err: String(e) }, "⚠️ webchat: falha ao importar botEngine");
+  }
+
+  return null;
+}
+
+function parseBotReplyToText(botReply) {
+  if (!botReply) return "";
+  if (typeof botReply === "string") return safeStr(botReply);
+  if (typeof botReply?.replyText === "string") return safeStr(botReply.replyText);
+  if (typeof botReply?.text === "string") return safeStr(botReply.text);
+  return safeStr(botReply?.message || "");
 }
 
 async function maybeReplyWithBot({ tenantId, convRow, cleanText }) {
-  try {
-    if (!tenantId || !convRow?.id) return { ok: true, didBot: false };
-    if (String(convRow?.status || "") !== "open") return { ok: true, didBot: false };
-    if (!cleanText) return { ok: true, didBot: false };
+  const convMeta = asJson(convRow?.metadata);
 
-    if (isConvInHumanMode(convRow)) {
-      return { ok: true, didBot: false };
-    }
-
-    const webCfg = await getWebchatConfig(tenantId);
-    if (webCfg.botEnabled !== true) {
-      return { ok: true, didBot: false };
-    }
-
-    const { appendMessage } = await getConversationsCore();
-
-    // ✅ decideRoute igual aos outros canais
-    const accountSettings = { channel: "webchat", tenantId };
-
-    const decision = await decideRoute({
-      accountSettings,
-      conversation: convRow,
-      messageText: cleanText
-    });
-
-    // HANDOFF
-    if (decision?.target && decision.target !== "bot") {
-      const handoffText =
-        safeStr(webCfg?.config?.handoffMessage) ||
-        "Aguarde um momento, vou te transferir para um atendente humano.";
-
-      const r = await appendMessage(String(convRow.id), {
-        tenantId,
-        channel: "webchat",
-        source: "webchat",
-        type: "text",
-        from: "bot",
-        isBot: true,
-        direction: "out",
-        text: handoffText,
-        createdAt: nowIso(),
-        handoff: true,
-        payload: { kind: "handoff", decision }
-      });
-
-      return r?.ok ? { ok: true, didBot: true, botMessage: r.msg, handoff: true } : { ok: false, didBot: false };
-    }
-
-    // BOT
-    const history = await getLastMessagesForBot({
-      tenantId,
-      conversationId: String(convRow.id),
-      take: 10
-    });
-
-    let botText = "";
-    try {
-      const botReply = await callGenAIBot({
-        accountSettings,
-        conversation: { ...convRow, id: String(convRow.id) },
-        messageText: cleanText,
-        history
-      });
-
-      // normaliza pra texto
-      if (typeof botReply === "string") botText = botReply;
-      else if (typeof botReply?.replyText === "string") botText = botReply.replyText;
-      else if (typeof botReply?.text === "string") botText = botReply.text;
-      else botText = String(botReply?.message || "");
-    } catch (e) {
-      logger.warn({ err: String(e), tenantId, conversationId: String(convRow.id) }, "⚠️ webchat callGenAIBot falhou");
-      botText = "";
-    }
-
-    botText = safeStr(botText);
-    if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
-
-    const r2 = await appendMessage(String(convRow.id), {
-      tenantId,
-      channel: "webchat",
-      source: "webchat",
-      type: "text",
-      from: "bot",
-      isBot: true,
-      direction: "out",
-      text: botText,
-      createdAt: nowIso(),
-      payload: { kind: "bot" }
-    });
-
-    return r2?.ok ? { ok: true, didBot: true, botMessage: r2.msg } : { ok: false, didBot: false };
-  } catch (e) {
-    logger.warn({ err: String(e), tenantId, conversationId: String(convRow?.id || "") }, "⚠️ webchat maybeReplyWithBot exception");
+  if (String(convRow?.status || "") !== "open") {
+    logger.info({ tenantId, convId: convRow?.id }, "🤖 webchat: skip bot (status != open)");
     return { ok: true, didBot: false };
   }
+
+  const mode = String(convMeta.currentMode || convRow?.currentMode || "").toLowerCase();
+  if (mode === "human") {
+    logger.info({ tenantId, convId: convRow?.id }, "🤖 webchat: skip bot (mode=human)");
+    return { ok: true, didBot: false };
+  }
+
+  // botEnabled per webchat config (tolerante)
+  let botEnabled = false;
+  try {
+    const row = await prisma.channelConfig.findFirst({
+      where: { tenantId, channel: "webchat" },
+      select: { config: true }
+    });
+    const c = row?.config && typeof row.config === "object" ? row.config : {};
+    botEnabled = toBool(c.botEnabled);
+  } catch {}
+
+  if (!botEnabled) {
+    logger.info({ tenantId, convId: convRow?.id }, "🤖 webchat: skip bot (botEnabled=false)");
+    return { ok: true, didBot: false };
+  }
+
+  const invoker = await loadBotInvoker();
+  if (!invoker) {
+    logger.warn({ tenantId, convId: convRow?.id }, "⚠️ webchat: bot invoker não disponível");
+    return { ok: true, didBot: false };
+  }
+
+  const history = await getLastMessagesForBot({
+    tenantId,
+    conversationId: convRow.id,
+    take: 10
+  });
+
+  let botText = "";
+  try {
+    const botReply = await invoker({
+      tenantId,
+      conversation: convRow,
+      messageText: cleanText,
+      history
+    });
+    botText = parseBotReplyToText(botReply);
+  } catch (e) {
+    logger.warn({ err: String(e), tenantId, convId: convRow?.id }, "⚠️ webchat: bot exception");
+    return { ok: true, didBot: false };
+  }
+
+  botText = String(botText || "").trim();
+  if (!botText) {
+    logger.info({ tenantId, convId: convRow?.id }, "🤖 webchat: bot retornou vazio");
+    return { ok: true, didBot: false };
+  }
+
+  const { appendMessage } = await getConversationsCore();
+
+  const r = await appendMessage(String(convRow.id), {
+    channel: "webchat",
+    source: "webchat",
+    type: "text",
+    from: "bot",
+    direction: "out",
+    text: botText,
+    createdAt: nowIso(),
+    tenantId,
+    isBot: true
+  });
+
+  if (r?.ok) {
+    logger.info({ tenantId, convId: convRow?.id }, "🤖 webchat: bot respondeu");
+    return { ok: true, didBot: true, botMessage: r.msg };
+  }
+
+  logger.warn({ tenantId, convId: convRow?.id, err: r?.error }, "⚠️ webchat: falha ao salvar msg do bot");
+  return { ok: false, didBot: false };
 }
 
 /**
@@ -499,7 +548,9 @@ router.post("/session", async (req, res) => {
   const { getOrCreateChannelConversation } = await getConversationsCore();
 
   const peerId = `wc:${tenantId}:${visitorId}`;
-  const initialMode = allow?.cfg?.botEnabled === true ? "bot" : "human";
+
+  // ✅ usa boolean já normalizado
+  const initialMode = allow?.cfg?.botEnabled ? "bot" : "human";
 
   const r = await getOrCreateChannelConversation({
     tenantId,
@@ -674,18 +725,18 @@ router.post("/messages", async (req, res) => {
 
   if (!r?.ok) return res.status(400).json({ error: r.error || "Falha ao salvar mensagem" });
 
-  // ✅ BOT (agora usando o mesmo pipeline dos outros canais)
+  // bot opcional
   const bot = await maybeReplyWithBot({ tenantId, convRow, cleanText });
 
   return res.json({
     ok: true,
     message: r.msg,
     nextCursor: r.msg?.id,
-    bot: bot?.didBot ? { message: bot.botMessage, handoff: bot?.handoff === true } : null
+    bot: bot?.didBot ? { message: bot.botMessage } : null
   });
 });
 
-// ✅ POST /webchat/handoff  (bot -> human)
+// POST /webchat/handoff  (bot -> human)
 router.post("/handoff", async (req, res) => {
   const ctx = await resolveTenantContext(req);
   const tenantId = ctx.tenantId;
@@ -844,4 +895,3 @@ router.post("/conversations/:id/close", async (req, res) => {
 });
 
 export default router;
-
