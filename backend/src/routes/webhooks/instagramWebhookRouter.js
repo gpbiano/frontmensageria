@@ -73,6 +73,47 @@ function parseBotReplyToText(botReply) {
   return safeStr(botReply?.message || "");
 }
 
+/**
+ * Alguns ambientes acabam salvando token com aspas, "null", objetos stringify etc.
+ * Este helper tenta normalizar e rejeitar tokens obviamente inválidos.
+ */
+function sanitizeAccessToken(raw) {
+  let t = safeStr(raw);
+  if (!t) return "";
+  // remove aspas simples/duplas ao redor
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    t = t.slice(1, -1).trim();
+  }
+  // elimina tokens “fake”
+  const bad = ["null", "undefined", "[object Object]"];
+  if (bad.includes(t.toLowerCase())) return "";
+  // se for JSON {access_token: "..."} (ou algo similar)
+  if (t.startsWith("{") && t.endsWith("}")) {
+    try {
+      const obj = JSON.parse(t);
+      const inner =
+        obj?.access_token || obj?.pageAccessToken || obj?.token || obj?.accessToken || "";
+      t = safeStr(inner);
+    } catch {
+      // deixa cair abaixo e invalidar
+    }
+  }
+  return t;
+}
+
+/**
+ * Heurística simples: Page tokens da Meta frequentemente começam com "EA".
+ * Não é garantia, mas ajuda a detectar lixo rapidamente.
+ */
+function looksLikeMetaToken(t) {
+  const s = sanitizeAccessToken(t);
+  if (!s) return false;
+  if (s.length < 20) return false;
+  // aceita EA... ou outros formatos longos sem espaços
+  if (/\s/.test(s)) return false;
+  return true;
+}
+
 // ===============================
 // ✅ Signature validation (Meta)
 // ===============================
@@ -123,6 +164,7 @@ function validateMetaSignature(req) {
 }
 
 function parseIncomingBody(req) {
+  // Com express.raw, req.body é Buffer
   if (Buffer.isBuffer(req.body)) {
     const txt = req.body.toString("utf8");
     if (!txt) return {};
@@ -137,7 +179,7 @@ function parseIncomingBody(req) {
 }
 
 // ===============================
-// Graph send (Instagram)
+// Graph send
 // ===============================
 async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, text }) {
   if (!instagramBusinessId) throw new Error("instagramBusinessId ausente");
@@ -155,11 +197,10 @@ async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, t
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      // mais robusto que access_token na query (e evita token na URL/logs)
       Authorization: `Bearer ${pageAccessToken}`
     },
     body: JSON.stringify({
-      // ✅ IMPORTANTE: em vários cenários o IG exige isso
-      messaging_product: "instagram",
       recipient: { id: String(recipientId) },
       message: { text: body }
     })
@@ -213,6 +254,22 @@ async function isInstagramBotEnabled(tenantId) {
   } catch {
     return true;
   }
+}
+
+function pickInstagramAccessToken(channelRow) {
+  const cfg = asJson(channelRow?.config);
+  const candidates = [
+    channelRow?.accessToken, // coluna principal
+    cfg?.pageAccessToken, // alguns connects salvam aqui
+    cfg?.accessToken, // fallback comum
+    cfg?.token
+  ];
+  for (const c of candidates) {
+    const t = sanitizeAccessToken(c);
+    if (t && looksLikeMetaToken(t)) return t;
+  }
+  // se existir algo, retorna sanitizado mesmo (pra logarmos len), mas pode falhar
+  return sanitizeAccessToken(candidates.find(Boolean) || "");
 }
 
 // ======================================================
@@ -279,11 +336,19 @@ router.post("/", async (req, res) => {
 
         const instagramBusinessId = safeStr(cfg.instagramBusinessId || recipientId);
 
-        const pageAccessToken = safeStr(ch.accessToken);
+        const pageAccessToken = pickInstagramAccessToken(ch);
         if (!pageAccessToken) {
           logger.warn(
-            { tenantId, recipientId, instagramBusinessId, pageId: ch.pageId },
-            "⚠️ IG sem accessToken no ChannelConfig (não dá pra responder)"
+            {
+              kind: "ig_token_missing",
+              tenantId,
+              recipientId,
+              instagramBusinessId,
+              channelId: ch.id,
+              hasAccessToken: !!ch.accessToken,
+              cfgKeys: Object.keys(cfg || {})
+            },
+            "❌ IG: sem Page Access Token válido (bot não consegue responder)"
           );
           continue;
         }
@@ -319,7 +384,7 @@ router.post("/", async (req, res) => {
           payload: ev
         });
 
-        // se já entrou em humano/handoff, não responde bot
+        // se já está em humano/handoff/inbox → não responde bot
         if (
           String(conversation?.currentMode || "").toLowerCase() === "human" ||
           conversation?.handoffActive === true ||
@@ -328,54 +393,48 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // helper local pra enviar + logar erros
-        const sendAndLog = async ({ kind, outText }) => {
-          const sendRes = await igSendText({
-            instagramBusinessId,
-            recipientId: senderId,
-            pageAccessToken,
-            text: outText
-          });
-
-          const errObj = sendRes?.json?.error || null;
+        // Bot desabilitado → tenta mandar handoff (mas só ativa handoff se enviar OK)
+        if (!botEnabled) {
+          let sendRes = { ok: false, status: 0, json: {} };
+          try {
+            sendRes = await igSendText({
+              instagramBusinessId,
+              recipientId: senderId,
+              pageAccessToken,
+              text: HANDOFF_MESSAGE
+            });
+          } catch (e) {
+            sendRes = { ok: false, status: 0, json: { error: String(e) } };
+          }
 
           if (!sendRes.ok) {
             logger.warn(
               {
-                kind,
+                kind: "handoff_send_failed",
                 tenantId,
                 senderId,
                 recipientId,
                 instagramBusinessId,
-                pageId: ch.pageId || null,
                 status: sendRes.status,
-                error: errObj || sendRes.json
+                error: sendRes.json?.error
               },
-              "❌ IG send falhou"
+              "❌ IG handoff: envio falhou (não ativando handoff/inbox)"
             );
-          } else {
-            logger.info(
-              {
-                kind,
-                tenantId,
-                senderId,
-                instagramBusinessId,
-                status: sendRes.status
-              },
-              "✅ IG send ok"
-            );
+
+            await appendMessage(conversationId, {
+              tenantId,
+              source: "instagram",
+              channel: "instagram",
+              from: "system",
+              direction: "out",
+              type: "text",
+              text: "[IG] Falha ao enviar mensagem (token inválido/expirado).",
+              createdAt: nowIso(),
+              payload: { kind: "handoff_send_failed", send: sendRes }
+            });
+
+            continue;
           }
-
-          return {
-            ok: !!sendRes.ok,
-            status: sendRes.status,
-            error: errObj || (!sendRes.ok ? sendRes.json : null)
-          };
-        };
-
-        // BOT DESABILITADO => handoff message
-        if (!botEnabled) {
-          const sendMeta = await sendAndLog({ kind: "handoff_disabled_bot", outText: HANDOFF_MESSAGE });
 
           await appendMessage(conversationId, {
             tenantId,
@@ -388,13 +447,7 @@ router.post("/", async (req, res) => {
             text: HANDOFF_MESSAGE,
             handoff: true,
             createdAt: nowIso(),
-            payload: {
-              kind: "handoff_disabled_bot",
-              instagramBusinessId,
-              sendOk: sendMeta.ok,
-              sendStatus: sendMeta.status,
-              sendError: sendMeta.error
-            }
+            payload: { kind: "handoff_disabled_bot", instagramBusinessId, send: sendRes }
           });
 
           continue;
@@ -408,9 +461,49 @@ router.post("/", async (req, res) => {
           messageText: text
         });
 
-        // ROUTE => HUMAN (handoff)
+        // rota para humano → mesma regra: só ativa handoff se enviar OK
         if (route?.target && route.target !== "bot") {
-          const sendMeta = await sendAndLog({ kind: "handoff", outText: HANDOFF_MESSAGE });
+          let sendRes = { ok: false, status: 0, json: {} };
+          try {
+            sendRes = await igSendText({
+              instagramBusinessId,
+              recipientId: senderId,
+              pageAccessToken,
+              text: HANDOFF_MESSAGE
+            });
+          } catch (e) {
+            sendRes = { ok: false, status: 0, json: { error: String(e) } };
+          }
+
+          if (!sendRes.ok) {
+            logger.warn(
+              {
+                kind: "handoff_send_failed",
+                tenantId,
+                senderId,
+                recipientId,
+                instagramBusinessId,
+                status: sendRes.status,
+                error: sendRes.json?.error,
+                route
+              },
+              "❌ IG handoff: envio falhou (não ativando handoff/inbox)"
+            );
+
+            await appendMessage(conversationId, {
+              tenantId,
+              source: "instagram",
+              channel: "instagram",
+              from: "system",
+              direction: "out",
+              type: "text",
+              text: "[IG] Falha ao enviar handoff (token inválido/expirado).",
+              createdAt: nowIso(),
+              payload: { kind: "handoff_send_failed", send: sendRes, route }
+            });
+
+            continue;
+          }
 
           await appendMessage(conversationId, {
             tenantId,
@@ -423,20 +516,13 @@ router.post("/", async (req, res) => {
             text: HANDOFF_MESSAGE,
             handoff: true,
             createdAt: nowIso(),
-            payload: {
-              kind: "handoff",
-              instagramBusinessId,
-              route,
-              sendOk: sendMeta.ok,
-              sendStatus: sendMeta.status,
-              sendError: sendMeta.error
-            }
+            payload: { kind: "handoff", instagramBusinessId, route, send: sendRes }
           });
 
           continue;
         }
 
-        // ROUTE => BOT (GenAI)
+        // BOT
         let botText = "";
         try {
           const botReply = await callGenAIBot({
@@ -448,12 +534,46 @@ router.post("/", async (req, res) => {
 
           botText = parseBotReplyToText(botReply);
           if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
-        } catch (e) {
-          logger.warn({ err: String(e), tenantId, instagramBusinessId }, "⚠️ callGenAIBot falhou");
+        } catch {
           botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
         }
 
-        const sendMeta = await sendAndLog({ kind: "bot", outText: botText });
+        const sendRes = await igSendText({
+          instagramBusinessId,
+          recipientId: senderId,
+          pageAccessToken,
+          text: botText
+        });
+
+        if (!sendRes.ok) {
+          logger.warn(
+            {
+              kind: "bot_send_failed",
+              tenantId,
+              senderId,
+              recipientId,
+              instagramBusinessId,
+              status: sendRes.status,
+              error: sendRes.json?.error,
+              tokenLen: pageAccessToken ? String(pageAccessToken).length : 0
+            },
+            "❌ IG bot: envio falhou"
+          );
+
+          await appendMessage(conversationId, {
+            tenantId,
+            source: "instagram",
+            channel: "instagram",
+            from: "system",
+            direction: "out",
+            type: "text",
+            text: "[IG] Falha ao enviar resposta do bot (token inválido/expirado).",
+            createdAt: nowIso(),
+            payload: { kind: "bot_send_failed", send: sendRes }
+          });
+
+          continue;
+        }
 
         await appendMessage(conversationId, {
           tenantId,
@@ -465,12 +585,7 @@ router.post("/", async (req, res) => {
           type: "text",
           text: botText,
           createdAt: nowIso(),
-          payload: {
-            kind: "bot",
-            sendOk: sendMeta.ok,
-            sendStatus: sendMeta.status,
-            sendError: sendMeta.error
-          }
+          payload: { kind: "bot", sendOk: sendRes.ok, sendStatus: sendRes.status, send: sendRes }
         });
       }
     }
