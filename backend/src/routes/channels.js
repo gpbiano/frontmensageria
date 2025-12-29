@@ -99,6 +99,7 @@ function getOAuthRedirectUri(req, channel) {
 
   return `${base}/settings/channels/${channel}/callback`;
 }
+
 // ======================================================
 // STATE (anti-CSRF) — aceita 2 formatos (retrocompat)
 // Formato B (novo):  base64url(rawJSON) + "." + sigHex
@@ -195,6 +196,7 @@ function verifyState(state) {
 
   return payload;
 }
+
 // ======================================================
 // Normalização de saída (não vazar tokens)
 // ======================================================
@@ -405,7 +407,8 @@ router.get(
                   buttonText: "Ajuda",
                   headerTitle: "Atendimento",
                   greeting: "Olá! Como posso ajudar?",
-                  allowedOrigins: []
+                  allowedOrigins: [],
+                  botEnabled: true // ✅ default (mantém compat com webchat.js)
                 }
               : {}
           }
@@ -438,13 +441,25 @@ router.patch(
       const cfg = req.body?.config || {};
       const sessionTtlSeconds = req.body?.sessionTtlSeconds;
 
-      const allowedOrigins = Array.isArray(req.body?.allowedOrigins) ? req.body.allowedOrigins : undefined;
+      const allowedOrigins = Array.isArray(req.body?.allowedOrigins)
+        ? req.body.allowedOrigins
+        : undefined;
 
       const current = await prisma.channelConfig.findUnique({
         where: { tenantId_channel: { tenantId, channel: "webchat" } }
       });
 
       const mergedConfig = { ...(current?.config || {}), ...(cfg || {}) };
+
+      // ✅ Mantém compat: botEnabled pode vir em config.botEnabled OU no root (request)
+      if (typeof req.body?.botEnabled === "boolean" && typeof mergedConfig.botEnabled !== "boolean") {
+        mergedConfig.botEnabled = req.body.botEnabled;
+      }
+      if (typeof mergedConfig.botEnabled !== "boolean") {
+        // default seguro
+        mergedConfig.botEnabled = current?.config?.botEnabled ?? true;
+      }
+
       if (allowedOrigins) mergedConfig.allowedOrigins = allowedOrigins;
       if (typeof sessionTtlSeconds === "number") mergedConfig.sessionTtlSeconds = sessionTtlSeconds;
 
@@ -504,7 +519,8 @@ router.post(
             buttonText: "Ajuda",
             headerTitle: "Atendimento",
             greeting: "Olá! Como posso ajudar?",
-            allowedOrigins: []
+            allowedOrigins: [],
+            botEnabled: true
           }
         }
       });
@@ -648,18 +664,29 @@ router.post(
       const vj = await v.json().catch(() => ({}));
 
       if (!v.ok || !vj?.id) {
-        logger.warn({ status: v.status, meta: vj?.error || vj, tenantId, pageId }, "❌ Messenger connect validate failed");
+        logger.warn(
+          { status: v.status, meta: vj?.error || vj, tenantId, pageId },
+          "❌ Messenger connect validate failed"
+        );
         return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
       }
 
       const displayName = String(vj?.name || "Facebook Page").trim();
 
       const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`;
-      const subRes = await graphPostJson(subUrl, pageAccessToken, { subscribed_fields: subscribedFields });
+      const subRes = await graphPostJson(subUrl, pageAccessToken, {
+        subscribed_fields: subscribedFields
+      });
 
       if (!subRes.ok) {
-        logger.warn({ status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId }, "❌ Messenger subscribe failed");
-        return res.status(400).json({ error: "meta_subscribe_failed", meta: subRes.data?.error || subRes.data });
+        logger.warn(
+          { status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId },
+          "❌ Messenger subscribe failed"
+        );
+        return res.status(400).json({
+          error: "meta_subscribe_failed",
+          meta: subRes.data?.error || subRes.data
+        });
       }
 
       const current = await prisma.channelConfig.findUnique({
@@ -940,6 +967,7 @@ router.post(
     }
   }
 );
+
 // POST /settings/channels/instagram/connect
 router.post(
   "/instagram/connect",
@@ -994,12 +1022,17 @@ router.post(
       const vj = await v.json().catch(() => ({}));
 
       if (!v.ok || !vj?.id) {
-        logger.warn({ status: v.status, meta: vj?.error || vj, tenantId, pageId }, "❌ Instagram connect validate failed");
+        logger.warn(
+          { status: v.status, meta: vj?.error || vj, tenantId, pageId },
+          "❌ Instagram connect validate failed"
+        );
         return res.status(400).json({ error: "meta_page_token_invalid", meta: vj?.error || vj });
       }
 
       const displayName = String(vj?.name || pageTok.pageName || "Facebook Page").trim();
-      const instagramBusinessId = vj?.instagram_business_account?.id ? String(vj.instagram_business_account.id) : null;
+      const instagramBusinessId = vj?.instagram_business_account?.id
+        ? String(vj.instagram_business_account.id)
+        : null;
 
       if (!instagramBusinessId) {
         return res.status(409).json({
@@ -1026,11 +1059,16 @@ router.post(
       let subscribeOk = false;
       try {
         const subUrl = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`;
-        const subRes = await graphPostJson(subUrl, pageAccessToken, { subscribed_fields: subscribedFields });
+        const subRes = await graphPostJson(subUrl, pageAccessToken, {
+          subscribed_fields: subscribedFields
+        });
 
         subscribeOk = !!subRes.ok;
         if (!subRes.ok) {
-          logger.warn({ status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId }, "⚠️ Instagram subscribe failed (best effort)");
+          logger.warn(
+            { status: subRes.status, meta: subRes.data?.error || subRes.data, tenantId, pageId },
+            "⚠️ Instagram subscribe failed (best effort)"
+          );
         }
       } catch (e) {
         logger.warn({ err: e, tenantId, pageId }, "⚠️ Instagram subscribe exception (best effort)");
@@ -1250,7 +1288,12 @@ router.post(
 
       if (!tokenRes.ok || !tokenRes?.json?.access_token) {
         logger.error(
-          { tokenRes: tokenRes?.json, status: tokenRes?.status, redirectUriUsed: redirectUri, tenantId },
+          {
+            tokenRes: tokenRes?.json,
+            status: tokenRes?.status,
+            redirectUriUsed: redirectUri,
+            tenantId
+          },
           "❌ Meta token exchange failed"
         );
         return res.status(400).json({
@@ -1267,7 +1310,7 @@ router.post(
       }
 
       const newConfig = {
-        accessToken,
+        accessToken, // (mantido no config — mas shapeChannel não expõe)
         tokenType: tokenRes.json.token_type || null,
         expiresIn: tokenRes.json.expires_in || null,
         redirectUriUsed: redirectUri,
