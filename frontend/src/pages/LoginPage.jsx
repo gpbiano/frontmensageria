@@ -11,20 +11,48 @@ const AUTH_TOKEN_KEY = "gpLabsAuthToken";
 const AUTH_USER_KEY = "gpLabsAuthUser";
 
 async function fetchJson(url, options = {}) {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options
-  });
+  const method = (options.method || "GET").toUpperCase();
+
+  // ✅ Merge de headers (SEM risco de sobrescrever Content-Type)
+  const baseHeaders = {
+    "Content-Type": "application/json"
+  };
+
+  const mergedHeaders = {
+    ...baseHeaders,
+    ...(options.headers || {})
+  };
+
+  const fetchOptions = {
+    ...options,
+    method,
+    headers: mergedHeaders,
+
+    // ✅ Ajuda muito em PROD com Cloudflare/CORS
+    mode: "cors",
+    credentials: "include",
+    cache: "no-store"
+  };
+
+  const res = await fetch(url, fetchOptions);
 
   const contentType = res.headers.get("content-type") || "";
+  const rawText = await res.text().catch(() => "");
+
+  // ✅ Se a API não retornar JSON, mostra preview pra debugar
   if (!contentType.includes("application/json")) {
-    const text = await res.text();
     throw new Error(
-      `Resposta inválida da API (${res.status}): ${text?.slice?.(0, 200) || ""}`
+      `Resposta inválida da API (${res.status}): ${rawText?.slice?.(0, 200) || ""}`
     );
   }
 
-  const data = await res.json();
+  let data = {};
+  try {
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    data = {};
+  }
+
   if (!res.ok) throw new Error(data?.error || data?.message || "Erro na API.");
   return data;
 }
@@ -100,11 +128,7 @@ export default function LoginPage({ onLogin }) {
 
     // user segue a regra do rememberMe
     const storageForUser = rememberMe ? localStorage : sessionStorage;
-    const okUser = safeSet(
-      storageForUser,
-      AUTH_USER_KEY,
-      JSON.stringify(user || null)
-    );
+    const okUser = safeSet(storageForUser, AUTH_USER_KEY, JSON.stringify(user || null));
 
     // ✅ sanity check real (evita “não aparece no local storage”)
     const savedLocal = safeGet(localStorage, AUTH_TOKEN_KEY);
@@ -149,7 +173,10 @@ export default function LoginPage({ onLogin }) {
   async function handleSubmit(e) {
     e.preventDefault();
 
-    if (!email || !password) {
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanPassword = String(password || "").trim();
+
+    if (!cleanEmail || !cleanPassword) {
       setError("Informe seu e-mail e senha para entrar.");
       return;
     }
@@ -160,7 +187,7 @@ export default function LoginPage({ onLogin }) {
     try {
       const data = await fetchJson(`${API_BASE}/login`, {
         method: "POST",
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email: cleanEmail, password: cleanPassword })
       });
 
       if (!data?.token || !data?.user) {
@@ -185,7 +212,7 @@ export default function LoginPage({ onLogin }) {
         console.warn("[DEV] Usando login de fallback.");
         const fakeData = {
           token: "dev-fallback-token",
-          user: { id: 0, name: "Admin (Dev)", email }
+          user: { id: 0, name: "Admin (Dev)", email: cleanEmail }
         };
         try {
           persistSession(fakeData);
@@ -215,9 +242,7 @@ export default function LoginPage({ onLogin }) {
           </div>
         </div>
 
-        <div className="login-subtitle">
-          Acesse com suas credenciais de operador.
-        </div>
+        <div className="login-subtitle">Acesse com suas credenciais de operador.</div>
 
         {error && <div className="login-error">{error}</div>}
 
@@ -258,9 +283,7 @@ export default function LoginPage({ onLogin }) {
             <button
               type="button"
               className="login-link"
-              onClick={() =>
-                alert("Fluxo de recuperação de senha ainda não implementado.")
-              }
+              onClick={() => alert("Fluxo de recuperação de senha ainda não implementado.")}
             >
               Esqueci minha senha
             </button>
