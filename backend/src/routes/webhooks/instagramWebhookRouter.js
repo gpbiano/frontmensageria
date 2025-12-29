@@ -217,9 +217,11 @@ async function igSendText({ instagramBusinessId, recipientId, accessToken, text 
     return { ok: resp.ok, status: resp.status, json, url };
   };
 
+  // 1) endpoint estilo Meta Assistant
   const r1 = await tryPost(`https://graph.instagram.com/${META_GRAPH_VERSION}/me/messages`);
   if (r1.ok) return r1;
 
+  // 2) fallback tradicional
   if (instagramBusinessId) {
     return tryPost(
       `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(instagramBusinessId)}/messages`
@@ -262,7 +264,7 @@ async function isInstagramBotEnabled(tenantId) {
       select: { config: true }
     });
     const cfg = row?.config && typeof row.config === "object" ? row.config : {};
-    return cfg.botEnabled !== false;
+    return cfg.botEnabled !== false; // default TRUE
   } catch {
     return true;
   }
@@ -270,12 +272,7 @@ async function isInstagramBotEnabled(tenantId) {
 
 function pickInstagramAccessToken(channelRow) {
   const cfg = asJson(channelRow?.config);
-  const candidates = [
-    channelRow?.accessToken,
-    cfg?.accessToken,
-    cfg?.pageAccessToken,
-    cfg?.token
-  ];
+  const candidates = [channelRow?.accessToken, cfg?.accessToken, cfg?.pageAccessToken, cfg?.token];
 
   for (const c of candidates) {
     const t = sanitizeAccessToken(c);
@@ -286,7 +283,6 @@ function pickInstagramAccessToken(channelRow) {
 
 /**
  * ✅ ESSENCIAL: trava a conversa em modo humano depois que o handoff foi enviado com sucesso.
- * Sem isso, o webhook não tem como “parar o bot”, porque a guarda olha currentMode/handoffActive/inboxVisible.
  */
 async function activateHandoff(conversationId) {
   try {
@@ -496,7 +492,6 @@ router.post("/", async (req, res) => {
             continue;
           }
 
-          // ✅ trava modo humano
           await activateHandoff(conversationId);
 
           await appendMessage(conversationId, {
@@ -518,14 +513,14 @@ router.post("/", async (req, res) => {
 
         const accountSettings = { channel: "instagram", tenantId, instagramBusinessId };
 
-        const route = await decideRoute({
+        const route = decideRoute({
           accountSettings,
           conversation,
           messageText: text
         });
 
         logger.info(
-          { kind: "route_decision", tenantId, senderId, instagramBusinessId, route },
+          { kind: "route_decision", tenantId, senderId, instagramBusinessId, route, textPreview: text.slice(0, 120) },
           "🤖 IG decideRoute"
         );
 
@@ -552,7 +547,6 @@ router.post("/", async (req, res) => {
             continue;
           }
 
-          // ✅ trava modo humano
           await activateHandoff(conversationId);
 
           await appendMessage(conversationId, {
