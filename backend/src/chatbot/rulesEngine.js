@@ -1,19 +1,27 @@
 // backend/src/chatbot/rulesEngine.js
 
 /**
- * Regras simples (in-memory) por conta.
- * - enabled: liga/desliga bot
- * - maxBotAttempts: após N tentativas, manda para humano
- * - transferKeywords: palavras que pedem humano
- *
- * OBS: este módulo é stateless no DB. Se quiser persistir depois, plugamos ChannelConfig.
+ * Rules Engine (in-memory)
+ * - Cada "account" tem settings do bot.
+ * - Routers passam accountSettings como CONTEXTO (tenantId/channel/etc).
+ *   Então: só considera overrides se vier em accountSettings.chatbot (ou accountSettings.settings).
  */
 
 const accounts = {
   default: {
     enabled: true,
     maxBotAttempts: 3,
-    transferKeywords: ["humano", "atendente", "pessoa", "falar com alguém", "falar com humano"]
+    transferKeywords: [
+      "humano",
+      "atendente",
+      "pessoa",
+      "falar com alguém",
+      "falar com alguem",
+      "falar com humano",
+      "quero humano",
+      "suporte",
+      "atendimento"
+    ]
   }
 };
 
@@ -40,6 +48,7 @@ function ensureAccount(accountId = "default") {
 
 function normalizeAccountSettings(s) {
   const obj = s && typeof s === "object" ? s : {};
+
   const transferKeywords = safeArr(obj.transferKeywords)
     .map((k) => safeStr(k).toLowerCase())
     .filter(Boolean);
@@ -56,37 +65,59 @@ function normalizeAccountSettings(s) {
 }
 
 /**
- * ✅ Export que teu chatbotRouter.js espera.
- * Garante sempre um objeto válido e normalizado.
+ * ✅ Export esperado pelo chatbotRouter.js
  */
 export function getChatbotSettingsForAccount(accountId = "default") {
   const id = safeStr(accountId, "default") || "default";
   const base = ensureAccount(id);
   const normalized = normalizeAccountSettings(base);
-
-  // mantém referência atualizada em memória
   accounts[id] = { ...base, ...normalized };
   return accounts[id];
 }
 
 /**
  * Decide rota BOT vs HUMANO
- * - Se settings desabilitado → humano
- * - Se palavra-chave → humano
- * - Se excedeu tentativas → humano
+ *
+ * IMPORTANTE:
+ * - accountSettings aqui é CONTEXTO (tenantId/channel/instagramBusinessId...)
+ * - settings (enabled/maxBotAttempts/transferKeywords) vêm de:
+ *    1) getChatbotSettingsForAccount(accountId)
+ *    2) override opcional em accountSettings.chatbot (ou accountSettings.settings)
  */
 export function decideRoute({ accountSettings, conversation, messageText } = {}) {
-  // aceita tanto accountSettings já vindo “pronto” quanto busca por accountId
   const accId =
     safeStr(accountSettings?.accountId) ||
     safeStr(accountSettings?.id) ||
-    safeStr(accountSettings?.tenantId) || // fallback se você usar tenantId como chave
+    safeStr(accountSettings?.tenantId) || // ✅ teu caso atual
     "default";
 
-  const settings =
-    accountSettings && typeof accountSettings === "object"
-      ? normalizeAccountSettings(accountSettings)
-      : normalizeAccountSettings(getChatbotSettingsForAccount(accId));
+  const baseSettings = normalizeAccountSettings(getChatbotSettingsForAccount(accId));
+
+  // override opcional (se um dia quiser custom por tenant/channel sem mexer nos routers)
+  const overrideRaw =
+    accountSettings?.chatbot && typeof accountSettings.chatbot === "object"
+      ? accountSettings.chatbot
+      : accountSettings?.settings && typeof accountSettings.settings === "object"
+        ? accountSettings.settings
+        : null;
+
+  const overrideSettings = overrideRaw ? normalizeAccountSettings(overrideRaw) : null;
+
+  // merge: base + override (override só sobrescreve se vier definido)
+  const settings = overrideSettings
+    ? {
+        enabled:
+          typeof overrideRaw.enabled === "boolean" ? overrideSettings.enabled : baseSettings.enabled,
+        maxBotAttempts:
+          Number.isFinite(Number(overrideRaw.maxBotAttempts))
+            ? overrideSettings.maxBotAttempts
+            : baseSettings.maxBotAttempts,
+        transferKeywords:
+          Array.isArray(overrideRaw.transferKeywords) && overrideSettings.transferKeywords.length
+            ? overrideSettings.transferKeywords
+            : baseSettings.transferKeywords
+      }
+    : baseSettings;
 
   const conv = conversation && typeof conversation === "object" ? conversation : {};
   const text = safeStr(messageText, "");
