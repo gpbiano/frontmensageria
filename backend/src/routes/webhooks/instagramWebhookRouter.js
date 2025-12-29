@@ -1,16 +1,4 @@
 // backend/src/routes/webhooks/instagramWebhookRouter.js
-// ✅ IMPORTANTE (para assinatura funcionar):
-// - No index.js, a rota /webhook/instagram precisa passar por express.raw({ type:"*/*" })
-//   ANTES do express.json(). Assim req.body aqui vai ser Buffer, e a assinatura bate.
-// - Este router abaixo trata isso: se req.body for Buffer, ele faz JSON.parse e também
-//   seta req.rawBody = Buffer, pra validação e processamento funcionarem.
-//
-// ✅ Também mantive:
-// - validação por lista de secrets (primeiro que bater ganha)
-// - botEnabled default ON
-// - handoff só quando bot OFF ou regra mandar
-// - dedupe via waMessageId (mid)
-
 import express from "express";
 import crypto from "crypto";
 import fetch from "node-fetch";
@@ -33,12 +21,6 @@ const VERIFY_TOKEN = String(
     ""
 ).trim();
 
-/**
- * ✅ Assinatura do Webhook:
- * - Instagram Webhook assina com o APP SECRET do app que está configurado em "Webhooks"
- * - Em setups onde existe "Instagram App" separado, pode acabar vindo de outro secret.
- * Então validamos com uma LISTA de secrets (primeiro match ganha).
- */
 const META_APP_SECRETS = [
   process.env.META_APP_SECRET,
   process.env.INSTAGRAM_APP_SECRET,
@@ -61,20 +43,16 @@ const HANDOFF_MESSAGE = String(
 function nowIso() {
   return new Date().toISOString();
 }
-
 function safeStr(v, fallback = "") {
   const s = typeof v === "string" ? v : v == null ? "" : String(v);
   return s.trim() || fallback;
 }
-
 function asJson(v) {
   return v && typeof v === "object" ? v : {};
 }
-
 function msgTextFromIGEvent(ev) {
   return safeStr(ev?.message?.text || ev?.message?.body || ev?.text || "");
 }
-
 function isValidIncomingTextEvent(ev) {
   const text = msgTextFromIGEvent(ev);
   if (!text) return false;
@@ -87,7 +65,6 @@ function isValidIncomingTextEvent(ev) {
 
   return true;
 }
-
 function parseBotReplyToText(botReply) {
   if (!botReply) return "";
   if (typeof botReply === "string") return safeStr(botReply);
@@ -97,44 +74,15 @@ function parseBotReplyToText(botReply) {
 }
 
 // ===============================
-// ✅ Body normalizer (RAW -> JSON)
-// ===============================
-function parseIncomingBody(req) {
-  // Se veio do express.raw(), req.body é Buffer.
-  if (Buffer.isBuffer(req.body)) {
-    const raw = req.body;
-    req.rawBody = raw;
-
-    const rawText = raw.toString("utf8");
-    if (!rawText) return {};
-
-    try {
-      return JSON.parse(rawText);
-    } catch (e) {
-      logger.warn(
-        { err: String(e), preview: rawText.slice(0, 200) },
-        "⚠️ IG webhook: body Buffer não é JSON válido"
-      );
-      return {};
-    }
-  }
-
-  // Se veio do express.json(), req.body já é objeto e rawBody foi setado no verify()
-  return req.body || {};
-}
-
-// ===============================
 // ✅ Signature validation (Meta)
 // ===============================
 function normalizeSigHeader(sigHeader) {
   const s = String(sigHeader || "").trim();
   return s.startsWith("sha256=") ? s.slice("sha256=".length) : s;
 }
-
 function hmacSha256Hex(secret, rawBuffer) {
   return crypto.createHmac("sha256", secret).update(rawBuffer).digest("hex");
 }
-
 function safeTimingEqualHex(aHex, bHex) {
   try {
     const a = Buffer.from(String(aHex || ""), "hex");
@@ -146,22 +94,14 @@ function safeTimingEqualHex(aHex, bHex) {
   }
 }
 
-/**
- * ✅ Valida assinatura do Instagram/Messenger webhook.
- * - Precisa do Buffer exato do body (req.rawBody)
- * - Testa contra uma LISTA de secrets
- */
 function validateMetaSignature(req) {
   if (!META_APP_SECRETS.length) return { ok: true, skipped: true, reason: "no_secrets" };
 
   const sigHeader = String(req.headers["x-hub-signature-256"] || "").trim();
   if (!sigHeader) return { ok: false, reason: "missing_signature" };
 
-  const raw = req.rawBody;
-  if (!raw || !Buffer.isBuffer(raw)) {
-    // Sem rawBody não tem como validar corretamente (não faz fallback com JSON.stringify)
-    return { ok: false, reason: "missing_raw_body" };
-  }
+  const raw = req.rawBody; // Buffer exato do index (express.raw)
+  if (!raw || !Buffer.isBuffer(raw)) return { ok: false, reason: "missing_raw_body" };
 
   const gotHex = normalizeSigHeader(sigHeader);
 
@@ -172,11 +112,34 @@ function validateMetaSignature(req) {
     }
   }
 
-  return { ok: false, reason: "invalid_signature" };
+  // debug leve (não vaza secret)
+  const expectedPreview = hmacSha256Hex(META_APP_SECRETS[0], raw).slice(0, 16);
+  const gotPreview = String(gotHex || "").slice(0, 16);
+
+  return {
+    ok: false,
+    reason: "invalid_signature",
+    debug: { expectedPreview, gotPreview }
+  };
+}
+
+function parseIncomingBody(req) {
+  // Com express.raw, req.body é Buffer
+  if (Buffer.isBuffer(req.body)) {
+    const txt = req.body.toString("utf8");
+    if (!txt) return {};
+    try {
+      return JSON.parse(txt);
+    } catch (e) {
+      logger.warn({ err: String(e), preview: txt.slice(0, 200) }, "⚠️ IG body não é JSON válido");
+      return {};
+    }
+  }
+  return req.body || {};
 }
 
 // ===============================
-// Graph send (IG Messaging API via facebook graph)
+// Graph send
 // ===============================
 async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, text }) {
   if (!instagramBusinessId) throw new Error("instagramBusinessId ausente");
@@ -236,7 +199,6 @@ async function resolveChannelByInstagramRecipient(instagramBusinessId) {
   return byPageId || null;
 }
 
-// ✅ botEnabled default ON (só OFF se botEnabled === false)
 async function isInstagramBotEnabled(tenantId) {
   try {
     const row = await prisma.channelConfig.findFirst({
@@ -274,10 +236,7 @@ router.get("/", (req, res) => {
 // POST /webhook/instagram (events)
 // ======================================================
 router.post("/", async (req, res) => {
-  // 1) parse body (se veio raw -> vira JSON) e garante req.rawBody
-  const body = parseIncomingBody(req);
-
-  // 2) valida assinatura em cima do rawBody real
+  // valida assinatura em cima do Buffer exato
   const sig = validateMetaSignature(req);
   if (!sig.ok) {
     logger.warn(
@@ -285,23 +244,19 @@ router.post("/", async (req, res) => {
         sig,
         hasSecrets: META_APP_SECRETS.length,
         hasRawBody: !!req.rawBody,
-        rawLen: Buffer.isBuffer(req.rawBody) ? req.rawBody.length : 0
+        rawLen: Buffer.isBuffer(req.rawBody) ? req.rawBody.length : 0,
+        contentType: String(req.headers["content-type"] || "")
       },
       "❌ IG webhook assinatura inválida"
     );
     return res.sendStatus(403);
   }
 
-  // Meta quer 200 rápido
   res.sendStatus(200);
 
   try {
+    const body = parseIncomingBody(req);
     const entries = Array.isArray(body.entry) ? body.entry : [];
-
-    logger.info(
-      { object: body.object, entryCount: entries.length, sigSkipped: !!sig.skipped },
-      "📥 IG webhook recebido"
-    );
 
     for (const entry of entries) {
       const events = Array.isArray(entry.messaging) ? entry.messaging : [];
@@ -315,25 +270,16 @@ router.post("/", async (req, res) => {
         const mid = ev?.message?.mid ? String(ev.message.mid) : "";
 
         const ch = await resolveChannelByInstagramRecipient(recipientId);
-        if (!ch?.tenantId) {
-          logger.warn({ recipientId }, "⚠️ IG webhook: tenant não encontrado para recipientId");
-          continue;
-        }
+        if (!ch?.tenantId) continue;
 
         const tenantId = String(ch.tenantId);
         const cfg = asJson(ch.config);
 
         const instagramBusinessId = safeStr(cfg.instagramBusinessId || recipientId);
         const pageAccessToken = safeStr(ch.accessToken);
-
-        if (!pageAccessToken) {
-          logger.warn({ tenantId, recipientId }, "⚠️ IG webhook: sem accessToken no ChannelConfig");
-          continue;
-        }
+        if (!pageAccessToken) continue;
 
         const botEnabled = await isInstagramBotEnabled(tenantId);
-
-        // ✅ peerId sempre com prefixo (consistência)
         const peerId = `ig:${senderId}`;
 
         const convRes = await getOrCreateChannelConversation({
@@ -346,15 +292,11 @@ router.post("/", async (req, res) => {
           meta: { instagramBusinessId, recipientId, pageId: ch.pageId || null }
         });
 
-        if (!convRes?.ok || !convRes?.conversation?.id) {
-          logger.warn({ tenantId, recipientId }, "❌ IG webhook: falha ao criar/achar conversa");
-          continue;
-        }
+        if (!convRes?.ok || !convRes?.conversation?.id) continue;
 
         const conversation = convRes.conversation;
         const conversationId = String(conversation.id);
 
-        // 1) inbound (dedupe via waMessageId/mid)
         await appendMessage(conversationId, {
           tenantId,
           source: "instagram",
@@ -368,7 +310,6 @@ router.post("/", async (req, res) => {
           payload: ev
         });
 
-        // 2) se já está em humano/handoff/inbox → não responde bot
         if (
           String(conversation?.currentMode || "").toLowerCase() === "human" ||
           conversation?.handoffActive === true ||
@@ -377,7 +318,6 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // 3) bot OFF → handoff + promove inbox
         if (!botEnabled) {
           try {
             await igSendText({
@@ -386,12 +326,7 @@ router.post("/", async (req, res) => {
               pageAccessToken,
               text: HANDOFF_MESSAGE
             });
-          } catch (e) {
-            logger.error(
-              { err: String(e), tenantId },
-              "❌ IG webhook: handoff (bot disabled) falhou"
-            );
-          }
+          } catch {}
 
           await appendMessage(conversationId, {
             tenantId,
@@ -410,7 +345,6 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // 4) decide rota
         const accountSettings = { channel: "instagram", tenantId, instagramBusinessId };
 
         const route = await decideRoute({
@@ -427,9 +361,7 @@ router.post("/", async (req, res) => {
               pageAccessToken,
               text: HANDOFF_MESSAGE
             });
-          } catch (e) {
-            logger.error({ err: String(e), tenantId }, "❌ IG webhook: handoff (route) falhou");
-          }
+          } catch {}
 
           await appendMessage(conversationId, {
             tenantId,
@@ -448,7 +380,6 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // 5) BOT
         let botText = "";
         try {
           const botReply = await callGenAIBot({
@@ -460,8 +391,7 @@ router.post("/", async (req, res) => {
 
           botText = parseBotReplyToText(botReply);
           if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
-        } catch (e) {
-          logger.error({ err: String(e), tenantId }, "❌ IG webhook: erro botEngine");
+        } catch {
           botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
         }
 
@@ -471,13 +401,6 @@ router.post("/", async (req, res) => {
           pageAccessToken,
           text: botText
         });
-
-        if (!sendRes.ok) {
-          logger.warn(
-            { tenantId, status: sendRes.status, meta: sendRes.json?.error || sendRes.json },
-            "⚠️ IG webhook: falha no envio Graph"
-          );
-        }
 
         await appendMessage(conversationId, {
           tenantId,

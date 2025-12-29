@@ -1,21 +1,4 @@
 // backend/src/index.js
-// ✅ PRISMA-FIRST (sem data.json)
-// Index consolidado: tenant resolve -> rotas públicas -> auth global -> tenant guard -> prisma guard -> rotas protegidas
-//
-// ✅ FIXES incluídos:
-// 1) Libera CORS para o site institucional (gplabs.com.br e www.gplabs.com.br) por padrão
-// 2) Adiciona alias /br/webchat (porque seu widget está chamando /br/webchat/* no browser)
-// 3) Garante que /br/webchat também esteja em allowNoTenantPaths (tenant resolution não quebra widget)
-// 4) Mantém preflight global antes de qualquer guard
-// 5) ✅ FIX REAL: resolve tenant via header/query APENAS no webchat quando host não define tenant
-// 6) ✅ Captura req.rawBody (Buffer) p/ validar x-hub-signature-256 (Meta IG/Messenger)
-// 7) ✅ FIX ASSINATURA IG: garante raw body para /webhook/instagram (evita mismatch por parsers)
-
-// ⚠️ IMPORTANTE SOBRE ASSINATURA:
-// A assinatura da Meta precisa do RAW BODY exato.
-// Por isso, montamos um parser RAW só para /webhook/instagram ANTES do JSON parser global.
-// No router do IG, use (req.rawBody ?? req.body) quando body for Buffer.
-
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -48,7 +31,6 @@ if (ENV === "production" && fs.existsSync(envProdPath)) {
   dotenv.config({ path: envProdPath, override: false });
 }
 
-// default seguro
 process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 
 // ===============================
@@ -57,10 +39,7 @@ process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 const { default: logger } = await import("./logger.js");
 
 logger.info(
-  {
-    ENV,
-    TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN
-  },
+  { ENV, TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN },
   "🧩 Env carregado"
 );
 
@@ -73,9 +52,7 @@ let prismaReady = false;
 try {
   const mod = await import("./lib/prisma.js");
   prisma = mod?.prisma || mod?.default || mod;
-
   prismaReady = !!(prisma?.user && prisma?.tenant && prisma?.conversation && prisma?.message);
-
   logger.info({ prismaReady }, "🧠 Prisma status");
 } catch (err) {
   prismaReady = false;
@@ -85,26 +62,20 @@ try {
 // ===============================
 // ROUTERS
 // ===============================
-
-// Auth
 const { default: authRouter } = await import("./auth/authRouter.js");
 const { default: passwordRouter } = await import("./auth/passwordRouter.js");
 
-// Settings
 const { default: usersRouter } = await import("./settings/usersRouter.js");
 const { default: groupsRouter } = await import("./settings/groupsRouter.js");
 const { default: channelsRouter } = await import("./routes/channels.js");
 
-// Atendimento
 const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
 const { default: humanRouter } = await import("./human/humanRouter.js");
 const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
 
-// Conversas / Webchat
 const { default: webchatRouter } = await import("./routes/webchat.js");
 const { default: conversationsRouter } = await import("./routes/conversations.js");
 
-// Outbound
 const { default: outboundRouter } = await import("./outbound/outboundRouter.js");
 const { default: numbersRouter } = await import("./outbound/numbersRouter.js");
 const { default: templatesRouter } = await import("./outbound/templatesRouter.js");
@@ -113,12 +84,9 @@ const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
 const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
-// Webhooks públicos
 const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
-const { default: instagramWebhookRouter } = await import(
-  "./routes/webhooks/instagramWebhookRouter.js"
-);
+const { default: instagramWebhookRouter } = await import("./routes/webhooks/instagramWebhookRouter.js");
 
 // ===============================
 // APP
@@ -145,11 +113,10 @@ app.use(
 );
 
 // ===============================
-// CORS (GLOBAL) — FIX DEFINITIVO
+// CORS
 // ===============================
 function buildAllowedOrigins() {
   const raw = String(process.env.CORS_ORIGINS || "").trim();
-
   const defaults = [
     "https://cliente.gplabs.com.br",
     "https://app.gplabs.com.br",
@@ -158,14 +125,8 @@ function buildAllowedOrigins() {
     "http://localhost:5173",
     "http://localhost:3000"
   ];
-
   if (!raw) return defaults;
-
-  const extra = raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
+  const extra = raw.split(",").map((s) => s.trim()).filter(Boolean);
   return Array.from(new Set([...defaults, ...extra]));
 }
 
@@ -173,7 +134,7 @@ const ALLOWED_ORIGINS = buildAllowedOrigins();
 
 const corsConfig = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // server-to-server / curl
+    if (!origin) return cb(null, true);
     if (ENV !== "production") return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error(`CORS blocked: ${origin}`));
@@ -184,7 +145,7 @@ const corsConfig = {
     "Content-Type",
     "Authorization",
     "X-Tenant-Id",
-    "X-Tenant-Slug", // ✅ necessário pro webchat no domínio raiz
+    "X-Tenant-Slug",
     "X-Widget-Key",
     "X-Webchat-Token"
   ],
@@ -196,26 +157,6 @@ app.use(cors(corsConfig));
 app.options("*", cors(corsConfig));
 
 // ===============================
-// ✅ BODY PARSERS
-// ===============================
-// 1) ✅ RAW apenas para Instagram Webhook (assinatura precisa do body exato)
-//    - mantém req.body como Buffer para /webhook/instagram
-app.use("/webhook/instagram", express.raw({ type: "*/*", limit: "5mb" }));
-
-// 2) JSON global para todo resto + captura rawBody (Buffer) quando JSON
-app.use(
-  express.json({
-    limit: "5mb",
-    type: ["application/json", "application/*+json"],
-    verify: (req, _res, buf) => {
-      req.rawBody = buf; // Buffer (para webhooks JSON e debug)
-    }
-  })
-);
-
-app.use(express.urlencoded({ extended: true }));
-
-// ===============================
 // HELPERS
 // ===============================
 function requirePrisma(_req, res, next) {
@@ -223,16 +164,6 @@ function requirePrisma(_req, res, next) {
   return res.status(503).json({ error: "db_not_ready" });
 }
 
-/**
- * ✅ Webchat tenant fallback (quando host não define tenant)
- * Usado só nas rotas públicas do webchat.
- *
- * Prioridade:
- * - x-tenant-id / ?tenantId
- * - x-tenant-slug / ?tenant
- *
- * Observação: só funciona se prismaReady (vem depois de requirePrisma)
- */
 async function webchatTenantFallback(req, res, next) {
   try {
     if (req.tenant?.id) return next();
@@ -244,12 +175,8 @@ async function webchatTenantFallback(req, res, next) {
     const tenantSlug = String(req.query.tenant || headerTenantSlug || "").trim();
 
     let t = null;
-
-    if (tenantId) {
-      t = await prisma.tenant.findUnique({ where: { id: tenantId } });
-    } else if (tenantSlug) {
-      t = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
-    }
+    if (tenantId) t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    else if (tenantSlug) t = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
 
     if (t?.isActive) {
       req.tenant = t;
@@ -276,13 +203,9 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/auth/password",
   "/auth/password/verify",
   "/auth/password/set",
-
-  // webhooks públicos
   "/webhook/whatsapp",
   "/webhook/messenger",
   "/webhook/instagram",
-
-  // webchat público
   "/webchat",
   "/br/webchat"
 ];
@@ -321,25 +244,45 @@ app.get("/health", async (_req, res) => {
   });
 });
 
-// Auth
 app.use("/", authRouter);
 app.use("/auth", passwordRouter);
 
-// ===============================
-// ✅ Webchat público (com tenant fallback)
-// ===============================
+// ✅ Webchat público
 app.use("/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 
 // ===============================
-// ✅ Webhooks públicos (NÃO passam por auth)
+// ✅ WEBHOOKS PÚBLICOS
 // ===============================
-// WhatsApp/Messenger geralmente JSON
+
+// Whats/Messenger podem seguir com JSON normal
+app.use(
+  express.json({
+    limit: "5mb",
+    type: ["application/json", "application/*+json"],
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    }
+  })
+);
+app.use(express.urlencoded({ extended: true }));
+
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 
-// Instagram está com express.raw() acima -> o router precisa lidar com Buffer em req.body
-app.use("/webhook/instagram", instagramWebhookRouter);
+// ✅ CRÍTICO: Instagram com RAW ANTES DE QUALQUER JSON “tocar” nele.
+// Isso garante assinatura 1:1 com Meta.
+app.use(
+  "/webhook/instagram",
+  express.raw({
+    type: "*/*",
+    limit: "5mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf; // Buffer exato
+    }
+  }),
+  instagramWebhookRouter
+);
 
 // ===============================
 // 🔒 MIDDLEWARE GLOBAL (PROTEGIDO)
@@ -362,15 +305,12 @@ app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
 app.use("/api/human", assignmentRouter);
 
-// Settings
 app.use("/settings", usersRouter);
 app.use("/settings/groups", groupsRouter);
 app.use("/settings/channels", channelsRouter);
 
-// Conversas
 app.use("/conversations", conversationsRouter);
 
-// Outbound
 app.use("/outbound/assets", assetsRouter);
 app.use("/outbound/numbers", numbersRouter);
 app.use("/outbound/templates", templatesRouter);
@@ -379,16 +319,12 @@ app.use("/outbound/optout", optoutRouter);
 app.use("/outbound/sms-campaigns", smsCampaignsRouter);
 app.use("/outbound", outboundRouter);
 
-// ===============================
 // 404
-// ===============================
 app.use((req, res) => {
   res.status(404).json({ error: "not_found", path: req.path });
 });
 
-// ===============================
-// ERROR HANDLER
-// ===============================
+// Error handler
 app.use((err, req, res, _next) => {
   logger.error(
     {
@@ -413,11 +349,8 @@ app.use((err, req, res, _next) => {
   });
 });
 
-// ===============================
-// START
-// ===============================
+// Start
 const PORT = Number(process.env.PORT || 3010);
-
 app.listen(PORT, () => {
   logger.info(
     {
