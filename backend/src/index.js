@@ -9,6 +9,12 @@
 // 4) Mantém preflight global antes de qualquer guard
 // 5) ✅ FIX REAL: resolve tenant via header/query APENAS no webchat quando host não define tenant
 // 6) ✅ Captura req.rawBody (Buffer) p/ validar x-hub-signature-256 (Meta IG/Messenger)
+// 7) ✅ FIX ASSINATURA IG: garante raw body para /webhook/instagram (evita mismatch por parsers)
+
+// ⚠️ IMPORTANTE SOBRE ASSINATURA:
+// A assinatura da Meta precisa do RAW BODY exato.
+// Por isso, montamos um parser RAW só para /webhook/instagram ANTES do JSON parser global.
+// No router do IG, use (req.rawBody ?? req.body) quando body for Buffer.
 
 import express from "express";
 import cors from "cors";
@@ -190,16 +196,19 @@ app.use(cors(corsConfig));
 app.options("*", cors(corsConfig));
 
 // ===============================
-// BODY PARSERS
-// - ✅ JSON com rawBody (Meta Webhooks: x-hub-signature-256)
-// - ⚠️ Não adicione outro express.json() depois disso.
+// ✅ BODY PARSERS
 // ===============================
+// 1) ✅ RAW apenas para Instagram Webhook (assinatura precisa do body exato)
+//    - mantém req.body como Buffer para /webhook/instagram
+app.use("/webhook/instagram", express.raw({ type: "*/*", limit: "5mb" }));
+
+// 2) JSON global para todo resto + captura rawBody (Buffer) quando JSON
 app.use(
   express.json({
     limit: "5mb",
     type: ["application/json", "application/*+json"],
     verify: (req, _res, buf) => {
-      req.rawBody = buf; // Buffer
+      req.rawBody = buf; // Buffer (para webhooks JSON e debug)
     }
   })
 );
@@ -325,8 +334,11 @@ app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 // ===============================
 // ✅ Webhooks públicos (NÃO passam por auth)
 // ===============================
+// WhatsApp/Messenger geralmente JSON
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
+
+// Instagram está com express.raw() acima -> o router precisa lidar com Buffer em req.body
 app.use("/webhook/instagram", instagramWebhookRouter);
 
 // ===============================

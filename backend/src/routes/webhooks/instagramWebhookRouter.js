@@ -1,447 +1,419 @@
-// backend/src/routes/webhooks/instagramWebhookRouter.js
+// backend/src/index.js
+// ✅ PRISMA-FIRST (sem data.json)
+// Index consolidado: tenant resolve -> rotas públicas -> auth global -> tenant guard -> prisma guard -> rotas protegidas
+//
+// ✅ FIXES incluídos:
+// 1) Libera CORS para o site institucional (gplabs.com.br e www.gplabs.com.br) por padrão
+// 2) Adiciona alias /br/webchat (porque seu widget está chamando /br/webchat/* no browser)
+// 3) Garante que /br/webchat também esteja em allowNoTenantPaths (tenant resolution não quebra widget)
+// 4) Mantém preflight global antes de qualquer guard
+// 5) ✅ FIX REAL: resolve tenant via header/query APENAS no webchat quando host não define tenant
+// 6) ✅ Captura req.rawBody (Buffer) p/ validar x-hub-signature-256 (Meta IG/Messenger)
+
 import express from "express";
-import crypto from "crypto";
-import fetch from "node-fetch";
-import prismaMod from "../../lib/prisma.js";
-import logger from "../../logger.js";
+import cors from "cors";
+import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import pinoHttp from "pino-http";
 
-import { getOrCreateChannelConversation, appendMessage } from "../conversations.js";
-import { decideRoute } from "../../chatbot/rulesEngine.js";
-import { callGenAIBot } from "../../chatbot/botEngine.js";
-
-const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
-const router = express.Router();
-
-const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION || "v21.0").trim();
-
-const VERIFY_TOKEN = String(
-  process.env.INSTAGRAM_VERIFY_TOKEN ||
-    process.env.META_VERIFY_TOKEN ||
-    process.env.VERIFY_TOKEN ||
-    ""
-).trim();
-
-// ✅ App Secret do MESMO APP que configurou o Webhook na Meta
-// (suporta múltiplos: "s1,s2")
-const META_APP_SECRET_RAW = String(
-  process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET || ""
-).trim();
-
-const META_VERIFY_SIGNATURE =
-  String(process.env.META_VERIFY_SIGNATURE || "true").toLowerCase() !== "false";
-
-const HANDOFF_MESSAGE = String(
-  process.env.INSTAGRAM_HANDOFF_MESSAGE ||
-    process.env.MESSENGER_HANDOFF_MESSAGE ||
-    "Aguarde um momento, vou te transferir para um atendente humano."
-).trim();
+// Middlewares
+import { resolveTenant } from "./middleware/resolveTenant.js";
+import { requireTenant } from "./middleware/requireTenant.js";
+import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
 
 // ===============================
-// Helpers
+// PATHS + ENV LOAD
 // ===============================
-function nowIso() {
-  return new Date().toISOString();
-}
-function safeStr(v, fallback = "") {
-  const s = typeof v === "string" ? v : v == null ? "" : String(v);
-  return s.trim() || fallback;
-}
-function asJson(v) {
-  return v && typeof v === "object" ? v : {};
-}
-function msgTextFromIGEvent(ev) {
-  return safeStr(ev?.message?.text || ev?.message?.body || ev?.text || "");
-}
-function isValidIncomingTextEvent(ev) {
-  const text = msgTextFromIGEvent(ev);
-  if (!text) return false;
-  if (ev?.message?.is_echo === true) return false;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-  const senderId = safeStr(ev?.sender?.id);
-  const recipientId = safeStr(ev?.recipient?.id);
-  if (!senderId || !recipientId) return false;
-  if (senderId === recipientId) return false;
-  return true;
+const ENV = process.env.NODE_ENV || "development";
+
+const envProdPath = path.join(__dirname, "..", ".env.production");
+const envDevPath = path.join(__dirname, "..", ".env");
+
+if (ENV === "production" && fs.existsSync(envProdPath)) {
+  dotenv.config({ path: envProdPath, override: true });
+} else if (fs.existsSync(envDevPath)) {
+  dotenv.config({ path: envDevPath, override: false });
+} else if (fs.existsSync(envProdPath)) {
+  dotenv.config({ path: envProdPath, override: false });
 }
-function parseBotReplyToText(botReply) {
-  if (!botReply) return "";
-  if (typeof botReply === "string") return safeStr(botReply);
-  if (typeof botReply?.replyText === "string") return safeStr(botReply.replyText);
-  if (typeof botReply?.text === "string") return safeStr(botReply.text);
-  return safeStr(botReply?.message || "");
+
+// default seguro
+process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
+
+// ===============================
+// LOGGER
+// ===============================
+const { default: logger } = await import("./logger.js");
+
+logger.info(
+  {
+    ENV,
+    TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN
+  },
+  "🧩 Env carregado"
+);
+
+// ===============================
+// PRISMA
+// ===============================
+let prisma = null;
+let prismaReady = false;
+
+try {
+  const mod = await import("./lib/prisma.js");
+  prisma = mod?.prisma || mod?.default || mod;
+
+  prismaReady = !!(prisma?.user && prisma?.tenant && prisma?.conversation && prisma?.message);
+
+  logger.info({ prismaReady }, "🧠 Prisma status");
+} catch (err) {
+  prismaReady = false;
+  logger.error({ err }, "❌ Erro ao carregar Prisma");
 }
 
 // ===============================
-// ✅ Signature validation (Meta) — usando RAW (Buffer)
+// ROUTERS
 // ===============================
-function getSignatureHeader(req) {
-  const s256 = String(req.headers["x-hub-signature-256"] || "").trim();
-  const s1 = String(req.headers["x-hub-signature"] || "").trim();
-  return s256 || s1;
+
+// Auth
+const { default: authRouter } = await import("./auth/authRouter.js");
+const { default: passwordRouter } = await import("./auth/passwordRouter.js");
+
+// Settings
+const { default: usersRouter } = await import("./settings/usersRouter.js");
+const { default: groupsRouter } = await import("./settings/groupsRouter.js");
+const { default: channelsRouter } = await import("./routes/channels.js");
+
+// Atendimento
+const { default: chatbotRouter } = await import("./chatbot/chatbotRouter.js");
+const { default: humanRouter } = await import("./human/humanRouter.js");
+const { default: assignmentRouter } = await import("./human/assignmentRouter.js");
+
+// Conversas / Webchat
+const { default: webchatRouter } = await import("./routes/webchat.js");
+const { default: conversationsRouter } = await import("./routes/conversations.js");
+
+// Outbound
+const { default: outboundRouter } = await import("./outbound/outboundRouter.js");
+const { default: numbersRouter } = await import("./outbound/numbersRouter.js");
+const { default: templatesRouter } = await import("./outbound/templatesRouter.js");
+const { default: assetsRouter } = await import("./outbound/assetsRouter.js");
+const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js");
+const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
+const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
+
+// Webhooks públicos
+const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
+const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
+const { default: instagramWebhookRouter } = await import(
+  "./routes/webhooks/instagramWebhookRouter.js"
+);
+
+// ===============================
+// APP
+// ===============================
+const app = express();
+app.set("etag", false);
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+
+// ===============================
+// LOGGER HTTP
+// ===============================
+app.use(
+  pinoHttp({
+    logger,
+    quietReqLogger: true,
+    autoLogging: {
+      ignore: (req) =>
+        req.method === "OPTIONS" ||
+        req.url.startsWith("/health") ||
+        req.url.startsWith("/webhook/")
+    }
+  })
+);
+
+// ===============================
+// CORS (GLOBAL) — FIX DEFINITIVO
+// ===============================
+function buildAllowedOrigins() {
+  const raw = String(process.env.CORS_ORIGINS || "").trim();
+
+  const defaults = [
+    "https://cliente.gplabs.com.br",
+    "https://app.gplabs.com.br",
+    "https://gplabs.com.br",
+    "https://www.gplabs.com.br",
+    "http://localhost:5173",
+    "http://localhost:3000"
+  ];
+
+  if (!raw) return defaults;
+
+  const extra = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set([...defaults, ...extra]));
 }
-function normalizeSigHex(sig) {
-  return String(sig || "").trim().replace(/^sha256=/i, "");
+
+const ALLOWED_ORIGINS = buildAllowedOrigins();
+
+const corsConfig = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // server-to-server / curl
+    if (ENV !== "production") return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Tenant-Id",
+    "X-Tenant-Slug", // ✅ necessário pro webchat no domínio raiz
+    "X-Widget-Key",
+    "X-Webchat-Token"
+  ],
+  exposedHeaders: ["Authorization"],
+  maxAge: 86400
+};
+
+app.use(cors(corsConfig));
+app.options("*", cors(corsConfig));
+
+// ===============================
+// BODY PARSERS
+// - ✅ JSON com rawBody (Meta Webhooks: x-hub-signature-256)
+// - ⚠️ Não adicione outro express.json() depois disso.
+// ===============================
+app.use(
+  express.json({
+    limit: "5mb",
+    type: ["application/json", "application/*+json"],
+    verify: (req, _res, buf) => {
+      req.rawBody = buf; // Buffer
+    }
+  })
+);
+
+app.use(express.urlencoded({ extended: true }));
+
+// ===============================
+// HELPERS
+// ===============================
+function requirePrisma(_req, res, next) {
+  if (prismaReady) return next();
+  return res.status(503).json({ error: "db_not_ready" });
 }
-function computeSha256Hex(secret, rawBodyBuf) {
-  return crypto.createHmac("sha256", secret).update(rawBodyBuf).digest("hex");
-}
-function timingSafeEqualHex(aHex, bHex) {
+
+/**
+ * ✅ Webchat tenant fallback (quando host não define tenant)
+ * Usado só nas rotas públicas do webchat.
+ *
+ * Prioridade:
+ * - x-tenant-id / ?tenantId
+ * - x-tenant-slug / ?tenant
+ *
+ * Observação: só funciona se prismaReady (vem depois de requirePrisma)
+ */
+async function webchatTenantFallback(req, res, next) {
   try {
-    const a = Buffer.from(String(aHex || ""), "hex");
-    const b = Buffer.from(String(bHex || ""), "hex");
-    if (!a.length || !b.length) return false;
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
+    if (req.tenant?.id) return next();
+
+    const headerTenantId = req.headers["x-tenant-id"];
+    const headerTenantSlug = req.headers["x-tenant-slug"];
+
+    const tenantId = String(req.query.tenantId || headerTenantId || "").trim();
+    const tenantSlug = String(req.query.tenant || headerTenantSlug || "").trim();
+
+    let t = null;
+
+    if (tenantId) {
+      t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    } else if (tenantSlug) {
+      t = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+    }
+
+    if (t?.isActive) {
+      req.tenant = t;
+      req.tenantId = t.id;
+      return next();
+    }
+
+    return res.status(400).json({ error: "missing_tenant_context" });
+  } catch (err) {
+    logger.error({ err }, "❌ webchatTenantFallback failed");
+    return res.status(500).json({ error: "internal_server_error" });
   }
 }
 
-function validateMetaSignatureRaw(req) {
-  if (!META_VERIFY_SIGNATURE) return { ok: true, skipped: true, reason: "META_VERIFY_SIGNATURE=false" };
+// ===============================
+// TENANT RESOLUTION (ANTES DE AUTH)
+// ===============================
+const PUBLIC_NO_TENANT_PATHS = [
+  "/",
+  "/health",
+  "/login",
+  "/auth/login",
+  "/auth/select-tenant",
+  "/auth/password",
+  "/auth/password/verify",
+  "/auth/password/set",
 
-  const sigHeader = getSignatureHeader(req);
-  const secrets = META_APP_SECRET_RAW.split(",").map((s) => s.trim()).filter(Boolean);
+  // webhooks públicos
+  "/webhook/whatsapp",
+  "/webhook/messenger",
+  "/webhook/instagram",
 
-  const hasSecret = secrets.length > 0;
-  const raw = req.body; // ✅ aqui é Buffer (porque no index usamos express.raw)
-  const hasRawBody = Buffer.isBuffer(raw);
-  const rawLen = hasRawBody ? raw.length : 0;
+  // webchat público
+  "/webchat",
+  "/br/webchat"
+];
 
-  if (!hasSecret) return { ok: true, skipped: true, reason: "no_app_secret", hasSecret, hasRawBody, rawLen };
-  if (!sigHeader) return { ok: false, reason: "missing_signature", hasSecret, hasRawBody, rawLen };
-  if (!hasRawBody) return { ok: false, reason: "missing_raw_body", hasSecret, hasRawBody, rawLen };
+app.use(
+  resolveTenant({
+    tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
+    allowNoTenantPaths: PUBLIC_NO_TENANT_PATHS
+  })
+);
 
-  const gotHex = normalizeSigHex(sigHeader);
+// ===============================
+// 🌍 ROTAS PÚBLICAS
+// ===============================
+app.get("/", (_req, res) => res.json({ status: "ok" }));
 
-  for (const secret of secrets) {
-    const expectedHex = computeSha256Hex(secret, raw);
-    if (timingSafeEqualHex(gotHex, expectedHex)) return { ok: true, hasSecret, hasRawBody, rawLen };
+app.get("/health", async (_req, res) => {
+  let users = 0;
+  let tenants = 0;
+
+  if (prismaReady) {
+    try {
+      users = await prisma.user.count();
+      tenants = await prisma.tenant.count();
+    } catch {}
   }
 
-  // debug seguro
-  const expected0 = computeSha256Hex(secrets[0], raw);
-  return {
-    ok: false,
-    reason: "invalid_signature",
-    hasSecret,
-    hasRawBody,
-    rawLen,
-    sigPrefix: gotHex.slice(0, 12),
-    digestPrefix: expected0.slice(0, 12)
-  };
-}
-
-// ===============================
-// Graph send
-// ===============================
-async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, text }) {
-  if (!instagramBusinessId) throw new Error("instagramBusinessId ausente");
-  if (!pageAccessToken) throw new Error("pageAccessToken ausente");
-  if (!recipientId) throw new Error("recipientId ausente");
-  const body = safeStr(text);
-  if (!body) return { ok: true, skipped: true };
-
-  const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
-    instagramBusinessId
-  )}/messages?access_token=${encodeURIComponent(pageAccessToken)}`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: String(recipientId) },
-      message: { text: body }
-    })
+  res.json({
+    ok: true,
+    env: ENV,
+    prismaReady,
+    users,
+    tenants,
+    tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
+    uptime: process.uptime()
   });
+});
 
-  const rawText = await resp.text().catch(() => "");
-  let json = {};
-  try {
-    json = rawText ? JSON.parse(rawText) : {};
-  } catch {
-    json = { raw: rawText };
-  }
-  return { ok: resp.ok, status: resp.status, json };
-}
+// Auth
+app.use("/", authRouter);
+app.use("/auth", passwordRouter);
 
 // ===============================
-// Resolve ChannelConfig
+// ✅ Webchat público (com tenant fallback)
 // ===============================
-async function resolveChannelByInstagramRecipient(instagramBusinessId) {
-  const rid = String(instagramBusinessId || "").trim();
-  if (!rid) return null;
+app.use("/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
+app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 
-  const byCfg = await prisma.channelConfig.findFirst({
-    where: {
-      channel: "instagram",
-      enabled: true,
-      status: "connected",
-      config: { path: ["instagramBusinessId"], equals: rid }
+// ===============================
+// ✅ Webhooks públicos (NÃO passam por auth)
+// ===============================
+app.use("/webhook/whatsapp", whatsappRouter);
+app.use("/webhook/messenger", messengerRouter);
+app.use("/webhook/instagram", instagramWebhookRouter);
+
+// ===============================
+// 🔒 MIDDLEWARE GLOBAL (PROTEGIDO)
+// ===============================
+app.use(requireAuth);
+app.use(enforceTokenTenant);
+
+app.use(
+  requireTenant({
+    allowNoTenantPaths: PUBLIC_NO_TENANT_PATHS
+  })
+);
+
+app.use(requirePrisma);
+
+// ===============================
+// 🔒 ROTAS PROTEGIDAS
+// ===============================
+app.use("/api", chatbotRouter);
+app.use("/api/human", humanRouter);
+app.use("/api/human", assignmentRouter);
+
+// Settings
+app.use("/settings", usersRouter);
+app.use("/settings/groups", groupsRouter);
+app.use("/settings/channels", channelsRouter);
+
+// Conversas
+app.use("/conversations", conversationsRouter);
+
+// Outbound
+app.use("/outbound/assets", assetsRouter);
+app.use("/outbound/numbers", numbersRouter);
+app.use("/outbound/templates", templatesRouter);
+app.use("/outbound/campaigns", campaignsRouter);
+app.use("/outbound/optout", optoutRouter);
+app.use("/outbound/sms-campaigns", smsCampaignsRouter);
+app.use("/outbound", outboundRouter);
+
+// ===============================
+// 404
+// ===============================
+app.use((req, res) => {
+  res.status(404).json({ error: "not_found", path: req.path });
+});
+
+// ===============================
+// ERROR HANDLER
+// ===============================
+app.use((err, req, res, _next) => {
+  logger.error(
+    {
+      err,
+      url: req.url,
+      method: req.method,
+      origin: req.headers?.origin || null,
+      tenantId: req.tenant?.id || null,
+      userId: req.user?.id || null
     },
-    orderBy: { updatedAt: "desc" }
+    "❌ Erro não tratado"
+  );
+
+  if (res.headersSent) return;
+
+  const msg = err?.message ? String(err.message) : "internal_server_error";
+  const isCors = msg.toLowerCase().includes("cors blocked");
+
+  res.status(isCors ? 403 : 500).json({
+    error: isCors ? "cors_blocked" : "internal_server_error",
+    detail: ENV !== "production" ? msg : undefined
   });
-  if (byCfg) return byCfg;
-
-  const byPageId = await prisma.channelConfig.findFirst({
-    where: { channel: "instagram", enabled: true, status: "connected", pageId: rid },
-    orderBy: { updatedAt: "desc" }
-  });
-
-  return byPageId || null;
-}
-
-// ✅ botEnabled default ON (só OFF se botEnabled === false)
-async function isInstagramBotEnabled(tenantId) {
-  try {
-    const row = await prisma.channelConfig.findFirst({
-      where: { tenantId: String(tenantId), channel: "instagram", enabled: true },
-      select: { config: true }
-    });
-    const cfg = row?.config && typeof row.config === "object" ? row.config : {};
-    return cfg.botEnabled !== false;
-  } catch {
-    return true;
-  }
-}
-
-// ======================================================
-// GET /webhook/instagram (verify)
-// ======================================================
-router.get("/", (req, res) => {
-  try {
-    const mode = safeStr(req.query["hub.mode"]);
-    const token = safeStr(req.query["hub.verify_token"]);
-    const challenge = req.query["hub.challenge"];
-
-    if (mode === "subscribe" && VERIFY_TOKEN && token === VERIFY_TOKEN) {
-      logger.info("✅ IG webhook verificado");
-      return res.status(200).send(String(challenge || ""));
-    }
-    return res.status(403).send("forbidden");
-  } catch (e) {
-    logger.error({ err: e }, "❌ IG webhook verify error");
-    return res.status(500).send("error");
-  }
 });
 
-// ======================================================
-// POST /webhook/instagram (events) — RAW + JSON manual
-// ======================================================
-router.post("/", async (req, res) => {
-  const sig = validateMetaSignatureRaw(req);
-  if (!sig.ok) {
-    logger.warn({ sig }, "❌ IG webhook assinatura inválida");
-    return res.sendStatus(403);
-  }
+// ===============================
+// START
+// ===============================
+const PORT = Number(process.env.PORT || 3010);
 
-  // Meta quer 200 rápido
-  res.sendStatus(200);
-
-  let body = {};
-  try {
-    body = req.body && Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString("utf8")) : {};
-  } catch (e) {
-    logger.error({ err: String(e), rawLen: Buffer.isBuffer(req.body) ? req.body.length : 0 }, "❌ IG webhook JSON parse failed");
-    return;
-  }
-
-  try {
-    const entries = Array.isArray(body.entry) ? body.entry : [];
-
-    logger.info(
-      { object: body.object, entryCount: entries.length, sigSkipped: !!sig.skipped },
-      "📥 IG webhook recebido"
-    );
-
-    for (const entry of entries) {
-      const events = Array.isArray(entry.messaging) ? entry.messaging : [];
-
-      for (const ev of events) {
-        if (!isValidIncomingTextEvent(ev)) continue;
-
-        const senderId = safeStr(ev?.sender?.id);
-        const recipientId = safeStr(ev?.recipient?.id);
-        const text = msgTextFromIGEvent(ev);
-        const mid = ev?.message?.mid ? String(ev.message.mid) : "";
-
-        const ch = await resolveChannelByInstagramRecipient(recipientId);
-        if (!ch?.tenantId) {
-          logger.warn({ recipientId }, "⚠️ IG webhook: tenant não encontrado para recipientId");
-          continue;
-        }
-
-        const tenantId = String(ch.tenantId);
-        const cfg = asJson(ch.config);
-
-        const instagramBusinessId = safeStr(cfg.instagramBusinessId || recipientId);
-        const pageAccessToken = safeStr(ch.accessToken);
-
-        if (!pageAccessToken) {
-          logger.warn({ tenantId, recipientId }, "⚠️ IG webhook: sem accessToken no ChannelConfig");
-          continue;
-        }
-
-        const botEnabled = await isInstagramBotEnabled(tenantId);
-
-        const peerId = `ig:${senderId}`;
-
-        const convRes = await getOrCreateChannelConversation({
-          tenantId,
-          source: "instagram",
-          channel: "instagram",
-          peerId,
-          title: "Contato Instagram",
-          accountId: instagramBusinessId || null,
-          meta: { instagramBusinessId, recipientId, pageId: ch.pageId || null }
-        });
-
-        if (!convRes?.ok || !convRes?.conversation?.id) {
-          logger.warn({ tenantId, recipientId }, "❌ IG webhook: falha ao criar/achar conversa");
-          continue;
-        }
-
-        const conversation = convRes.conversation;
-        const conversationId = String(conversation.id);
-
-        // inbound
-        await appendMessage(conversationId, {
-          tenantId,
-          source: "instagram",
-          channel: "instagram",
-          from: "client",
-          direction: "in",
-          type: "text",
-          text,
-          createdAt: nowIso(),
-          waMessageId: mid || undefined,
-          payload: ev
-        });
-
-        // se já está em humano/handoff/inbox → não responde bot
-        if (
-          String(conversation?.currentMode || "").toLowerCase() === "human" ||
-          conversation?.handoffActive === true ||
-          conversation?.inboxVisible === true
-        ) {
-          continue;
-        }
-
-        // bot OFF → handoff + promove inbox
-        if (!botEnabled) {
-          try {
-            await igSendText({
-              instagramBusinessId,
-              recipientId: senderId,
-              pageAccessToken,
-              text: HANDOFF_MESSAGE
-            });
-          } catch (e) {
-            logger.error({ err: String(e), tenantId }, "❌ IG webhook: handoff (bot disabled) falhou");
-          }
-
-          await appendMessage(conversationId, {
-            tenantId,
-            source: "instagram",
-            channel: "instagram",
-            from: "bot",
-            isBot: true,
-            direction: "out",
-            type: "text",
-            text: HANDOFF_MESSAGE,
-            handoff: true,
-            createdAt: nowIso(),
-            payload: { kind: "handoff_disabled_bot", instagramBusinessId }
-          });
-
-          continue;
-        }
-
-        // rules: bot vs handoff
-        const accountSettings = { channel: "instagram", tenantId, instagramBusinessId };
-
-        const route = await decideRoute({
-          accountSettings,
-          conversation,
-          messageText: text
-        });
-
-        if (route?.target && route.target !== "bot") {
-          try {
-            await igSendText({
-              instagramBusinessId,
-              recipientId: senderId,
-              pageAccessToken,
-              text: HANDOFF_MESSAGE
-            });
-          } catch (e) {
-            logger.error({ err: String(e), tenantId }, "❌ IG webhook: handoff (route) falhou");
-          }
-
-          await appendMessage(conversationId, {
-            tenantId,
-            source: "instagram",
-            channel: "instagram",
-            from: "bot",
-            isBot: true,
-            direction: "out",
-            type: "text",
-            text: HANDOFF_MESSAGE,
-            handoff: true,
-            createdAt: nowIso(),
-            payload: { kind: "handoff", instagramBusinessId, route }
-          });
-
-          continue;
-        }
-
-        // BOT
-        let botText = "";
-        try {
-          const botReply = await callGenAIBot({
-            accountSettings,
-            conversation: { ...conversation, id: conversationId },
-            messageText: text,
-            history: []
-          });
-          botText = parseBotReplyToText(botReply);
-          if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
-        } catch (e) {
-          logger.error({ err: String(e), tenantId }, "❌ IG webhook: erro botEngine");
-          botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
-        }
-
-        const sendRes = await igSendText({
-          instagramBusinessId,
-          recipientId: senderId,
-          pageAccessToken,
-          text: botText
-        });
-
-        if (!sendRes.ok) {
-          logger.warn(
-            { tenantId, status: sendRes.status, meta: sendRes.json?.error || sendRes.json },
-            "⚠️ IG webhook: falha no envio Graph"
-          );
-        }
-
-        await appendMessage(conversationId, {
-          tenantId,
-          source: "instagram",
-          channel: "instagram",
-          from: "bot",
-          isBot: true,
-          direction: "out",
-          type: "text",
-          text: botText,
-          createdAt: nowIso(),
-          payload: { kind: "bot", sendOk: sendRes.ok, sendStatus: sendRes.status }
-        });
-      }
-    }
-  } catch (e) {
-    logger.error({ err: e }, "❌ IG webhook POST error");
-  }
+app.listen(PORT, () => {
+  logger.info(
+    {
+      PORT,
+      ENV,
+      prismaReady,
+      allowedOrigins: ENV === "production" ? ALLOWED_ORIGINS : "dev:allow-all"
+    },
+    "🚀 API rodando"
+  );
 });
-
-export default router;
