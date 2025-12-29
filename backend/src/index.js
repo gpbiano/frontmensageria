@@ -8,6 +8,7 @@
 // 3) Garante que /br/webchat também esteja em allowNoTenantPaths (tenant resolution não quebra widget)
 // 4) Mantém preflight global antes de qualquer guard
 // 5) ✅ FIX REAL: resolve tenant via header/query APENAS no webchat quando host não define tenant
+// 6) ✅ Captura req.rawBody (Buffer) p/ validar x-hub-signature-256 (Meta IG/Messenger)
 
 import express from "express";
 import cors from "cors";
@@ -166,7 +167,7 @@ const ALLOWED_ORIGINS = buildAllowedOrigins();
 
 const corsConfig = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true); // server-to-server / curl
     if (ENV !== "production") return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error(`CORS blocked: ${origin}`));
@@ -189,16 +190,21 @@ app.use(cors(corsConfig));
 app.options("*", cors(corsConfig));
 
 // ===============================
-// BODY PARSER (rawBody p/ Meta)
+// BODY PARSERS
+// - ✅ JSON com rawBody (Meta Webhooks: x-hub-signature-256)
+// - ⚠️ Não adicione outro express.json() depois disso.
 // ===============================
 app.use(
   express.json({
     limit: "5mb",
+    type: ["application/json", "application/*+json"],
     verify: (req, _res, buf) => {
-      req.rawBody = buf;
+      req.rawBody = buf; // Buffer
     }
   })
 );
+
+app.use(express.urlencoded({ extended: true }));
 
 // ===============================
 // HELPERS
@@ -242,7 +248,6 @@ async function webchatTenantFallback(req, res, next) {
       return next();
     }
 
-    // se não resolveu, mantém erro explícito (igual ao que você já viu)
     return res.status(400).json({ error: "missing_tenant_context" });
   } catch (err) {
     logger.error({ err }, "❌ webchatTenantFallback failed");
@@ -262,9 +267,13 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/auth/password",
   "/auth/password/verify",
   "/auth/password/set",
+
+  // webhooks públicos
   "/webhook/whatsapp",
   "/webhook/messenger",
   "/webhook/instagram",
+
+  // webchat público
   "/webchat",
   "/br/webchat"
 ];
@@ -298,6 +307,7 @@ app.get("/health", async (_req, res) => {
     prismaReady,
     users,
     tenants,
+    tenantBaseDomain: process.env.TENANT_BASE_DOMAIN,
     uptime: process.uptime()
   });
 });
@@ -312,7 +322,9 @@ app.use("/auth", passwordRouter);
 app.use("/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 
-// Webhooks públicos
+// ===============================
+// ✅ Webhooks públicos (NÃO passam por auth)
+// ===============================
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 app.use("/webhook/instagram", instagramWebhookRouter);
