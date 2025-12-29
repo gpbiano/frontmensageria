@@ -21,10 +21,18 @@ const VERIFY_TOKEN = String(
     ""
 ).trim();
 
-// ✅ App Secret do MESMO APP que configurou o Webhook na Meta
-const META_APP_SECRET = String(
+/**
+ * ✅ Assinatura Meta
+ * - Aceita múltiplos secrets: META_APP_SECRET="s1,s2"
+ * - Pode desligar validação (emergência): META_VERIFY_SIGNATURE=false
+ * - Aceita header x-hub-signature-256 e fallback x-hub-signature
+ */
+const META_APP_SECRET_RAW = String(
   process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET || ""
 ).trim();
+
+const META_VERIFY_SIGNATURE =
+  String(process.env.META_VERIFY_SIGNATURE || "true").toLowerCase() !== "false";
 
 const HANDOFF_MESSAGE = String(
   process.env.INSTAGRAM_HANDOFF_MESSAGE ||
@@ -51,13 +59,15 @@ function msgTextFromIGEvent(ev) {
 function isValidIncomingTextEvent(ev) {
   const text = msgTextFromIGEvent(ev);
   if (!text) return false;
+
+  // echo do app (Messenger/IG)
   if (ev?.message?.is_echo === true) return false;
 
   const senderId = safeStr(ev?.sender?.id);
   const recipientId = safeStr(ev?.recipient?.id);
   if (!senderId || !recipientId) return false;
-  if (senderId === recipientId) return false;
 
+  if (senderId === recipientId) return false;
   return true;
 }
 function parseBotReplyToText(botReply) {
@@ -69,38 +79,70 @@ function parseBotReplyToText(botReply) {
 }
 
 // ===============================
-// ✅ Signature validation (Meta)
+// ✅ Signature validation (Meta) — robusto
 // ===============================
-function normalizeSigHeader(sig) {
-  const s = String(sig || "").trim();
-  return s.startsWith("sha256=") ? s.slice("sha256=".length) : s;
+function getSignatureHeader(req) {
+  const s256 = String(req.headers["x-hub-signature-256"] || "").trim();
+  const s1 = String(req.headers["x-hub-signature"] || "").trim();
+  return s256 || s1;
+}
+function normalizeSigHex(sig) {
+  return String(sig || "").trim().replace(/^sha256=/i, "");
+}
+function timingSafeEqualHex(sigHeader, expectedHex) {
+  try {
+    const a = Buffer.from(normalizeSigHex(sigHeader), "hex");
+    const b = Buffer.from(String(expectedHex || ""), "hex");
+    if (!a.length || !b.length) return false;
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+function computeSha256Hex(secret, rawBodyBuf) {
+  return crypto.createHmac("sha256", secret).update(rawBodyBuf).digest("hex");
 }
 
 function validateMetaSignature(req) {
-  const sigHeader = String(req.headers["x-hub-signature-256"] || "").trim();
-
-  // modo dev: sem secret, não bloqueia
-  if (!META_APP_SECRET) return { ok: true, skipped: true, reason: "no_app_secret" };
-
-  if (!sigHeader) return { ok: false, reason: "missing_signature" };
-
-  const raw = req.rawBody; // Buffer setado no express.json verify()
-  if (!raw || !Buffer.isBuffer(raw)) {
-    return { ok: false, reason: "missing_raw_body" };
+  if (!META_VERIFY_SIGNATURE) {
+    return { ok: true, skipped: true, reason: "META_VERIFY_SIGNATURE=false" };
   }
 
-  const expectedHex = crypto.createHmac("sha256", META_APP_SECRET).update(raw).digest("hex");
-  const gotHex = normalizeSigHeader(sigHeader);
+  const sigHeader = getSignatureHeader(req);
 
-  try {
-    const a = Buffer.from(expectedHex, "hex");
-    const b = Buffer.from(gotHex, "hex");
-    if (a.length !== b.length) return { ok: false, reason: "invalid_signature_len" };
-    const ok = crypto.timingSafeEqual(a, b);
-    return ok ? { ok: true } : { ok: false, reason: "invalid_signature" };
-  } catch {
-    return { ok: false, reason: "invalid_signature_parse" };
+  const secrets = META_APP_SECRET_RAW
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const hasSecret = secrets.length > 0;
+  const hasRawBody = !!req.rawBody && Buffer.isBuffer(req.rawBody);
+  const rawLen = hasRawBody ? req.rawBody.length : 0;
+
+  if (!hasSecret) return { ok: true, skipped: true, reason: "no_app_secret", hasSecret, hasRawBody, rawLen };
+  if (!sigHeader) return { ok: false, reason: "missing_signature", hasSecret, hasRawBody, rawLen };
+  if (!hasRawBody) return { ok: false, reason: "missing_raw_body", hasSecret, hasRawBody, rawLen };
+
+  for (const secret of secrets) {
+    const expectedHex = computeSha256Hex(secret, req.rawBody);
+    const ok = timingSafeEqualHex(sigHeader, expectedHex);
+    if (ok) {
+      return { ok: true, hasSecret, hasRawBody, rawLen };
+    }
   }
+
+  // log seguro (prefixos)
+  const expected0 = computeSha256Hex(secrets[0], req.rawBody);
+  return {
+    ok: false,
+    reason: "invalid_signature",
+    hasSecret,
+    hasRawBody,
+    rawLen,
+    sigHeaderPrefix: normalizeSigHex(sigHeader).slice(0, 12),
+    digestPrefix: expected0.slice(0, 12)
+  };
 }
 
 // ===============================
@@ -203,15 +245,7 @@ router.get("/", (req, res) => {
 router.post("/", async (req, res) => {
   const sig = validateMetaSignature(req);
   if (!sig.ok) {
-    logger.warn(
-      {
-        sig,
-        hasSecret: !!META_APP_SECRET,
-        hasRawBody: !!req.rawBody,
-        rawLen: Buffer.isBuffer(req.rawBody) ? req.rawBody.length : 0
-      },
-      "❌ IG webhook assinatura inválida"
-    );
+    logger.warn({ sig }, "❌ IG webhook assinatura inválida");
     return res.sendStatus(403);
   }
 
@@ -256,7 +290,6 @@ router.post("/", async (req, res) => {
         }
 
         const botEnabled = await isInstagramBotEnabled(tenantId);
-
         const peerId = `ig:${senderId}`;
 
         const convRes = await getOrCreateChannelConversation({
