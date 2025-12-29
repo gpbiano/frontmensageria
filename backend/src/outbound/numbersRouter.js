@@ -50,20 +50,20 @@ const MODEL_CANDIDATES = ["outboundNumber", "OutboundNumber", "number", "Number"
 // GET /outbound/numbers
 // ======================================================
 router.get("/", requireAuth, async (req, res) => {
-  const model = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
-
   try {
-    if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
-
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    const items = await model.findMany({
+    const delegate = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
+    if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
+
+    const items = await delegate.findMany({
       where: { tenantId },
       orderBy: modelHasField("OutboundNumber", "createdAt") ? { createdAt: "desc" } : undefined
     });
 
-    return res.json({ ok: true, items });
+    // ✅ Compat: items + numbers
+    return res.json({ ok: true, items, numbers: items, count: items.length });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ numbersRouter GET / failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
@@ -74,13 +74,12 @@ router.get("/", requireAuth, async (req, res) => {
 // POST /outbound/numbers
 // ======================================================
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  const model = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
-
   try {
-    if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
-
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const delegate = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
+    if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
 
     const { phoneE164, label, provider, isActive, metadata } = req.body || {};
     const normalized = normalizeE164(phoneE164);
@@ -96,10 +95,9 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
       provider: provider ? String(provider) : "meta",
       isActive: isActive !== undefined ? !!isActive : true
     };
-
     if (modelHasField("OutboundNumber", "metadata")) data.metadata = metadata ?? undefined;
 
-    const item = await model.create({ data });
+    const item = await delegate.create({ data });
     return res.status(201).json({ ok: true, item });
   } catch (err) {
     const msg = String(err?.message || err);
@@ -119,15 +117,15 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    const model = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
-    if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
+    const delegate = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
+    if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
 
     // tenta achar ChannelConfig pra extrair números
     const CHANNEL_CFG_CANDIDATES = ["channelConfig", "ChannelConfig", "channelsConfig", "ChannelsConfig"];
     const channelCfg = resolveModel(CHANNEL_CFG_CANDIDATES);
 
     if (!channelCfg) {
-      return res.json({ ok: true, synced: 0, items: [], note: "channel_config_model_missing" });
+      return res.json({ ok: true, synced: 0, items: [], numbers: [], note: "channel_config_model_missing" });
     }
 
     const cfgs = await channelCfg.findMany({
@@ -175,48 +173,51 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
       }
     }
 
-    // de-dup por phoneE164
+    // de-dup
     const map = new Map();
     for (const it of extracted) map.set(it.phoneE164, it);
     const unique = Array.from(map.values());
 
+    const canUpsert =
+      delegate === prisma.outboundNumber && typeof prisma.outboundNumber?.upsert === "function";
+
     const upserted = [];
-    const canUpsert = model === prisma.outboundNumber && typeof prisma.outboundNumber?.upsert === "function";
 
     for (const it of unique) {
       const create = {
         tenantId,
-        phoneE164: it.phoneE164, // 🔥 obrigatório
+        phoneE164: it.phoneE164,
         label: it.label ? String(it.label) : null,
         provider: it.provider ? String(it.provider) : "meta",
         isActive: true
       };
       if (modelHasField("OutboundNumber", "metadata") && it.metadata) create.metadata = it.metadata;
 
-      const update = { ...create };
-      delete update.tenantId;
+      const updateData = { ...create };
+      delete updateData.tenantId;
 
       try {
         if (canUpsert) {
-          // ✅ pelo seu log, o único composto existente é esse:
           const row = await prisma.outboundNumber.upsert({
             where: { tenantId_phoneE164: { tenantId, phoneE164: it.phoneE164 } },
             create,
-            update
+            update: updateData
           });
           upserted.push(row);
-        } else if (typeof model.updateMany === "function") {
-          const upd = await model.updateMany({ where: { tenantId, phoneE164: it.phoneE164 }, data: update });
+        } else if (typeof delegate.updateMany === "function") {
+          const upd = await delegate.updateMany({
+            where: { tenantId, phoneE164: it.phoneE164 },
+            data: updateData
+          });
           if (upd?.count > 0) {
-            // busca item atualizado (best effort)
-            const row = await model.findFirst({ where: { tenantId, phoneE164: it.phoneE164 } });
+            const row = await delegate.findFirst({ where: { tenantId, phoneE164: it.phoneE164 } });
             if (row) upserted.push(row);
           } else {
-            const row = await model.create({ data: create });
+            const row = await delegate.create({ data: create });
             upserted.push(row);
           }
         } else {
-          const row = await model.create({ data: create });
+          const row = await delegate.create({ data: create });
           upserted.push(row);
         }
       } catch (e) {
@@ -226,7 +227,8 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
       }
     }
 
-    return res.json({ ok: true, synced: upserted.length, items: upserted });
+    // ✅ Compat: items + numbers
+    return res.json({ ok: true, synced: upserted.length, items: upserted, numbers: upserted });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ numbersRouter POST /sync failed");
     return res.status(500).json({ ok: false, error: "internal_error" });

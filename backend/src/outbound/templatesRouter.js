@@ -44,56 +44,51 @@ function assertPrisma(res, model, candidates) {
 function getMetaEnv() {
   const wabaId = String(process.env.WABA_ID || process.env.WHATSAPP_WABA_ID || "").trim();
   const token = String(process.env.WHATSAPP_TOKEN || process.env.WABA_TOKEN || process.env.META_TOKEN || "").trim();
-
   const apiVersionRaw = String(process.env.META_GRAPH_VERSION || process.env.WHATSAPP_API_VERSION || "v22.0").trim();
   const apiVersion = apiVersionRaw.startsWith("v") ? apiVersionRaw : `v${apiVersionRaw}`;
-
   return { wabaId, token, apiVersion };
 }
 
-// tenta nomes comuns (fallback)
 const MODEL_CANDIDATES = ["outboundTemplate", "OutboundTemplate", "template", "Template"];
 
-/**
- * GET /outbound/templates
- */
+// ======================================================
+// GET /outbound/templates
+// ======================================================
 router.get("/", requireAuth, async (req, res) => {
-  const model = resolveModel(MODEL_CANDIDATES);
-  const modelName = model ? model._model || model.name || "OutboundTemplate" : "OutboundTemplate";
-
   try {
-    if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
-
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    // ✅ se existir prisma.outboundTemplate, usa ele (mais confiável)
-    const delegate = prisma?.outboundTemplate || model;
-    const delegateModelName = prisma?.outboundTemplate ? "OutboundTemplate" : modelName;
+    const delegate = prisma?.outboundTemplate || resolveModel(MODEL_CANDIDATES);
+    if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
 
-    const where = {};
-    if (modelHasField(delegateModelName, "tenantId")) where.tenantId = tenantId;
-    if (modelHasField(delegateModelName, "channel")) where.channel = "whatsapp";
+    const where = { tenantId };
+    // se existir channel no model, filtra whatsapp
+    if (modelHasField("OutboundTemplate", "channel")) where.channel = "whatsapp";
 
     const items = await delegate.findMany({
       where,
-      orderBy: modelHasField(delegateModelName, "updatedAt") ? { updatedAt: "desc" } : undefined
+      orderBy: modelHasField("OutboundTemplate", "updatedAt") ? { updatedAt: "desc" } : undefined
     });
 
-    return res.json({ ok: true, items });
+    // ✅ Compat: items + templates
+    return res.json({ ok: true, items, templates: items, count: items.length });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ templatesRouter GET / failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
-/**
- * POST /outbound/templates/sync
- */
+// ======================================================
+// POST /outbound/templates/sync
+// ======================================================
 router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const delegate = prisma?.outboundTemplate || resolveModel(MODEL_CANDIDATES);
+    if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
 
     const { wabaId, token, apiVersion } = getMetaEnv();
     if (!wabaId || !token) {
@@ -103,9 +98,6 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
         details: "Defina WABA_ID/WHATSAPP_WABA_ID e WHATSAPP_TOKEN (ou WABA_TOKEN/META_TOKEN) no backend."
       });
     }
-
-    const delegate = prisma?.outboundTemplate || resolveModel(MODEL_CANDIDATES);
-    if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
 
     // ✅ Busca Meta (com paginação)
     const all = [];
@@ -130,27 +122,23 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
     for (let i = 0; i < maxPages && nextUrl; i++) {
       const graphRes = await fetch(nextUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
       const graphJson = await graphRes.json().catch(() => ({}));
-
       if (!graphRes.ok) {
         logger.error({ status: graphRes.status, graphJson }, "❌ Meta templates sync failed");
         return res.status(502).json({ ok: false, error: "meta_api_error", details: graphJson });
       }
-
       const pageData = Array.isArray(graphJson?.data) ? graphJson.data : [];
       all.push(...pageData);
-
       const next = graphJson?.paging?.next ? String(graphJson.paging.next) : "";
       nextUrl = next ? new URL(next) : null;
     }
 
     const nowIso = new Date().toISOString();
 
-    // ✅ Persistência sem depender de modelHasField para campos obrigatórios
     let created = 0;
     let updated = 0;
     let skipped = 0;
 
-    const hasUpsertCompound =
+    const canUpsert =
       delegate === prisma.outboundTemplate && typeof prisma.outboundTemplate?.upsert === "function";
 
     for (const tpl of all) {
@@ -161,7 +149,6 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
       }
 
       const statusLower = tpl?.status ? String(tpl.status).toLowerCase() : "draft";
-
       const contentObj = {
         metaTemplateId: tpl?.id || null,
         category: tpl?.category || null,
@@ -173,43 +160,48 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
         qualityScore: tpl?.quality_score || null
       };
 
-      // 🔥 CAMPOS OBRIGATÓRIOS (sempre)
-      const create = {
-        tenantId,
-        channel: "whatsapp",
-        name
-      };
+      // 🔥 Campos base (sempre)
+      const create = { tenantId, channel: "whatsapp", name };
+      const updateData = { channel: "whatsapp" };
 
-      // campos opcionais (se existirem no schema)
-      if (modelHasField("OutboundTemplate", "language")) create.language = tpl?.language ? String(tpl.language) : null;
-      if (modelHasField("OutboundTemplate", "status")) create.status = statusLower;
-      if (modelHasField("OutboundTemplate", "content")) create.content = contentObj;
-      if (modelHasField("OutboundTemplate", "metadata")) create.metadata = { raw: tpl, syncedAt: nowIso };
-
-      const update = { ...create }; // mantém idempotente
-      delete update.tenantId; // geralmente não se atualiza tenantId
+      if (modelHasField("OutboundTemplate", "language")) {
+        const lang = tpl?.language ? String(tpl.language) : null;
+        create.language = lang;
+        updateData.language = lang;
+      }
+      if (modelHasField("OutboundTemplate", "status")) {
+        create.status = statusLower;
+        updateData.status = statusLower;
+      }
+      if (modelHasField("OutboundTemplate", "content")) {
+        create.content = contentObj;
+        updateData.content = contentObj;
+      }
+      if (modelHasField("OutboundTemplate", "metadata")) {
+        const md = { raw: tpl, syncedAt: nowIso };
+        create.metadata = md;
+        updateData.metadata = md;
+      }
 
       try {
-        if (hasUpsertCompound) {
+        if (canUpsert) {
           await prisma.outboundTemplate.upsert({
             where: { tenantId_channel_name: { tenantId, channel: "whatsapp", name } },
             create,
-            update
+            update: updateData
           });
           updated++;
         } else if (typeof delegate.updateMany === "function") {
           const upd = await delegate.updateMany({
             where: { tenantId, channel: "whatsapp", name },
-            data: update
+            data: updateData
           });
-          if (upd?.count > 0) {
-            updated++;
-          } else {
+          if (upd?.count > 0) updated++;
+          else {
             await delegate.create({ data: create });
             created++;
           }
         } else {
-          // fallback simples
           await delegate.create({ data: create });
           created++;
         }
@@ -225,19 +217,21 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
     }
 
     // retorna lista atual
-    const items = await (prisma?.outboundTemplate || delegate).findMany({
+    const items = await delegate.findMany({
       where: { tenantId, ...(modelHasField("OutboundTemplate", "channel") ? { channel: "whatsapp" } : {}) },
       orderBy: modelHasField("OutboundTemplate", "updatedAt") ? { updatedAt: "desc" } : undefined
     });
 
+    // ✅ Compat: items + templates
     return res.json({
       ok: true,
       fetched: all.length,
       created,
       updated,
       skipped,
-      count: items.length,
-      items
+      items,
+      templates: items,
+      count: items.length
     });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ templatesRouter POST /sync failed");
