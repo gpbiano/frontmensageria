@@ -2,9 +2,8 @@
 
 /**
  * Rules Engine (in-memory)
- * - Cada "account" tem settings do bot.
- * - Routers passam accountSettings como CONTEXTO (tenantId/channel/etc).
- *   Então: só considera overrides se vier em accountSettings.chatbot (ou accountSettings.settings).
+ * - Cada "account" (ex.: tenantId) tem settings do bot
+ * - Se não existir settings para o account, ele herda o DEFAULT (inclusive keywords)
  */
 
 const accounts = {
@@ -34,14 +33,23 @@ function safeArr(v) {
   return Array.isArray(v) ? v : [];
 }
 
+function cloneDefault() {
+  const d = accounts.default || {};
+  return {
+    enabled: d.enabled !== false,
+    maxBotAttempts: Number.isFinite(Number(d.maxBotAttempts)) ? Number(d.maxBotAttempts) : 3,
+    transferKeywords: safeArr(d.transferKeywords).map((k) => safeStr(k))
+  };
+}
+
+/**
+ * ✅ IMPORTANTE: quando criar um account novo (tenantId), ele HERDA o default
+ * senão keywords ficam vazias e nunca transfere.
+ */
 function ensureAccount(accountId = "default") {
   const id = safeStr(accountId, "default") || "default";
   if (!accounts[id]) {
-    accounts[id] = {
-      enabled: true,
-      maxBotAttempts: 3,
-      transferKeywords: []
-    };
+    accounts[id] = cloneDefault();
   }
   return accounts[id];
 }
@@ -64,9 +72,6 @@ function normalizeAccountSettings(s) {
   };
 }
 
-/**
- * ✅ Export esperado pelo chatbotRouter.js
- */
 export function getChatbotSettingsForAccount(accountId = "default") {
   const id = safeStr(accountId, "default") || "default";
   const base = ensureAccount(id);
@@ -78,22 +83,21 @@ export function getChatbotSettingsForAccount(accountId = "default") {
 /**
  * Decide rota BOT vs HUMANO
  *
- * IMPORTANTE:
- * - accountSettings aqui é CONTEXTO (tenantId/channel/instagramBusinessId...)
- * - settings (enabled/maxBotAttempts/transferKeywords) vêm de:
- *    1) getChatbotSettingsForAccount(accountId)
- *    2) override opcional em accountSettings.chatbot (ou accountSettings.settings)
+ * accountSettings é CONTEXTO (tenantId/channel/instagramBusinessId...)
+ * settings reais vêm do getChatbotSettingsForAccount(accountId)
+ *
+ * Override opcional: accountSettings.chatbot (ou accountSettings.settings)
  */
 export function decideRoute({ accountSettings, conversation, messageText } = {}) {
   const accId =
     safeStr(accountSettings?.accountId) ||
     safeStr(accountSettings?.id) ||
-    safeStr(accountSettings?.tenantId) || // ✅ teu caso atual
+    safeStr(accountSettings?.tenantId) ||
     "default";
 
+  // ✅ agora herda keywords do default ao criar tenant novo
   const baseSettings = normalizeAccountSettings(getChatbotSettingsForAccount(accId));
 
-  // override opcional (se um dia quiser custom por tenant/channel sem mexer nos routers)
   const overrideRaw =
     accountSettings?.chatbot && typeof accountSettings.chatbot === "object"
       ? accountSettings.chatbot
@@ -103,7 +107,6 @@ export function decideRoute({ accountSettings, conversation, messageText } = {})
 
   const overrideSettings = overrideRaw ? normalizeAccountSettings(overrideRaw) : null;
 
-  // merge: base + override (override só sobrescreve se vier definido)
   const settings = overrideSettings
     ? {
         enabled:
@@ -113,7 +116,7 @@ export function decideRoute({ accountSettings, conversation, messageText } = {})
             ? overrideSettings.maxBotAttempts
             : baseSettings.maxBotAttempts,
         transferKeywords:
-          Array.isArray(overrideRaw.transferKeywords) && overrideSettings.transferKeywords.length
+          Array.isArray(overrideRaw.transferKeywords)
             ? overrideSettings.transferKeywords
             : baseSettings.transferKeywords
       }
@@ -122,6 +125,12 @@ export function decideRoute({ accountSettings, conversation, messageText } = {})
   const conv = conversation && typeof conversation === "object" ? conversation : {};
   const text = safeStr(messageText, "");
   const lower = text.toLowerCase();
+
+  // 🔎 debug opcional (ativa setando DEBUG_RULES_ENGINE=true no env)
+  if (String(process.env.DEBUG_RULES_ENGINE || "").toLowerCase() === "true") {
+    // eslint-disable-next-line no-console
+    console.log("[rulesEngine] accId=", accId, "text=", lower, "keywords=", settings.transferKeywords);
+  }
 
   if (!settings.enabled) {
     return { target: "human", reason: "chatbot_disabled" };
