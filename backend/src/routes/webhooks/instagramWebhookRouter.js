@@ -112,7 +112,6 @@ function validateMetaSignature(req) {
     }
   }
 
-  // debug leve (não vaza secret)
   const expectedPreview = hmacSha256Hex(META_APP_SECRETS[0], raw).slice(0, 16);
   const gotPreview = String(gotHex || "").slice(0, 16);
 
@@ -124,7 +123,6 @@ function validateMetaSignature(req) {
 }
 
 function parseIncomingBody(req) {
-  // Com express.raw, req.body é Buffer
   if (Buffer.isBuffer(req.body)) {
     const txt = req.body.toString("utf8");
     if (!txt) return {};
@@ -139,7 +137,7 @@ function parseIncomingBody(req) {
 }
 
 // ===============================
-// Graph send
+// Graph send (Instagram)
 // ===============================
 async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, text }) {
   if (!instagramBusinessId) throw new Error("instagramBusinessId ausente");
@@ -151,12 +149,17 @@ async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, t
 
   const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
     instagramBusinessId
-  )}/messages?access_token=${encodeURIComponent(pageAccessToken)}`;
+  )}/messages`;
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${pageAccessToken}`
+    },
     body: JSON.stringify({
+      // ✅ IMPORTANTE: em vários cenários o IG exige isso
+      messaging_product: "instagram",
       recipient: { id: String(recipientId) },
       message: { text: body }
     })
@@ -236,7 +239,6 @@ router.get("/", (req, res) => {
 // POST /webhook/instagram (events)
 // ======================================================
 router.post("/", async (req, res) => {
-  // valida assinatura em cima do Buffer exato
   const sig = validateMetaSignature(req);
   if (!sig.ok) {
     logger.warn(
@@ -276,8 +278,15 @@ router.post("/", async (req, res) => {
         const cfg = asJson(ch.config);
 
         const instagramBusinessId = safeStr(cfg.instagramBusinessId || recipientId);
+
         const pageAccessToken = safeStr(ch.accessToken);
-        if (!pageAccessToken) continue;
+        if (!pageAccessToken) {
+          logger.warn(
+            { tenantId, recipientId, instagramBusinessId, pageId: ch.pageId },
+            "⚠️ IG sem accessToken no ChannelConfig (não dá pra responder)"
+          );
+          continue;
+        }
 
         const botEnabled = await isInstagramBotEnabled(tenantId);
         const peerId = `ig:${senderId}`;
@@ -310,6 +319,7 @@ router.post("/", async (req, res) => {
           payload: ev
         });
 
+        // se já entrou em humano/handoff, não responde bot
         if (
           String(conversation?.currentMode || "").toLowerCase() === "human" ||
           conversation?.handoffActive === true ||
@@ -318,15 +328,54 @@ router.post("/", async (req, res) => {
           continue;
         }
 
+        // helper local pra enviar + logar erros
+        const sendAndLog = async ({ kind, outText }) => {
+          const sendRes = await igSendText({
+            instagramBusinessId,
+            recipientId: senderId,
+            pageAccessToken,
+            text: outText
+          });
+
+          const errObj = sendRes?.json?.error || null;
+
+          if (!sendRes.ok) {
+            logger.warn(
+              {
+                kind,
+                tenantId,
+                senderId,
+                recipientId,
+                instagramBusinessId,
+                pageId: ch.pageId || null,
+                status: sendRes.status,
+                error: errObj || sendRes.json
+              },
+              "❌ IG send falhou"
+            );
+          } else {
+            logger.info(
+              {
+                kind,
+                tenantId,
+                senderId,
+                instagramBusinessId,
+                status: sendRes.status
+              },
+              "✅ IG send ok"
+            );
+          }
+
+          return {
+            ok: !!sendRes.ok,
+            status: sendRes.status,
+            error: errObj || (!sendRes.ok ? sendRes.json : null)
+          };
+        };
+
+        // BOT DESABILITADO => handoff message
         if (!botEnabled) {
-          try {
-            await igSendText({
-              instagramBusinessId,
-              recipientId: senderId,
-              pageAccessToken,
-              text: HANDOFF_MESSAGE
-            });
-          } catch {}
+          const sendMeta = await sendAndLog({ kind: "handoff_disabled_bot", outText: HANDOFF_MESSAGE });
 
           await appendMessage(conversationId, {
             tenantId,
@@ -339,7 +388,13 @@ router.post("/", async (req, res) => {
             text: HANDOFF_MESSAGE,
             handoff: true,
             createdAt: nowIso(),
-            payload: { kind: "handoff_disabled_bot", instagramBusinessId }
+            payload: {
+              kind: "handoff_disabled_bot",
+              instagramBusinessId,
+              sendOk: sendMeta.ok,
+              sendStatus: sendMeta.status,
+              sendError: sendMeta.error
+            }
           });
 
           continue;
@@ -353,15 +408,9 @@ router.post("/", async (req, res) => {
           messageText: text
         });
 
+        // ROUTE => HUMAN (handoff)
         if (route?.target && route.target !== "bot") {
-          try {
-            await igSendText({
-              instagramBusinessId,
-              recipientId: senderId,
-              pageAccessToken,
-              text: HANDOFF_MESSAGE
-            });
-          } catch {}
+          const sendMeta = await sendAndLog({ kind: "handoff", outText: HANDOFF_MESSAGE });
 
           await appendMessage(conversationId, {
             tenantId,
@@ -374,12 +423,20 @@ router.post("/", async (req, res) => {
             text: HANDOFF_MESSAGE,
             handoff: true,
             createdAt: nowIso(),
-            payload: { kind: "handoff", instagramBusinessId, route }
+            payload: {
+              kind: "handoff",
+              instagramBusinessId,
+              route,
+              sendOk: sendMeta.ok,
+              sendStatus: sendMeta.status,
+              sendError: sendMeta.error
+            }
           });
 
           continue;
         }
 
+        // ROUTE => BOT (GenAI)
         let botText = "";
         try {
           const botReply = await callGenAIBot({
@@ -391,16 +448,12 @@ router.post("/", async (req, res) => {
 
           botText = parseBotReplyToText(botReply);
           if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
-        } catch {
+        } catch (e) {
+          logger.warn({ err: String(e), tenantId, instagramBusinessId }, "⚠️ callGenAIBot falhou");
           botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
         }
 
-        const sendRes = await igSendText({
-          instagramBusinessId,
-          recipientId: senderId,
-          pageAccessToken,
-          text: botText
-        });
+        const sendMeta = await sendAndLog({ kind: "bot", outText: botText });
 
         await appendMessage(conversationId, {
           tenantId,
@@ -412,7 +465,12 @@ router.post("/", async (req, res) => {
           type: "text",
           text: botText,
           createdAt: nowIso(),
-          payload: { kind: "bot", sendOk: sendRes.ok, sendStatus: sendRes.status }
+          payload: {
+            kind: "bot",
+            sendOk: sendMeta.ok,
+            sendStatus: sendMeta.status,
+            sendError: sendMeta.error
+          }
         });
       }
     }
