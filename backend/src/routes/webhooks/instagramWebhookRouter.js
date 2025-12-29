@@ -21,12 +21,8 @@ const VERIFY_TOKEN = String(
     ""
 ).trim();
 
-/**
- * ✅ Assinatura Meta
- * - Aceita múltiplos secrets: META_APP_SECRET="s1,s2"
- * - Pode desligar validação (emergência): META_VERIFY_SIGNATURE=false
- * - Aceita header x-hub-signature-256 e fallback x-hub-signature
- */
+// ✅ App Secret do MESMO APP que configurou o Webhook na Meta
+// (suporta múltiplos: "s1,s2")
 const META_APP_SECRET_RAW = String(
   process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET || ""
 ).trim();
@@ -59,14 +55,11 @@ function msgTextFromIGEvent(ev) {
 function isValidIncomingTextEvent(ev) {
   const text = msgTextFromIGEvent(ev);
   if (!text) return false;
-
-  // echo do app (Messenger/IG)
   if (ev?.message?.is_echo === true) return false;
 
   const senderId = safeStr(ev?.sender?.id);
   const recipientId = safeStr(ev?.recipient?.id);
   if (!senderId || !recipientId) return false;
-
   if (senderId === recipientId) return false;
   return true;
 }
@@ -79,7 +72,7 @@ function parseBotReplyToText(botReply) {
 }
 
 // ===============================
-// ✅ Signature validation (Meta) — robusto
+// ✅ Signature validation (Meta) — usando RAW (Buffer)
 // ===============================
 function getSignatureHeader(req) {
   const s256 = String(req.headers["x-hub-signature-256"] || "").trim();
@@ -89,10 +82,13 @@ function getSignatureHeader(req) {
 function normalizeSigHex(sig) {
   return String(sig || "").trim().replace(/^sha256=/i, "");
 }
-function timingSafeEqualHex(sigHeader, expectedHex) {
+function computeSha256Hex(secret, rawBodyBuf) {
+  return crypto.createHmac("sha256", secret).update(rawBodyBuf).digest("hex");
+}
+function timingSafeEqualHex(aHex, bHex) {
   try {
-    const a = Buffer.from(normalizeSigHex(sigHeader), "hex");
-    const b = Buffer.from(String(expectedHex || ""), "hex");
+    const a = Buffer.from(String(aHex || ""), "hex");
+    const b = Buffer.from(String(bHex || ""), "hex");
     if (!a.length || !b.length) return false;
     if (a.length !== b.length) return false;
     return crypto.timingSafeEqual(a, b);
@@ -100,47 +96,38 @@ function timingSafeEqualHex(sigHeader, expectedHex) {
     return false;
   }
 }
-function computeSha256Hex(secret, rawBodyBuf) {
-  return crypto.createHmac("sha256", secret).update(rawBodyBuf).digest("hex");
-}
 
-function validateMetaSignature(req) {
-  if (!META_VERIFY_SIGNATURE) {
-    return { ok: true, skipped: true, reason: "META_VERIFY_SIGNATURE=false" };
-  }
+function validateMetaSignatureRaw(req) {
+  if (!META_VERIFY_SIGNATURE) return { ok: true, skipped: true, reason: "META_VERIFY_SIGNATURE=false" };
 
   const sigHeader = getSignatureHeader(req);
-
-  const secrets = META_APP_SECRET_RAW
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const secrets = META_APP_SECRET_RAW.split(",").map((s) => s.trim()).filter(Boolean);
 
   const hasSecret = secrets.length > 0;
-  const hasRawBody = !!req.rawBody && Buffer.isBuffer(req.rawBody);
-  const rawLen = hasRawBody ? req.rawBody.length : 0;
+  const raw = req.body; // ✅ aqui é Buffer (porque no index usamos express.raw)
+  const hasRawBody = Buffer.isBuffer(raw);
+  const rawLen = hasRawBody ? raw.length : 0;
 
   if (!hasSecret) return { ok: true, skipped: true, reason: "no_app_secret", hasSecret, hasRawBody, rawLen };
   if (!sigHeader) return { ok: false, reason: "missing_signature", hasSecret, hasRawBody, rawLen };
   if (!hasRawBody) return { ok: false, reason: "missing_raw_body", hasSecret, hasRawBody, rawLen };
 
+  const gotHex = normalizeSigHex(sigHeader);
+
   for (const secret of secrets) {
-    const expectedHex = computeSha256Hex(secret, req.rawBody);
-    const ok = timingSafeEqualHex(sigHeader, expectedHex);
-    if (ok) {
-      return { ok: true, hasSecret, hasRawBody, rawLen };
-    }
+    const expectedHex = computeSha256Hex(secret, raw);
+    if (timingSafeEqualHex(gotHex, expectedHex)) return { ok: true, hasSecret, hasRawBody, rawLen };
   }
 
-  // log seguro (prefixos)
-  const expected0 = computeSha256Hex(secrets[0], req.rawBody);
+  // debug seguro
+  const expected0 = computeSha256Hex(secrets[0], raw);
   return {
     ok: false,
     reason: "invalid_signature",
     hasSecret,
     hasRawBody,
     rawLen,
-    sigHeaderPrefix: normalizeSigHex(sigHeader).slice(0, 12),
+    sigPrefix: gotHex.slice(0, 12),
     digestPrefix: expected0.slice(0, 12)
   };
 }
@@ -175,7 +162,6 @@ async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, t
   } catch {
     json = { raw: rawText };
   }
-
   return { ok: resp.ok, status: resp.status, json };
 }
 
@@ -240,10 +226,10 @@ router.get("/", (req, res) => {
 });
 
 // ======================================================
-// POST /webhook/instagram (events)
+// POST /webhook/instagram (events) — RAW + JSON manual
 // ======================================================
 router.post("/", async (req, res) => {
-  const sig = validateMetaSignature(req);
+  const sig = validateMetaSignatureRaw(req);
   if (!sig.ok) {
     logger.warn({ sig }, "❌ IG webhook assinatura inválida");
     return res.sendStatus(403);
@@ -252,8 +238,15 @@ router.post("/", async (req, res) => {
   // Meta quer 200 rápido
   res.sendStatus(200);
 
+  let body = {};
   try {
-    const body = req.body || {};
+    body = req.body && Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString("utf8")) : {};
+  } catch (e) {
+    logger.error({ err: String(e), rawLen: Buffer.isBuffer(req.body) ? req.body.length : 0 }, "❌ IG webhook JSON parse failed");
+    return;
+  }
+
+  try {
     const entries = Array.isArray(body.entry) ? body.entry : [];
 
     logger.info(
@@ -290,6 +283,7 @@ router.post("/", async (req, res) => {
         }
 
         const botEnabled = await isInstagramBotEnabled(tenantId);
+
         const peerId = `ig:${senderId}`;
 
         const convRes = await getOrCreateChannelConversation({
