@@ -36,6 +36,11 @@ async function getFetch() {
   return mod.default;
 }
 
+function safeStr(v, fallback = "") {
+  const s = typeof v === "string" ? v : v == null ? "" : String(v);
+  return s.trim() || fallback;
+}
+
 function onlyDigits(v) {
   return String(v || "").replace(/\D/g, "");
 }
@@ -241,6 +246,110 @@ async function sendWhatsAppText({ tenantId, to, body, timeoutMs = 12000 }) {
 }
 
 // ======================================================
+// ✅ BEST-EFFORT: Perfil WhatsApp (nome/foto) + cache
+// - Nome principal vem do webhook contacts[].profile.name
+// - Foto: tentamos Graph endpoint (pode falhar dependendo de permissões)
+// ======================================================
+const waProfileCache = new Map(); // key: waId -> { ts, displayName, avatarUrl }
+const WA_PROFILE_TTL_MS = 1000 * 60 * 60 * 6; // 6h
+
+function cacheGetWa(waId) {
+  const v = waProfileCache.get(waId);
+  if (!v) return null;
+  if (Date.now() - v.ts > WA_PROFILE_TTL_MS) {
+    waProfileCache.delete(waId);
+    return null;
+  }
+  return v;
+}
+function cacheSetWa(waId, data) {
+  waProfileCache.set(waId, { ts: Date.now(), ...data });
+}
+
+/**
+ * ⚠️ WhatsApp Cloud API: foto nem sempre é retornável.
+ * Tentamos um endpoint "tolerante" e, se falhar, segue.
+ */
+async function fetchWhatsAppProfile({ tenantId, waId }) {
+  try {
+    const cached = cacheGetWa(waId);
+    if (cached) return cached;
+
+    const wa = await getWaConfigForTenant(tenantId);
+    if (!wa.ok || !wa.token) return null;
+
+    const fetchFn = await getFetch();
+
+    // Tentativa 1: pegar "name,profile_pic" (pode retornar erro dependendo do seu app/perms)
+    const url = `https://graph.facebook.com/${wa.apiVersion}/${encodeURIComponent(
+      waId
+    )}?fields=name,profile_pic`;
+
+    const resp = await fetchFn(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${wa.token}` }
+    });
+
+    const raw = await resp.text().catch(() => "");
+    let json = {};
+    try {
+      json = raw ? JSON.parse(raw) : {};
+    } catch {
+      json = {};
+    }
+
+    if (!resp.ok) {
+      logger.warn(
+        { tenantId, waId, status: resp.status, error: json?.error || json },
+        "⚠️ WA profile fetch falhou (normal em alguns tenants/perms)"
+      );
+      return null;
+    }
+
+    const displayName = safeStr(json?.name);
+    const avatarUrl = safeStr(json?.profile_pic);
+
+    const data = { displayName, avatarUrl };
+    cacheSetWa(waId, data);
+    return data;
+  } catch (e) {
+    logger.warn({ tenantId, waId, err: String(e) }, "⚠️ WA profile fetch exception");
+    return null;
+  }
+}
+
+/**
+ * Atualiza título/meta da conversation quando achar nome/foto melhores
+ */
+async function upsertConversationIdentity({ conversationId, title, avatarUrl, metaExtra = {} }) {
+  try {
+    if (!conversationId) return;
+
+    const data = {};
+    if (title) data.title = title;
+
+    if (avatarUrl || (metaExtra && Object.keys(metaExtra).length)) {
+      data.meta = {
+        ...(metaExtra || {}),
+        ...(avatarUrl ? { avatarUrl } : {})
+      };
+    }
+
+    if (!Object.keys(data).length) return;
+
+    await prisma.conversation.update({
+      where: { id: String(conversationId) },
+      data: {
+        ...data,
+        updatedAt: new Date()
+      }
+    });
+  } catch (e) {
+    logger.warn({ err: String(e), conversationId }, "⚠️ WA: falha ao salvar identity na conversation");
+  }
+}
+
+// ======================================================
 // GET /webhook/whatsapp (verificação Meta)
 // ======================================================
 router.get("/", (req, res) => {
@@ -373,22 +482,57 @@ router.post("/", async (req, res, next) => {
       const contactMatch =
         contacts.find((c) => String(c?.wa_id) === String(waId)) || contacts[0] || null;
 
-      const profileName = contactMatch?.profile?.name || null;
+      // ✅ Nome via webhook (mais confiável)
+      const webhookName = safeStr(contactMatch?.profile?.name || "", "");
+
+      // ✅ Tentativa best-effort de buscar foto/nome (pode falhar)
+      const waProfile = await fetchWhatsAppProfile({ tenantId, waId });
+      const displayName = safeStr(webhookName || waProfile?.displayName || "", "");
+      const avatarUrl = safeStr(waProfile?.avatarUrl || "", "");
+
+      const title = displayName || `wa:${waId}`;
 
       // ✅ Prisma-first: create/reuse conversation OPEN do mesmo contact/channel
       const r = await getOrCreateChannelConversation({
         tenantId,
         source: "whatsapp",
         peerId: `wa:${waId}`,
-        title: profileName || waId,
+        title,
         waId,
         phone: waId,
-        currentMode: "bot"
+        currentMode: "bot",
+        meta: {
+          waId,
+          phone: waId,
+          ...(displayName ? { displayName } : {}),
+          ...(avatarUrl ? { avatarUrl } : {})
+        }
       });
 
       if (!r?.ok) continue;
 
       const conv = r.conversation;
+
+      // ✅ Atualiza identidade se estava genérico e agora achou nome/foto
+      const convTitle = safeStr(conv?.title);
+      const isGenericTitle =
+        !convTitle ||
+        convTitle === `wa:${waId}` ||
+        convTitle === waId ||
+        convTitle === onlyDigits(waId);
+
+      if ((isGenericTitle && displayName) || avatarUrl) {
+        await upsertConversationIdentity({
+          conversationId: conv.id,
+          title: displayName || undefined,
+          avatarUrl: avatarUrl || undefined,
+          metaExtra: {
+            waId,
+            phone: waId,
+            ...(displayName ? { displayName } : {})
+          }
+        });
+      }
 
       const tsIso = msg.timestamp
         ? new Date(Number(msg.timestamp) * 1000).toISOString()

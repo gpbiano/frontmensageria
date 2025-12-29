@@ -217,11 +217,9 @@ async function igSendText({ instagramBusinessId, recipientId, accessToken, text 
     return { ok: resp.ok, status: resp.status, json, url };
   };
 
-  // 1) endpoint estilo Meta Assistant
   const r1 = await tryPost(`https://graph.instagram.com/${META_GRAPH_VERSION}/me/messages`);
   if (r1.ok) return r1;
 
-  // 2) fallback tradicional
   if (instagramBusinessId) {
     return tryPost(
       `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(instagramBusinessId)}/messages`
@@ -264,7 +262,7 @@ async function isInstagramBotEnabled(tenantId) {
       select: { config: true }
     });
     const cfg = row?.config && typeof row.config === "object" ? row.config : {};
-    return cfg.botEnabled !== false; // default TRUE
+    return cfg.botEnabled !== false;
   } catch {
     return true;
   }
@@ -282,7 +280,7 @@ function pickInstagramAccessToken(channelRow) {
 }
 
 /**
- * ✅ ESSENCIAL: trava a conversa em modo humano depois que o handoff foi enviado com sucesso.
+ * ✅ trava a conversa em modo humano depois que o handoff foi enviado com sucesso.
  */
 async function activateHandoff(conversationId) {
   try {
@@ -297,6 +295,89 @@ async function activateHandoff(conversationId) {
     });
   } catch (e) {
     logger.warn({ err: String(e), conversationId }, "⚠️ IG: falha ao ativar handoff no DB");
+  }
+}
+
+// ===============================
+// ✅ Profile fetch (Instagram) + cache
+// ===============================
+const igProfileCache = new Map(); // senderId -> { ts, name, avatarUrl, username }
+const IG_PROFILE_TTL_MS = 1000 * 60 * 60 * 6;
+
+function cacheGetIg(senderId) {
+  const v = igProfileCache.get(senderId);
+  if (!v) return null;
+  if (Date.now() - v.ts > IG_PROFILE_TTL_MS) {
+    igProfileCache.delete(senderId);
+    return null;
+  }
+  return v;
+}
+function cacheSetIg(senderId, data) {
+  igProfileCache.set(senderId, { ts: Date.now(), ...data });
+}
+
+async function fetchInstagramProfile({ accessToken, senderId }) {
+  try {
+    if (!accessToken || !senderId) return null;
+
+    const cached = cacheGetIg(senderId);
+    if (cached) return cached;
+
+    const token = sanitizeAccessToken(accessToken);
+    if (!token) return null;
+
+    // ⚠️ IG pode restringir fields. Tentamos um set “amigável” e se falhar, retorna null.
+    const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
+      senderId
+    )}?fields=name,username,profile_pic&access_token=${encodeURIComponent(token)}`;
+
+    const resp = await fetch(url);
+    const json = await resp.json().catch(() => ({}));
+
+    if (!resp.ok) {
+      logger.warn({ senderId, status: resp.status, error: json?.error || json }, "⚠️ IG profile fetch falhou");
+      return null;
+    }
+
+    const username = safeStr(json?.username);
+    const name = safeStr(json?.name || username, "Contato Instagram");
+    const avatarUrl = safeStr(json?.profile_pic);
+
+    const data = { name, avatarUrl, username };
+    cacheSetIg(senderId, data);
+    return data;
+  } catch (e) {
+    logger.warn({ err: String(e), senderId }, "⚠️ IG profile fetch exception");
+    return null;
+  }
+}
+
+async function upsertConversationIdentity({ conversationId, title, avatarUrl, metaExtra = {} }) {
+  try {
+    if (!conversationId) return;
+
+    const data = {};
+    if (title) data.title = title;
+
+    if (avatarUrl || (metaExtra && Object.keys(metaExtra).length)) {
+      data.meta = {
+        ...(metaExtra || {}),
+        ...(avatarUrl ? { avatarUrl } : {})
+      };
+    }
+
+    if (!Object.keys(data).length) return;
+
+    await prisma.conversation.update({
+      where: { id: String(conversationId) },
+      data: {
+        ...data,
+        updatedAt: new Date()
+      }
+    });
+  } catch (e) {
+    logger.warn({ err: String(e), conversationId }, "⚠️ IG: falha ao salvar identity na conversation");
   }
 }
 
@@ -384,20 +465,54 @@ router.post("/", async (req, res) => {
         const botEnabled = await isInstagramBotEnabled(tenantId);
         const peerId = `ig:${senderId}`;
 
+        // ✅ nome + avatar (best-effort)
+        const prof = await fetchInstagramProfile({ accessToken, senderId });
+        const displayName = safeStr(prof?.name, "Contato Instagram");
+        const avatarUrl = safeStr(prof?.avatarUrl);
+        const username = safeStr(prof?.username);
+
         const convRes = await getOrCreateChannelConversation({
           tenantId,
           source: "instagram",
           channel: "instagram",
           peerId,
-          title: "Contato Instagram",
+          title: displayName || "Contato Instagram",
           accountId: instagramBusinessId || null,
-          meta: { instagramBusinessId, recipientId, pageId: ch.pageId || null }
+          meta: {
+            instagramBusinessId,
+            recipientId,
+            pageId: ch.pageId || null,
+            senderId,
+            ...(username ? { username } : {}),
+            ...(avatarUrl ? { avatarUrl } : {})
+          }
         });
 
         if (!convRes?.ok || !convRes?.conversation?.id) continue;
 
         const conversation = convRes.conversation;
         const conversationId = String(conversation.id);
+
+        // ✅ se título é genérico, atualiza
+        const isGenericTitle =
+          !safeStr(conversation?.title) ||
+          ["contato", "contato instagram"].includes(safeStr(conversation?.title).toLowerCase());
+
+        if (isGenericTitle || avatarUrl || username) {
+          await upsertConversationIdentity({
+            conversationId,
+            title: displayName && !["contato", "contato instagram"].includes(displayName.toLowerCase())
+              ? displayName
+              : undefined,
+            avatarUrl,
+            metaExtra: {
+              senderId,
+              recipientId,
+              instagramBusinessId,
+              ...(username ? { username } : {})
+            }
+          });
+        }
 
         await appendMessage(conversationId, {
           tenantId,
@@ -435,8 +550,6 @@ router.post("/", async (req, res) => {
             sendRes = { ok: false, status: 0, json: { error: String(e) }, url: "exception" };
           }
 
-          const err = sendRes?.json?.error || null;
-
           if (!sendRes.ok) {
             logger.warn(
               {
@@ -448,21 +561,14 @@ router.post("/", async (req, res) => {
                 pageId: ch.pageId || null,
                 status: sendRes.status,
                 sendUrl: sendRes.url,
-                error: err || sendRes.json,
+                error: sendRes?.json?.error || sendRes.json,
                 ...extra
               },
               "❌ IG send falhou"
             );
           } else {
             logger.info(
-              {
-                kind,
-                tenantId,
-                senderId,
-                instagramBusinessId,
-                status: sendRes.status,
-                sendUrl: sendRes.url
-              },
+              { kind, tenantId, senderId, instagramBusinessId, status: sendRes.status, sendUrl: sendRes.url },
               "✅ IG send ok"
             );
           }
@@ -472,25 +578,8 @@ router.post("/", async (req, res) => {
 
         // BOT DESLIGADO → HANDOFF
         if (!botEnabled) {
-          const sendRes = await sendAndLog({
-            kind: "handoff_disabled_bot",
-            outText: HANDOFF_MESSAGE
-          });
-
-          if (!sendRes.ok) {
-            await appendMessage(conversationId, {
-              tenantId,
-              source: "instagram",
-              channel: "instagram",
-              from: "system",
-              direction: "out",
-              type: "text",
-              text: "[IG] Falha ao enviar mensagem (token inválido/expirado).",
-              createdAt: nowIso(),
-              payload: { kind: "handoff_send_failed", send: sendRes }
-            });
-            continue;
-          }
+          const sendRes = await sendAndLog({ kind: "handoff_disabled_bot", outText: HANDOFF_MESSAGE });
+          if (!sendRes.ok) continue;
 
           await activateHandoff(conversationId);
 
@@ -513,39 +602,14 @@ router.post("/", async (req, res) => {
 
         const accountSettings = { channel: "instagram", tenantId, instagramBusinessId };
 
-        const route = decideRoute({
-          accountSettings,
-          conversation,
-          messageText: text
-        });
+        const route = await decideRoute({ accountSettings, conversation, messageText: text });
 
-        logger.info(
-          { kind: "route_decision", tenantId, senderId, instagramBusinessId, route, textPreview: text.slice(0, 120) },
-          "🤖 IG decideRoute"
-        );
+        logger.info({ kind: "route_decision", tenantId, senderId, instagramBusinessId, route, textPreview: text.slice(0, 40) }, "🤖 IG decideRoute");
 
-        // HANDOFF (keyword/max attempts/etc)
+        // HANDOFF
         if (route?.target && route.target !== "bot") {
-          const sendRes = await sendAndLog({
-            kind: "handoff",
-            outText: HANDOFF_MESSAGE,
-            extra: { route }
-          });
-
-          if (!sendRes.ok) {
-            await appendMessage(conversationId, {
-              tenantId,
-              source: "instagram",
-              channel: "instagram",
-              from: "system",
-              direction: "out",
-              type: "text",
-              text: "[IG] Falha ao enviar handoff (token inválido/expirado).",
-              createdAt: nowIso(),
-              payload: { kind: "handoff_send_failed", send: sendRes, route }
-            });
-            continue;
-          }
+          const sendRes = await sendAndLog({ kind: "handoff", outText: HANDOFF_MESSAGE, extra: { route } });
+          if (!sendRes.ok) continue;
 
           await activateHandoff(conversationId);
 
@@ -582,25 +646,8 @@ router.post("/", async (req, res) => {
           botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
         }
 
-        const sendRes = await sendAndLog({
-          kind: "bot",
-          outText: botText
-        });
-
-        if (!sendRes.ok) {
-          await appendMessage(conversationId, {
-            tenantId,
-            source: "instagram",
-            channel: "instagram",
-            from: "system",
-            direction: "out",
-            type: "text",
-            text: "[IG] Falha ao enviar resposta do bot (token inválido/expirado).",
-            createdAt: nowIso(),
-            payload: { kind: "bot_send_failed", send: sendRes }
-          });
-          continue;
-        }
+        const sendRes = await sendAndLog({ kind: "bot", outText: botText });
+        if (!sendRes.ok) continue;
 
         await appendMessage(conversationId, {
           tenantId,
@@ -612,7 +659,7 @@ router.post("/", async (req, res) => {
           type: "text",
           text: botText,
           createdAt: nowIso(),
-          payload: { kind: "bot", sendOk: true, sendStatus: sendRes.status, send: sendRes }
+          payload: { kind: "bot", sendOk: true, sendStatus: sendRes.status }
         });
       }
     }

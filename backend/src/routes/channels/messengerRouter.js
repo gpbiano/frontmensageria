@@ -1,4 +1,10 @@
 // backend/src/routes/channels/messengerRouter.js
+// ✅ Alinhado com conversations.js (core)
+// - botEnabled vem EXCLUSIVAMENTE de ChannelConfig.config.botEnabled
+// - Inbox/Handoff é sempre promovido via appendMessage({ handoff:true })
+// - Nunca altera estado direto da conversation (exceto: título/meta para perfil)
+// - peerId padrão: ms:<PSID>
+
 import express from "express";
 import crypto from "crypto";
 import fetch from "node-fetch";
@@ -33,14 +39,6 @@ function nowIso() {
 function safeStr(v, fallback = "") {
   const s = typeof v === "string" ? v : v == null ? "" : String(v);
   return s.trim() || fallback;
-}
-
-function parseBotReplyToText(botReply) {
-  if (!botReply) return "";
-  if (typeof botReply === "string") return safeStr(botReply);
-  if (typeof botReply?.replyText === "string") return safeStr(botReply.replyText);
-  if (typeof botReply?.text === "string") return safeStr(botReply.text);
-  return safeStr(botReply?.message || "");
 }
 
 function timingSafeEqualHex(aHex, bHex) {
@@ -78,6 +76,26 @@ function extractText(m) {
 }
 
 // ======================================================
+// Profile cache (evita bater no Graph a cada msg)
+// ======================================================
+const msProfileCache = new Map(); // key: senderId -> { ts, name, avatarUrl }
+const MS_PROFILE_TTL_MS = 1000 * 60 * 60 * 6; // 6h
+
+function cacheGetMs(senderId) {
+  const v = msProfileCache.get(senderId);
+  if (!v) return null;
+  if (Date.now() - v.ts > MS_PROFILE_TTL_MS) {
+    msProfileCache.delete(senderId);
+    return null;
+  }
+  return v;
+}
+
+function cacheSetMs(senderId, data) {
+  msProfileCache.set(senderId, { ts: Date.now(), ...data });
+}
+
+// ======================================================
 // ChannelConfig helpers
 // ======================================================
 async function isMessengerBotEnabled(tenantId) {
@@ -86,11 +104,9 @@ async function isMessengerBotEnabled(tenantId) {
       where: { tenantId, channel: "messenger", enabled: true },
       select: { config: true }
     });
-    const cfg = row?.config && typeof row.config === "object" ? row.config : {};
-    // ✅ default TRUE (só desliga se false)
-    return cfg.botEnabled !== false;
+    return row?.config?.botEnabled === true;
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -126,49 +142,88 @@ async function getMsConfig(tenantId, pageId) {
   };
 }
 
-async function sendMessengerText({ accessToken, recipientId, text }) {
-  if (!accessToken || !recipientId || !text) return { ok: false, skipped: true };
-
-  const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${encodeURIComponent(
-    accessToken
-  )}`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      messaging_type: "RESPONSE",
-      recipient: { id: recipientId },
-      message: { text }
-    })
-  });
-
-  const raw = await resp.text().catch(() => "");
-  let json = {};
+// ======================================================
+// ✅ Graph profile fetch (Messenger)
+// ======================================================
+async function fetchMessengerProfile({ accessToken, senderId }) {
   try {
-    json = raw ? JSON.parse(raw) : {};
-  } catch {
-    json = { raw };
-  }
+    if (!accessToken || !senderId) return null;
 
-  return { ok: resp.ok, status: resp.status, json, url };
+    const cached = cacheGetMs(senderId);
+    if (cached) return cached;
+
+    const url = `https://graph.facebook.com/v21.0/${encodeURIComponent(
+      senderId
+    )}?fields=first_name,last_name,profile_pic&access_token=${encodeURIComponent(accessToken)}`;
+
+    const resp = await fetch(url);
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      logger.warn({ senderId, status: resp.status, error: json?.error || json }, "⚠️ MS profile fetch falhou");
+      return null;
+    }
+
+    const first = safeStr(json?.first_name);
+    const last = safeStr(json?.last_name);
+    const name = safeStr([first, last].filter(Boolean).join(" "), "Contato");
+    const avatarUrl = safeStr(json?.profile_pic);
+
+    const data = { name, avatarUrl };
+    cacheSetMs(senderId, data);
+    return data;
+  } catch (e) {
+    logger.warn({ err: String(e), senderId }, "⚠️ MS profile fetch exception");
+    return null;
+  }
 }
 
-// ✅ trava conversa em humano depois do handoff
-async function activateHandoff(conversationId) {
+async function upsertConversationIdentity({ conversationId, title, avatarUrl, metaExtra = {} }) {
   try {
+    if (!conversationId) return;
+
+    const data = {};
+    if (title) data.title = title;
+
+    // meta merge (mantém o que já existe)
+    if (avatarUrl || (metaExtra && Object.keys(metaExtra).length)) {
+      data.meta = {
+        ...(metaExtra || {}),
+        ...(avatarUrl ? { avatarUrl } : {})
+      };
+    }
+
+    if (!Object.keys(data).length) return;
+
     await prisma.conversation.update({
       where: { id: String(conversationId) },
       data: {
-        currentMode: "human",
-        handoffActive: true,
-        inboxVisible: true,
+        ...data,
         updatedAt: new Date()
       }
     });
   } catch (e) {
-    logger.warn({ err: String(e), conversationId }, "⚠️ Messenger: falha ao ativar handoff no DB");
+    logger.warn({ err: String(e), conversationId }, "⚠️ MS: falha ao salvar identity na conversation");
   }
+}
+
+// ======================================================
+// Send
+// ======================================================
+async function sendMessengerText({ accessToken, recipientId, text }) {
+  if (!accessToken || !recipientId || !text) return;
+
+  await fetch(
+    `https://graph.facebook.com/v21.0/me/messages?access_token=${encodeURIComponent(accessToken)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_type: "RESPONSE",
+        recipient: { id: recipientId },
+        message: { text }
+      })
+    }
+  );
 }
 
 // ======================================================
@@ -207,20 +262,44 @@ router.post("/", async (req, res) => {
       const senderId = safeStr(m.sender?.id);
       const text = extractText(m);
 
+      // ✅ tenta buscar nome + avatar
+      const prof = await fetchMessengerProfile({ accessToken, senderId });
+      const displayName = safeStr(prof?.name, "Contato");
+      const avatarUrl = safeStr(prof?.avatarUrl);
+
       const convRes = await getOrCreateChannelConversation({
         tenantId,
         source: "messenger",
         channel: "messenger",
         peerId: `ms:${senderId}`,
-        title: "Contato",
-        meta: { pageId }
+        title: displayName || "Contato",
+        meta: {
+          peerId: `ms:${senderId}`,
+          senderId,
+          pageId,
+          ...(avatarUrl ? { avatarUrl } : {})
+        }
       });
 
       if (!convRes?.ok) continue;
       const conv = convRes.conversation;
 
+      // ✅ se já existia como "Contato", atualiza agora com nome/ foto
+      const isGenericTitle = !safeStr(conv?.title) || safeStr(conv?.title).toLowerCase() === "contato";
+      if (isGenericTitle || avatarUrl) {
+        await upsertConversationIdentity({
+          conversationId: conv.id,
+          title: displayName && displayName !== "Contato" ? displayName : undefined,
+          avatarUrl,
+          metaExtra: {
+            senderId,
+            pageId
+          }
+        });
+      }
+
+      // inbound
       await appendMessage(conv.id, {
-        tenantId,
         from: "client",
         direction: "in",
         source: "messenger",
@@ -230,27 +309,15 @@ router.post("/", async (req, res) => {
         payload: m
       });
 
-      // ✅ se já está em humano/handoff → não responde bot
-      if (
-        String(conv?.currentMode || "").toLowerCase() === "human" ||
-        conv?.handoffActive === true ||
-        conv?.inboxVisible === true
-      ) {
-        continue;
-      }
-
       // BOT DESLIGADO → HANDOFF
       if (!botEnabled) {
-        const sendRes = await sendMessengerText({
+        await sendMessengerText({
           accessToken,
           recipientId: senderId,
           text: HANDOFF_MESSAGE
         });
 
-        if (sendRes?.ok) await activateHandoff(conv.id);
-
         await appendMessage(conv.id, {
-          tenantId,
           from: "bot",
           isBot: true,
           direction: "out",
@@ -259,37 +326,28 @@ router.post("/", async (req, res) => {
           text: HANDOFF_MESSAGE,
           handoff: true,
           createdAt: nowIso(),
-          payload: { kind: "handoff_disabled_bot", send: sendRes }
+          payload: { kind: "handoff_disabled_bot" }
         });
         continue;
       }
 
       if (!text) continue;
 
-      const decision = decideRoute({
-        // ✅ agora o rulesEngine defaulta enabled=true e keywords do default
+      const decision = await decideRoute({
         accountSettings: { tenantId, channel: "messenger" },
         conversation: conv,
         messageText: text
       });
 
-      logger.info(
-        { kind: "route_decision", tenantId, senderId, pageId, decision },
-        "🤖 Messenger decideRoute"
-      );
-
       // HANDOFF (rulesEngine)
       if (decision?.target && decision.target !== "bot") {
-        const sendRes = await sendMessengerText({
+        await sendMessengerText({
           accessToken,
           recipientId: senderId,
           text: HANDOFF_MESSAGE
         });
 
-        if (sendRes?.ok) await activateHandoff(conv.id);
-
         await appendMessage(conv.id, {
-          tenantId,
           from: "bot",
           isBot: true,
           direction: "out",
@@ -298,7 +356,7 @@ router.post("/", async (req, res) => {
           text: HANDOFF_MESSAGE,
           handoff: true,
           createdAt: nowIso(),
-          payload: { kind: "handoff", decision, send: sendRes }
+          payload: { kind: "handoff", decision }
         });
         continue;
       }
@@ -306,30 +364,24 @@ router.post("/", async (req, res) => {
       // BOT
       let botText = "";
       try {
-        const botReply = await callGenAIBot({
-          accountSettings: { tenantId, channel: "messenger" },
-          conversation: conv,
-          messageText: text,
-          history: []
-        });
-        botText = parseBotReplyToText(botReply);
+        botText = safeStr(
+          await callGenAIBot({
+            accountSettings: { tenantId, channel: "messenger" },
+            conversation: conv,
+            messageText: text
+          })
+        );
       } catch {}
 
       if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
 
-      const sendRes = await sendMessengerText({
+      await sendMessengerText({
         accessToken,
         recipientId: senderId,
         text: botText
       });
 
-      logger.info(
-        { kind: "bot", tenantId, senderId, status: sendRes?.status, sendUrl: sendRes?.url },
-        "✅ Messenger send"
-      );
-
       await appendMessage(conv.id, {
-        tenantId,
         from: "bot",
         isBot: true,
         direction: "out",
@@ -337,7 +389,7 @@ router.post("/", async (req, res) => {
         channel: "messenger",
         text: botText,
         createdAt: nowIso(),
-        payload: { kind: "bot", send: sendRes }
+        payload: { kind: "bot" }
       });
     }
   }

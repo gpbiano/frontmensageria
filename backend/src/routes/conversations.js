@@ -90,6 +90,7 @@ function resolveContactName(payload = {}, rawMsg = {}) {
     rawMsg?.contact?.profile?.name ||
     rawMsg?.profile?.name ||
     rawMsg?.profile_name ||
+    rawMsg?.displayName ||
     "";
 
   const msName =
@@ -97,6 +98,7 @@ function resolveContactName(payload = {}, rawMsg = {}) {
     rawMsg?.senderName ||
     rawMsg?.fromName ||
     rawMsg?.from?.name ||
+    rawMsg?.displayName ||
     "";
 
   const igName =
@@ -104,17 +106,20 @@ function resolveContactName(payload = {}, rawMsg = {}) {
     rawMsg?.from?.username ||
     rawMsg?.sender?.username ||
     rawMsg?.fromName ||
+    rawMsg?.displayName ||
     "";
 
   const webchatName =
     rawMsg?.visitor?.name ||
     rawMsg?.visitorName ||
     rawMsg?.fromName ||
+    rawMsg?.displayName ||
     "";
 
   return (
     safeStr(payload.title) ||
     safeStr(payload.name) ||
+    safeStr(payload.displayName) ||
     safeStr(waName) ||
     safeStr(msName) ||
     safeStr(igName) ||
@@ -144,6 +149,27 @@ function displayNameFallbackByChannel(channel, peerId) {
   if (ch === "instagram") return peerToPSID(peerId) || "Contato";
   if (ch === "webchat") return safeStr(peerId) || "Contato";
   return safeStr(peerId) || "Contato";
+}
+
+function isGenericTitle(title) {
+  const t = safeStr(title).toLowerCase();
+  if (!t) return true;
+  if (t === "contato") return true;
+  if (t === "cliente") return true;
+  if (t === "visitor") return true;
+  return false;
+}
+
+function pickAvatarFromMeta(m) {
+  const meta = asJson(m);
+  return (
+    safeStr(meta.avatarUrl) ||
+    safeStr(meta.profilePicUrl) ||
+    safeStr(meta.profilePictureUrl) ||
+    safeStr(meta.pictureUrl) ||
+    safeStr(meta.photoUrl) ||
+    ""
+  );
 }
 
 // ======================================================
@@ -187,10 +213,15 @@ function normalizeConversationRow(convRow) {
 
   const peerId = safeStr(m.peerId || "");
 
-  const title =
+  const titleRaw =
     safeStr(m.title) ||
+    safeStr(m.displayName) ||
     safeStr(convRow?.contact?.name || "") ||
     displayNameFallbackByChannel(channel, peerId);
+
+  const title = safeStr(titleRaw) || displayNameFallbackByChannel(channel, peerId);
+
+  const avatarUrl = pickAvatarFromMeta(m) || null;
 
   const lastMessagePreview = safeStr(m.lastMessagePreview || "");
   const lastMessageAt = convRow.lastMessageAt
@@ -238,7 +269,12 @@ function normalizeConversationRow(convRow) {
     source,
     channel,
     peerId,
+
+    // ✅ Identidade pro front
     title,
+    displayName: safeStr(m.displayName || title),
+    avatarUrl,
+
     status,
 
     currentMode,
@@ -318,8 +354,8 @@ async function getChannelConn(tenantId, channel) {
 // ======================================================
 async function sendWhatsAppText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "whatsapp");
-  const accessToken = safeStr(conn?.row?.accessToken || "");
-  const phoneNumberId = safeStr(conn?.row?.phoneNumberId || "");
+  const accessToken = safeStr(conn?.row?.accessToken || conn?.config?.accessToken || "");
+  const phoneNumberId = safeStr(conn?.config?.phoneNumberId || conn?.row?.phoneNumberId || "");
 
   if (!accessToken || !phoneNumberId) {
     return {
@@ -367,7 +403,7 @@ async function sendWhatsAppText({ tenantId, peerId, text }) {
  */
 async function sendMessengerText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "messenger");
-  const pageAccessToken = safeStr(conn?.row?.accessToken || "");
+  const pageAccessToken = safeStr(conn?.row?.accessToken || conn?.config?.accessToken || "");
   if (!pageAccessToken) {
     return { ok: false, error: "Messenger não conectado (accessToken ausente em ChannelConfig)" };
   }
@@ -407,7 +443,7 @@ async function sendMessengerText({ tenantId, peerId, text }) {
  */
 async function sendInstagramText({ tenantId, peerId, text }) {
   const conn = await getChannelConn(tenantId, "instagram");
-  const token = safeStr(conn?.row?.accessToken || "");
+  const token = safeStr(conn?.row?.accessToken || conn?.config?.accessToken || "");
   const cfg = asJson(conn?.config);
 
   if (!token) return { ok: false, error: "Instagram não conectado (accessToken ausente)" };
@@ -438,7 +474,6 @@ async function sendInstagramText({ tenantId, peerId, text }) {
       return { ok: true, providerMessageId: json?.message_id || null, raw: json };
     }
 
-    // sem businessId -> retorna erro do primário
     const instagramBusinessId = safeStr(cfg.instagramBusinessId || "");
     if (!instagramBusinessId) {
       return {
@@ -447,9 +482,8 @@ async function sendInstagramText({ tenantId, peerId, text }) {
         meta: json?.error || json
       };
     }
-    // 🔁 tenta fallback abaixo
   } catch {
-    // 🔁 tenta fallback abaixo
+    // segue para fallback
   }
 
   // 🔁 Fallback (compat)
@@ -500,21 +534,38 @@ async function dispatchOutboundToChannel({ convRow, msgText }) {
 // ======================================================
 // CORE (PRISMA-FIRST)
 // ======================================================
-async function upsertContact({ tenantId, channel, peerId, title, phone, waId, visitorId }) {
+async function upsertContact({
+  tenantId,
+  channel,
+  peerId,
+  title,
+  phone,
+  waId,
+  visitorId,
+  displayName,
+  avatarUrl
+}) {
   const externalId = safeStr(peerId);
   if (!externalId) throw new Error("peerId obrigatório para criar/achar contato (externalId).");
 
-  const finalName = safeStr(title) || displayNameFallbackByChannel(channel, peerId);
+  const finalName =
+    safeStr(title) ||
+    safeStr(displayName) ||
+    displayNameFallbackByChannel(channel, peerId);
+
+  const metaPatch = {
+    ...(waId ? { waId } : {}),
+    ...(visitorId ? { visitorId } : {}),
+    ...(safeStr(displayName) ? { displayName: safeStr(displayName) } : {}),
+    ...(safeStr(avatarUrl) ? { avatarUrl: safeStr(avatarUrl) } : {})
+  };
 
   return prisma.contact.upsert({
     where: { tenantId_channel_externalId: { tenantId, channel, externalId } },
     update: {
       ...(finalName ? { name: finalName } : {}),
       ...(phone ? { phone } : {}),
-      metadata: {
-        ...(waId ? { waId } : {}),
-        ...(visitorId ? { visitorId } : {})
-      }
+      metadata: metaPatch
     },
     create: {
       tenantId,
@@ -522,10 +573,7 @@ async function upsertContact({ tenantId, channel, peerId, title, phone, waId, vi
       externalId,
       name: finalName,
       phone: phone || null,
-      metadata: {
-        ...(waId ? { waId } : {}),
-        ...(visitorId ? { visitorId } : {})
-      }
+      metadata: metaPatch
     }
   });
 }
@@ -541,8 +589,15 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   if (!tenantId) return { ok: false, error: "tenantId obrigatório" };
   if (!source || !peerId) return { ok: false, error: "source e peerId obrigatórios" };
 
+  const payloadMeta = asJson(payload.meta);
+  const displayName = safeStr(payloadMeta.displayName || payload.displayName || "");
+  const avatarUrl = safeStr(payloadMeta.avatarUrl || payload.avatarUrl || "");
+
   let resolvedName = resolveContactName(payload, payload.raw || payload);
   if (resolvedName === "Contato") resolvedName = displayNameFallbackByChannel(channel, peerId);
+  if (displayName && (isGenericTitle(resolvedName) || resolvedName === displayNameFallbackByChannel(channel, peerId))) {
+    resolvedName = displayName;
+  }
 
   const contact = await upsertContact({
     tenantId,
@@ -551,7 +606,9 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
     title: resolvedName,
     phone: payload.phone || null,
     waId: payload.waId || null,
-    visitorId: payload.visitorId || null
+    visitorId: payload.visitorId || null,
+    displayName: displayName || resolvedName,
+    avatarUrl
   });
 
   let conv = await prisma.conversation.findFirst({
@@ -566,7 +623,14 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
       source,
       channel,
       peerId,
+
+      // ✅ identidade
       title: resolvedName,
+      displayName: displayName || resolvedName,
+      ...(avatarUrl ? { avatarUrl } : {}),
+
+      // ✅ merge de metadados vindos do canal (IG/MS/WA)
+      ...payloadMeta,
 
       currentMode: safeStr(payload.currentMode || "bot").toLowerCase(),
       hadHuman: false,
@@ -601,13 +665,46 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
   } else {
     const meta = getMeta(conv);
 
-    if (!safeStr(meta.title) || safeStr(meta.title) === "Contato") {
-      conv = await prisma.conversation.update({
-        where: { id: conv.id },
-        data: { metadata: setMeta(conv, { title: resolvedName, peerId, channel, source }) }
-      });
+    const currTitle = safeStr(meta.title || "");
+    const currAvatar = pickAvatarFromMeta(meta);
 
-      await prisma.contact.update({ where: { id: contact.id }, data: { name: resolvedName } }).catch(() => {});
+    const shouldUpdateTitle =
+      (isGenericTitle(currTitle) && !isGenericTitle(resolvedName)) ||
+      (displayName && isGenericTitle(currTitle));
+
+    const shouldUpdateAvatar = !currAvatar && !!avatarUrl;
+
+    // ✅ Sempre guarda payloadMeta (sem perder o que já tinha)
+    const mergedMeta = {
+      ...meta,
+      ...payloadMeta,
+
+      // mantém peer/source/channel consistentes
+      peerId,
+      channel,
+      source
+    };
+
+    if (shouldUpdateTitle) {
+      mergedMeta.title = resolvedName;
+      mergedMeta.displayName = displayName || resolvedName;
+    } else if (!safeStr(mergedMeta.displayName) && safeStr(displayName || resolvedName)) {
+      mergedMeta.displayName = displayName || resolvedName;
+    }
+
+    if (shouldUpdateAvatar) {
+      mergedMeta.avatarUrl = avatarUrl;
+    }
+
+    conv = await prisma.conversation.update({
+      where: { id: conv.id },
+      data: { metadata: mergedMeta }
+    });
+
+    if (shouldUpdateTitle && contact?.id) {
+      await prisma.contact
+        .update({ where: { id: contact.id }, data: { name: resolvedName } })
+        .catch(() => {});
     }
   }
 
@@ -769,23 +866,36 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
     }
   });
 
-  // ✅ ENRIQUECE NOME (conversa + contato)
+  // ✅ ENRIQUECE NOME (sem estragar o que já está bom)
   const metaBefore = getMeta(convRow);
-  let nameFromMsg = resolveContactName({}, rawMsg);
+  const currentTitle = safeStr(metaBefore.title || "");
+  const peerId = safeStr(metaBefore.peerId || "");
 
-  if (nameFromMsg === "Contato") {
-    nameFromMsg = displayNameFallbackByChannel(convNorm.channel, metaBefore.peerId || "");
+  let nameFromMsg = resolveContactName({}, rawMsg);
+  if (isGenericTitle(nameFromMsg)) {
+    // não atualiza se é genérico
+    nameFromMsg = "";
   }
 
-  await prisma.conversation
-    .update({
-      where: { id: convRow.id },
-      data: { metadata: setMeta(convRow, { title: nameFromMsg }) }
-    })
-    .catch(() => {});
+  const fallback = displayNameFallbackByChannel(convNorm.channel, peerId);
+  if (safeStr(nameFromMsg) && safeStr(nameFromMsg) !== fallback) {
+    const shouldUpdateTitle =
+      isGenericTitle(currentTitle) || currentTitle === fallback;
 
-  if (convRow.contactId) {
-    await prisma.contact.update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } }).catch(() => {});
+    if (shouldUpdateTitle) {
+      await prisma.conversation
+        .update({
+          where: { id: convRow.id },
+          data: { metadata: setMeta(convRow, { title: nameFromMsg, displayName: nameFromMsg }) }
+        })
+        .catch(() => {});
+
+      if (convRow.contactId) {
+        await prisma.contact
+          .update({ where: { id: convRow.contactId }, data: { name: nameFromMsg } })
+          .catch(() => {});
+      }
+    }
   }
 
   // ✅ bot attempts não pode “virar humano”
@@ -913,7 +1023,6 @@ router.post("/:id/messages", async (req, res) => {
         sentAt: sendRes?.ok ? nowIso() : null
       };
 
-      // ✅ merge real (mantém from/source/channel etc)
       const msgId = String(r.msgRow?.id || r.msg?.id);
       await prisma.message
         .update({
