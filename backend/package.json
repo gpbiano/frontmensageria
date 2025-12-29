@@ -11,7 +11,10 @@
     "lint:fix": "eslint . --fix",
     "clean": "rm -rf uploads/*.tmp",
     "health": "curl http://localhost:3010/health",
-    "test:login": "curl -X POST http://localhost:3010/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@gplabs.com.br\",\"password\":\"gplabs123\"}'"
+    "test:login": "curl -X POST http://localhost:3010/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@gplabs.com.br\",\"password\":\"gplabs123\"}'",
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "prisma:deploy": "prisma migrate deploy && prisma generate"
   },
   "dependencies": {
     "@prisma/client": "6.19.1",
@@ -36,3 +39,4 @@
     "pino-pretty": "^10.3.0"
   }
 }
+

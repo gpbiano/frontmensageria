@@ -41,7 +41,7 @@ function assertPrisma(res, model, candidates) {
 function normalizeE164(raw) {
   const digits = String(raw || "").replace(/\D/g, "");
   if (!digits) return "";
-  return `+${digits}`; // sempre com +
+  return `+${digits}`;
 }
 
 const MODEL_CANDIDATES = ["outboundNumber", "OutboundNumber", "number", "Number"];
@@ -50,8 +50,7 @@ const MODEL_CANDIDATES = ["outboundNumber", "OutboundNumber", "number", "Number"
 // GET /outbound/numbers
 // ======================================================
 router.get("/", requireAuth, async (req, res) => {
-  const model = resolveModel(MODEL_CANDIDATES);
-  const modelName = model ? model._model || model.name || "unknown" : null;
+  const model = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
 
   try {
     if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
@@ -59,12 +58,9 @@ router.get("/", requireAuth, async (req, res) => {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    const where = {};
-    if (modelHasField(modelName, "tenantId")) where.tenantId = tenantId;
-
     const items = await model.findMany({
-      where,
-      orderBy: modelHasField(modelName, "createdAt") ? { createdAt: "desc" } : undefined
+      where: { tenantId },
+      orderBy: modelHasField("OutboundNumber", "createdAt") ? { createdAt: "desc" } : undefined
     });
 
     return res.json({ ok: true, items });
@@ -78,8 +74,7 @@ router.get("/", requireAuth, async (req, res) => {
 // POST /outbound/numbers
 // ======================================================
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  const model = resolveModel(MODEL_CANDIDATES);
-  const modelName = model ? model._model || model.name || "unknown" : null;
+  const model = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
 
   try {
     if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
@@ -94,16 +89,17 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
       return res.status(400).json({ ok: false, error: "phoneE164_invalid" });
     }
 
-    const data = {};
-    if (modelHasField(modelName, "tenantId")) data.tenantId = tenantId;
-    if (modelHasField(modelName, "phoneE164")) data.phoneE164 = normalized;
-    if (modelHasField(modelName, "label")) data.label = label ? String(label) : null;
-    if (modelHasField(modelName, "provider")) data.provider = provider ? String(provider) : "meta";
-    if (modelHasField(modelName, "isActive")) data.isActive = isActive !== undefined ? !!isActive : true;
-    if (modelHasField(modelName, "metadata")) data.metadata = metadata ?? undefined;
+    const data = {
+      tenantId,
+      phoneE164: normalized,
+      label: label ? String(label) : null,
+      provider: provider ? String(provider) : "meta",
+      isActive: isActive !== undefined ? !!isActive : true
+    };
+
+    if (modelHasField("OutboundNumber", "metadata")) data.metadata = metadata ?? undefined;
 
     const item = await model.create({ data });
-
     return res.status(201).json({ ok: true, item });
   } catch (err) {
     const msg = String(err?.message || err);
@@ -116,48 +112,34 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
 });
 
 // ======================================================
-// ✅ POST /outbound/numbers/sync
-// (Botão "Sincronizar" no front geralmente chama isso)
-// Objetivo: buscar números/canais do WhatsApp conectados no tenant
-// e upsert em OutboundNumber
+// POST /outbound/numbers/sync
 // ======================================================
 router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  const model = resolveModel(MODEL_CANDIDATES);
-  const modelName = model ? model._model || model.name || "unknown" : null;
-
   try {
-    if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
-
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    // tenta achar configuração do canal whatsapp no DB (nomes comuns)
+    const model = prisma?.outboundNumber || resolveModel(MODEL_CANDIDATES);
+    if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
+
+    // tenta achar ChannelConfig pra extrair números
     const CHANNEL_CFG_CANDIDATES = ["channelConfig", "ChannelConfig", "channelsConfig", "ChannelsConfig"];
     const channelCfg = resolveModel(CHANNEL_CFG_CANDIDATES);
-    const channelCfgName = channelCfg ? channelCfg._model || channelCfg.name || "unknown" : null;
 
-    // Se não existir ChannelConfig, ainda assim não quebramos o front: retornamos vazio.
     if (!channelCfg) {
       return res.json({ ok: true, synced: 0, items: [], note: "channel_config_model_missing" });
     }
 
-    // Busca configs do WhatsApp deste tenant
-    const whereCfg = {};
-    if (modelHasField(channelCfgName, "tenantId")) whereCfg.tenantId = tenantId;
-    if (modelHasField(channelCfgName, "channel")) whereCfg.channel = "whatsapp";
-
     const cfgs = await channelCfg.findMany({
-      where: whereCfg,
-      orderBy: modelHasField(channelCfgName, "updatedAt") ? { updatedAt: "desc" } : undefined
+      where: { tenantId, ...(modelHasField("ChannelConfig", "channel") ? { channel: "whatsapp" } : {}) },
+      orderBy: modelHasField("ChannelConfig", "updatedAt") ? { updatedAt: "desc" } : undefined
     });
 
-    // Extrai possíveis números de dentro de metadata/fields variados
     const extracted = [];
     for (const cfg of cfgs) {
-      const md = cfg?.metadata || cfg?.data || cfg?.config || null;
+      const md = cfg?.metadata || cfg?.data || cfg?.config || {};
 
-      // candidatos comuns (depende do que você salva hoje)
-      const fromFields = [
+      const rawCandidates = [
         cfg?.phoneE164,
         cfg?.phoneNumber,
         cfg?.number,
@@ -168,22 +150,22 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
         md?.number
       ].filter(Boolean);
 
-      // às vezes vem como array
-      const fromArrays = []
+      const arrays = []
         .concat(md?.numbers || [])
         .concat(md?.phoneNumbers || [])
         .concat(md?.whatsappNumbers || []);
 
-      for (const raw of [...fromFields, ...fromArrays]) {
+      for (const raw of [...rawCandidates, ...arrays]) {
         if (typeof raw === "string" || typeof raw === "number") {
-          const n = normalizeE164(String(raw));
-          if (n) extracted.push({ phoneE164: n, label: "WhatsApp", provider: "meta" });
+          const phoneE164 = normalizeE164(String(raw));
+          if (phoneE164) extracted.push({ phoneE164, label: "WhatsApp", provider: "meta" });
         } else if (raw && typeof raw === "object") {
-          const n =
-            normalizeE164(raw.phoneE164 || raw.phoneNumber || raw.displayPhoneNumber || raw.number || raw.value || "");
-          if (n) {
+          const phoneE164 = normalizeE164(
+            raw.phoneE164 || raw.phoneNumber || raw.displayPhoneNumber || raw.number || raw.value || ""
+          );
+          if (phoneE164) {
             extracted.push({
-              phoneE164: n,
+              phoneE164,
               label: raw.label || raw.name || "WhatsApp",
               provider: raw.provider || "meta",
               metadata: raw
@@ -198,58 +180,49 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
     for (const it of extracted) map.set(it.phoneE164, it);
     const unique = Array.from(map.values());
 
-    // Upsert (se existir unique por tenantId+phoneE164)
-    // Preferimos usar prisma.outboundNumber direto quando existir, pra usar o compound unique padrão
-    const hasDirectOutboundNumber = !!prisma?.outboundNumber?.upsert;
     const upserted = [];
+    const canUpsert = model === prisma.outboundNumber && typeof prisma.outboundNumber?.upsert === "function";
 
     for (const it of unique) {
-      const data = {};
-      if (modelHasField(modelName, "tenantId")) data.tenantId = tenantId;
-      if (modelHasField(modelName, "phoneE164")) data.phoneE164 = it.phoneE164;
-      if (modelHasField(modelName, "label")) data.label = it.label ? String(it.label) : null;
-      if (modelHasField(modelName, "provider")) data.provider = it.provider ? String(it.provider) : "meta";
-      if (modelHasField(modelName, "isActive")) data.isActive = true;
-      if (modelHasField(modelName, "metadata") && it.metadata) data.metadata = it.metadata;
+      const create = {
+        tenantId,
+        phoneE164: it.phoneE164, // 🔥 obrigatório
+        label: it.label ? String(it.label) : null,
+        provider: it.provider ? String(it.provider) : "meta",
+        isActive: true
+      };
+      if (modelHasField("OutboundNumber", "metadata") && it.metadata) create.metadata = it.metadata;
 
-      if (hasDirectOutboundNumber) {
-        // tenta nomes comuns de unique composto
-        const uniqueNames = [
-          "tenantId_phoneE164",
-          "tenantId_phone",
-          "tenantId_number",
-          "tenantId_phoneNumber"
-        ];
+      const update = { ...create };
+      delete update.tenantId;
 
-        let done = false;
-        for (const uniq of uniqueNames) {
-          try {
-            const row = await prisma.outboundNumber.upsert({
-              where: { [uniq]: { tenantId, phoneE164: it.phoneE164 } },
-              create: data,
-              update: data
-            });
-            upserted.push(row);
-            done = true;
-            break;
-          } catch (_) {
-            // tenta próximo nome
-          }
-        }
-
-        if (!done) {
-          // fallback: create e ignora se já existir
-          try {
-            const row = await prisma.outboundNumber.create({ data });
-            upserted.push(row);
-          } catch (_) {}
-        }
-      } else {
-        // fallback genérico
-        try {
-          const row = await model.create({ data });
+      try {
+        if (canUpsert) {
+          // ✅ pelo seu log, o único composto existente é esse:
+          const row = await prisma.outboundNumber.upsert({
+            where: { tenantId_phoneE164: { tenantId, phoneE164: it.phoneE164 } },
+            create,
+            update
+          });
           upserted.push(row);
-        } catch (_) {}
+        } else if (typeof model.updateMany === "function") {
+          const upd = await model.updateMany({ where: { tenantId, phoneE164: it.phoneE164 }, data: update });
+          if (upd?.count > 0) {
+            // busca item atualizado (best effort)
+            const row = await model.findFirst({ where: { tenantId, phoneE164: it.phoneE164 } });
+            if (row) upserted.push(row);
+          } else {
+            const row = await model.create({ data: create });
+            upserted.push(row);
+          }
+        } else {
+          const row = await model.create({ data: create });
+          upserted.push(row);
+        }
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes("P2002") || msg.toLowerCase().includes("unique")) continue;
+        logger.error({ err: msg, phoneE164: it.phoneE164 }, "❌ numbersRouter sync persist failed");
       }
     }
 
