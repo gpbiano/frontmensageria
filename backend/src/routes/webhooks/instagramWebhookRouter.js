@@ -80,37 +80,43 @@ function parseBotReplyToText(botReply) {
 function sanitizeAccessToken(raw) {
   let t = safeStr(raw);
   if (!t) return "";
+
   // remove aspas simples/duplas ao redor
   if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
     t = t.slice(1, -1).trim();
   }
+
+  // remove whitespace invisível (muito comum quebrar token no copy/paste)
+  t = t.replace(/\s+/g, "");
+
   // elimina tokens “fake”
-  const bad = ["null", "undefined", "[object Object]"];
+  const bad = ["null", "undefined", "[objectobject]"];
   if (bad.includes(t.toLowerCase())) return "";
+
   // se for JSON {access_token: "..."} (ou algo similar)
   if (t.startsWith("{") && t.endsWith("}")) {
     try {
       const obj = JSON.parse(t);
-      const inner =
-        obj?.access_token || obj?.pageAccessToken || obj?.token || obj?.accessToken || "";
-      t = safeStr(inner);
+      const inner = obj?.access_token || obj?.pageAccessToken || obj?.token || obj?.accessToken || "";
+      t = safeStr(inner).replace(/\s+/g, "");
     } catch {
-      // deixa cair abaixo e invalidar
+      return "";
     }
   }
+
   return t;
 }
 
 /**
- * Heurística simples: Page tokens da Meta frequentemente começam com "EA".
- * Não é garantia, mas ajuda a detectar lixo rapidamente.
+ * Heurística simples: tokens válidos costumam ser longos e sem espaços.
+ * Aceita tanto EA... quanto IGAA... (Meta Assistant usa IGAA nos testes).
  */
 function looksLikeMetaToken(t) {
   const s = sanitizeAccessToken(t);
   if (!s) return false;
-  if (s.length < 20) return false;
-  // aceita EA... ou outros formatos longos sem espaços
+  if (s.length < 40) return false;
   if (/\s/.test(s)) return false;
+  // aceita EA..., IGAA..., e outros tokens longos
   return true;
 }
 
@@ -179,42 +185,58 @@ function parseIncomingBody(req) {
 }
 
 // ===============================
-// Graph send
+// Graph send (try Meta Assistant style first)
 // ===============================
-async function igSendText({ instagramBusinessId, recipientId, pageAccessToken, text }) {
-  if (!instagramBusinessId) throw new Error("instagramBusinessId ausente");
-  if (!pageAccessToken) throw new Error("pageAccessToken ausente");
+async function igSendText({ instagramBusinessId, recipientId, accessToken, text }) {
+  if (!accessToken) throw new Error("accessToken ausente");
   if (!recipientId) throw new Error("recipientId ausente");
 
   const body = safeStr(text);
   if (!body) return { ok: true, skipped: true };
 
-  const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
-    instagramBusinessId
-  )}/messages`;
+  const token = sanitizeAccessToken(accessToken);
+  if (!token) throw new Error("accessToken inválido (vazio ou malformado)");
 
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      // mais robusto que access_token na query (e evita token na URL/logs)
-      Authorization: `Bearer ${pageAccessToken}`
-    },
-    body: JSON.stringify({
-      recipient: { id: String(recipientId) },
-      message: { text: body }
-    })
-  });
+  const payload = {
+    messaging_product: "instagram",
+    recipient: { id: String(recipientId) },
+    message: { text: body }
+  };
 
-  const rawText = await resp.text().catch(() => "");
-  let json = {};
-  try {
-    json = rawText ? JSON.parse(rawText) : {};
-  } catch {
-    json = { raw: rawText };
+  const tryPost = async (url) => {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const rawText = await resp.text().catch(() => "");
+    let json = {};
+    try {
+      json = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      json = { raw: rawText };
+    }
+
+    return { ok: resp.ok, status: resp.status, json, url };
+  };
+
+  // 1) igual ao Meta Assistant
+  const r1 = await tryPost(`https://graph.instagram.com/${META_GRAPH_VERSION}/me/messages`);
+  if (r1.ok) return r1;
+
+  // 2) fallback tradicional
+  if (instagramBusinessId) {
+    const r2 = await tryPost(
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(instagramBusinessId)}/messages`
+    );
+    return r2;
   }
 
-  return { ok: resp.ok, status: resp.status, json };
+  return r1;
 }
 
 // ===============================
@@ -260,16 +282,17 @@ function pickInstagramAccessToken(channelRow) {
   const cfg = asJson(channelRow?.config);
   const candidates = [
     channelRow?.accessToken, // coluna principal
-    cfg?.pageAccessToken, // alguns connects salvam aqui
-    cfg?.accessToken, // fallback comum
+    cfg?.accessToken,
+    cfg?.pageAccessToken,
     cfg?.token
   ];
+
   for (const c of candidates) {
     const t = sanitizeAccessToken(c);
     if (t && looksLikeMetaToken(t)) return t;
   }
-  // se existir algo, retorna sanitizado mesmo (pra logarmos len), mas pode falhar
-  return sanitizeAccessToken(candidates.find(Boolean) || "");
+
+  return "";
 }
 
 // ======================================================
@@ -335,9 +358,9 @@ router.post("/", async (req, res) => {
         const cfg = asJson(ch.config);
 
         const instagramBusinessId = safeStr(cfg.instagramBusinessId || recipientId);
+        const accessToken = pickInstagramAccessToken(ch);
 
-        const pageAccessToken = pickInstagramAccessToken(ch);
-        if (!pageAccessToken) {
+        if (!accessToken) {
           logger.warn(
             {
               kind: "ig_token_missing",
@@ -348,7 +371,7 @@ router.post("/", async (req, res) => {
               hasAccessToken: !!ch.accessToken,
               cfgKeys: Object.keys(cfg || {})
             },
-            "❌ IG: sem Page Access Token válido (bot não consegue responder)"
+            "❌ IG: sem accessToken válido (não dá pra responder)"
           );
           continue;
         }
@@ -393,34 +416,63 @@ router.post("/", async (req, res) => {
           continue;
         }
 
-        // Bot desabilitado → tenta mandar handoff (mas só ativa handoff se enviar OK)
-        if (!botEnabled) {
-          let sendRes = { ok: false, status: 0, json: {} };
+        // helper local: envia e loga erro detalhado
+        const sendAndLog = async ({ kind, outText, extra = {} }) => {
+          let sendRes = { ok: false, status: 0, json: {}, url: "" };
           try {
             sendRes = await igSendText({
               instagramBusinessId,
               recipientId: senderId,
-              pageAccessToken,
-              text: HANDOFF_MESSAGE
+              accessToken,
+              text: outText
             });
           } catch (e) {
-            sendRes = { ok: false, status: 0, json: { error: String(e) } };
+            sendRes = { ok: false, status: 0, json: { error: String(e) }, url: "exception" };
           }
+
+          const err = sendRes?.json?.error || null;
 
           if (!sendRes.ok) {
             logger.warn(
               {
-                kind: "handoff_send_failed",
+                kind,
                 tenantId,
                 senderId,
                 recipientId,
                 instagramBusinessId,
+                pageId: ch.pageId || null,
                 status: sendRes.status,
-                error: sendRes.json?.error
+                sendUrl: sendRes.url,
+                error: err || sendRes.json,
+                ...extra
               },
-              "❌ IG handoff: envio falhou (não ativando handoff/inbox)"
+              "❌ IG send falhou"
             );
+          } else {
+            logger.info(
+              {
+                kind,
+                tenantId,
+                senderId,
+                instagramBusinessId,
+                status: sendRes.status,
+                sendUrl: sendRes.url
+              },
+              "✅ IG send ok"
+            );
+          }
 
+          return sendRes;
+        };
+
+        // Bot desabilitado → tenta mandar handoff (mas só ativa handoff se enviar OK)
+        if (!botEnabled) {
+          const sendRes = await sendAndLog({
+            kind: "handoff_disabled_bot",
+            outText: HANDOFF_MESSAGE
+          });
+
+          if (!sendRes.ok) {
             await appendMessage(conversationId, {
               tenantId,
               source: "instagram",
@@ -432,7 +484,6 @@ router.post("/", async (req, res) => {
               createdAt: nowIso(),
               payload: { kind: "handoff_send_failed", send: sendRes }
             });
-
             continue;
           }
 
@@ -463,33 +514,13 @@ router.post("/", async (req, res) => {
 
         // rota para humano → mesma regra: só ativa handoff se enviar OK
         if (route?.target && route.target !== "bot") {
-          let sendRes = { ok: false, status: 0, json: {} };
-          try {
-            sendRes = await igSendText({
-              instagramBusinessId,
-              recipientId: senderId,
-              pageAccessToken,
-              text: HANDOFF_MESSAGE
-            });
-          } catch (e) {
-            sendRes = { ok: false, status: 0, json: { error: String(e) } };
-          }
+          const sendRes = await sendAndLog({
+            kind: "handoff",
+            outText: HANDOFF_MESSAGE,
+            extra: { route }
+          });
 
           if (!sendRes.ok) {
-            logger.warn(
-              {
-                kind: "handoff_send_failed",
-                tenantId,
-                senderId,
-                recipientId,
-                instagramBusinessId,
-                status: sendRes.status,
-                error: sendRes.json?.error,
-                route
-              },
-              "❌ IG handoff: envio falhou (não ativando handoff/inbox)"
-            );
-
             await appendMessage(conversationId, {
               tenantId,
               source: "instagram",
@@ -501,7 +532,6 @@ router.post("/", async (req, res) => {
               createdAt: nowIso(),
               payload: { kind: "handoff_send_failed", send: sendRes, route }
             });
-
             continue;
           }
 
@@ -538,28 +568,12 @@ router.post("/", async (req, res) => {
           botText = "Desculpe, tive um problema aqui. Pode tentar de novo?";
         }
 
-        const sendRes = await igSendText({
-          instagramBusinessId,
-          recipientId: senderId,
-          pageAccessToken,
-          text: botText
+        const sendRes = await sendAndLog({
+          kind: "bot",
+          outText: botText
         });
 
         if (!sendRes.ok) {
-          logger.warn(
-            {
-              kind: "bot_send_failed",
-              tenantId,
-              senderId,
-              recipientId,
-              instagramBusinessId,
-              status: sendRes.status,
-              error: sendRes.json?.error,
-              tokenLen: pageAccessToken ? String(pageAccessToken).length : 0
-            },
-            "❌ IG bot: envio falhou"
-          );
-
           await appendMessage(conversationId, {
             tenantId,
             source: "instagram",
@@ -571,7 +585,6 @@ router.post("/", async (req, res) => {
             createdAt: nowIso(),
             payload: { kind: "bot_send_failed", send: sendRes }
           });
-
           continue;
         }
 
@@ -585,7 +598,7 @@ router.post("/", async (req, res) => {
           type: "text",
           text: botText,
           createdAt: nowIso(),
-          payload: { kind: "bot", sendOk: sendRes.ok, sendStatus: sendRes.status, send: sendRes }
+          payload: { kind: "bot", sendOk: true, sendStatus: sendRes.status, send: sendRes }
         });
       }
     }
