@@ -80,6 +80,9 @@ function sanitizeAccessToken(raw) {
   let t = safeStr(raw);
   if (!t) return "";
 
+  // remove Bearer
+  if (t.toLowerCase().startsWith("bearer ")) t = t.slice(7).trim();
+
   if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
     t = t.slice(1, -1).trim();
   }
@@ -95,6 +98,7 @@ function sanitizeAccessToken(raw) {
       const inner =
         obj?.access_token || obj?.pageAccessToken || obj?.token || obj?.accessToken || "";
       t = safeStr(inner).replace(/\s+/g, "");
+      if (t.toLowerCase().startsWith("bearer ")) t = t.slice(7).trim();
     } catch {
       return "";
     }
@@ -178,7 +182,7 @@ function parseIncomingBody(req) {
 }
 
 // ===============================
-// Graph send (Meta Assistant style first)
+// Graph send (mantém regra: Instagram API first)
 // ===============================
 async function igSendText({ instagramBusinessId, recipientId, accessToken, text }) {
   if (!accessToken) throw new Error("accessToken ausente");
@@ -217,9 +221,11 @@ async function igSendText({ instagramBusinessId, recipientId, accessToken, text 
     return { ok: resp.ok, status: resp.status, json, url };
   };
 
+  // ✅ 1) Instagram Graph API primeiro (regra mantida)
   const r1 = await tryPost(`https://graph.instagram.com/${META_GRAPH_VERSION}/me/messages`);
   if (r1.ok) return r1;
 
+  // ✅ 2) fallback Facebook Graph
   if (instagramBusinessId) {
     return tryPost(
       `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(instagramBusinessId)}/messages`
@@ -300,6 +306,7 @@ async function activateHandoff(conversationId) {
 
 // ===============================
 // ✅ Profile fetch (Instagram) + cache
+// Regra mantida: tenta IG Graph (graph.instagram.com) primeiro.
 // ===============================
 const igProfileCache = new Map(); // senderId -> { ts, name, avatarUrl, username }
 const IG_PROFILE_TTL_MS = 1000 * 60 * 60 * 6;
@@ -327,21 +334,43 @@ async function fetchInstagramProfile({ accessToken, senderId }) {
     const token = sanitizeAccessToken(accessToken);
     if (!token) return null;
 
-    // ⚠️ IG pode restringir fields. Tentamos um set “amigável” e se falhar, retorna null.
-    const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
+    // ✅ 1) Instagram Graph API primeiro
+    // Campos comuns no IG Graph: username, profile_picture_url (pode variar por permissão)
+    const urlIg = `https://graph.instagram.com/${encodeURIComponent(
+      senderId
+    )}?fields=username,profile_picture_url&access_token=${encodeURIComponent(token)}`;
+
+    try {
+      const respIg = await fetch(urlIg);
+      const jsonIg = await respIg.json().catch(() => ({}));
+      if (respIg.ok) {
+        const username = safeStr(jsonIg?.username);
+        const avatarUrl = safeStr(jsonIg?.profile_picture_url);
+        const name = username ? `@${username.replace(/^@/, "")}` : "Contato Instagram";
+        const data = { name, avatarUrl, username };
+        cacheSetIg(senderId, data);
+        return data;
+      }
+      logger.warn({ senderId, status: respIg.status, error: jsonIg?.error || jsonIg }, "⚠️ IG profile (instagram.com) falhou");
+    } catch (e1) {
+      logger.warn({ err: String(e1), senderId }, "⚠️ IG profile (instagram.com) exception");
+    }
+
+    // ✅ 2) fallback Facebook Graph
+    const urlFb = `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(
       senderId
     )}?fields=name,username,profile_pic&access_token=${encodeURIComponent(token)}`;
 
-    const resp = await fetch(url);
+    const resp = await fetch(urlFb);
     const json = await resp.json().catch(() => ({}));
 
     if (!resp.ok) {
-      logger.warn({ senderId, status: resp.status, error: json?.error || json }, "⚠️ IG profile fetch falhou");
+      logger.warn({ senderId, status: resp.status, error: json?.error || json }, "⚠️ IG profile fetch (facebook.com) falhou");
       return null;
     }
 
     const username = safeStr(json?.username);
-    const name = safeStr(json?.name || username, "Contato Instagram");
+    const name = safeStr(json?.name || (username ? `@${username}` : ""), "Contato Instagram");
     const avatarUrl = safeStr(json?.profile_pic);
 
     const data = { name, avatarUrl, username };
@@ -353,31 +382,89 @@ async function fetchInstagramProfile({ accessToken, senderId }) {
   }
 }
 
-async function upsertConversationIdentity({ conversationId, title, avatarUrl, metaExtra = {} }) {
+// ===============================
+// ✅ Identity persist (schema correto)
+// - NÃO existe conversation.title e conversation.meta
+// - gravar em Contact + Conversation.metadata (merge)
+// ===============================
+async function upsertConversationIdentity({
+  tenantId,
+  channel = "instagram",
+  peerId,
+  conversationId,
+  title,
+  avatarUrl,
+  metaExtra = {}
+}) {
   try {
-    if (!conversationId) return;
+    const tid = safeStr(tenantId);
+    const pid = safeStr(peerId);
+    const cid = safeStr(conversationId);
 
-    const data = {};
-    if (title) data.title = title;
+    if (!tid || !pid || !cid) return;
 
-    if (avatarUrl || (metaExtra && Object.keys(metaExtra).length)) {
-      data.meta = {
-        ...(metaExtra || {}),
-        ...(avatarUrl ? { avatarUrl } : {})
-      };
+    const cleanTitle = safeStr(title);
+    const cleanAvatar = safeStr(avatarUrl);
+
+    // 1) Atualiza Contact (fonte da verdade pro nome)
+    const contact = await prisma.contact
+      .upsert({
+        where: { tenantId_channel_externalId: { tenantId: tid, channel, externalId: pid } },
+        update: {
+          ...(cleanTitle ? { name: cleanTitle } : {}),
+          ...(cleanAvatar ? { avatarUrl: cleanAvatar } : {}),
+          ...(metaExtra && Object.keys(metaExtra).length
+            ? { metadata: { ...(asJson(metaExtra)) } }
+            : {})
+        },
+        create: {
+          tenantId: tid,
+          channel,
+          externalId: pid,
+          name: cleanTitle || null,
+          avatarUrl: cleanAvatar || null,
+          metadata: metaExtra && Object.keys(metaExtra).length ? asJson(metaExtra) : undefined
+        }
+      })
+      .catch(() => null);
+
+    // 2) Atualiza Conversation.metadata (para refletir no listing/normalize)
+    //    mantém o que já existe
+    const current = await prisma.conversation
+      .findUnique({ where: { id: cid }, select: { metadata: true } })
+      .catch(() => null);
+
+    const currMeta = asJson(current?.metadata);
+
+    const patch = {
+      ...(cleanTitle ? { title: cleanTitle } : {}),
+      ...(cleanAvatar ? { avatarUrl: cleanAvatar } : {}),
+      ...(metaExtra && Object.keys(metaExtra).length ? metaExtra : {})
+    };
+
+    if (Object.keys(patch).length) {
+      await prisma.conversation
+        .update({
+          where: { id: cid },
+          data: { metadata: { ...currMeta, ...patch } }
+        })
+        .catch(() => {});
     }
 
-    if (!Object.keys(data).length) return;
-
-    await prisma.conversation.update({
-      where: { id: String(conversationId) },
-      data: {
-        ...data,
-        updatedAt: new Date()
-      }
-    });
+    // 3) garante vínculo da conversa com o contact (se conv já tem contactId ok; se não tiver, ignore)
+    if (contact?.id) {
+      await prisma.conversation
+        .update({
+          where: { id: cid },
+          data: { contactId: contact.id }
+        })
+        .catch(() => {});
+    }
   } catch (e) {
-    logger.warn({ err: String(e), conversationId }, "⚠️ IG: falha ao salvar identity na conversation");
+    logger.warn(
+      { err: String(e), tenantId, peerId, conversationId },
+      "⚠️ IG: falha ao salvar identity (contact + conversation.metadata)"
+    );
   }
 }
 
@@ -465,7 +552,7 @@ router.post("/", async (req, res) => {
         const botEnabled = await isInstagramBotEnabled(tenantId);
         const peerId = `ig:${senderId}`;
 
-        // ✅ nome + avatar (best-effort)
+        // ✅ nome + avatar (best-effort) - IG API first
         const prof = await fetchInstagramProfile({ accessToken, senderId });
         const displayName = safeStr(prof?.name, "Contato Instagram");
         const avatarUrl = safeStr(prof?.avatarUrl);
@@ -478,6 +565,8 @@ router.post("/", async (req, res) => {
           peerId,
           title: displayName || "Contato Instagram",
           accountId: instagramBusinessId || null,
+          // OBS: conversations.js não “salva” meta automaticamente;
+          // a persistência correta é feita logo abaixo em upsertConversationIdentity()
           meta: {
             instagramBusinessId,
             recipientId,
@@ -493,22 +582,28 @@ router.post("/", async (req, res) => {
         const conversation = convRes.conversation;
         const conversationId = String(conversation.id);
 
-        // ✅ se título é genérico, atualiza
+        // ✅ Detecta título genérico via metadata.title (ou fallback)
+        const currentTitle = safeStr(conversation?.title);
         const isGenericTitle =
-          !safeStr(conversation?.title) ||
-          ["contato", "contato instagram"].includes(safeStr(conversation?.title).toLowerCase());
+          !currentTitle || ["contato", "contato instagram"].includes(currentTitle.toLowerCase());
 
         if (isGenericTitle || avatarUrl || username) {
           await upsertConversationIdentity({
+            tenantId,
+            channel: "instagram",
+            peerId,
             conversationId,
-            title: displayName && !["contato", "contato instagram"].includes(displayName.toLowerCase())
-              ? displayName
-              : undefined,
+            title:
+              displayName &&
+              !["contato", "contato instagram"].includes(displayName.toLowerCase())
+                ? displayName
+                : undefined,
             avatarUrl,
             metaExtra: {
               senderId,
               recipientId,
               instagramBusinessId,
+              ...(ch.pageId ? { pageId: ch.pageId } : {}),
               ...(username ? { username } : {})
             }
           });
@@ -604,7 +699,10 @@ router.post("/", async (req, res) => {
 
         const route = await decideRoute({ accountSettings, conversation, messageText: text });
 
-        logger.info({ kind: "route_decision", tenantId, senderId, instagramBusinessId, route, textPreview: text.slice(0, 40) }, "🤖 IG decideRoute");
+        logger.info(
+          { kind: "route_decision", tenantId, senderId, instagramBusinessId, route, textPreview: text.slice(0, 40) },
+          "🤖 IG decideRoute"
+        );
 
         // HANDOFF
         if (route?.target && route.target !== "bot") {
