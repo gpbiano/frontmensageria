@@ -560,12 +560,22 @@ async function upsertContact({
     ...(safeStr(avatarUrl) ? { avatarUrl: safeStr(avatarUrl) } : {})
   };
 
+  // ✅ NÃO sobrescreve metadata do Contact (merge)
+  const existing = await prisma.contact
+    .findUnique({
+      where: { tenantId_channel_externalId: { tenantId, channel, externalId } },
+      select: { metadata: true }
+    })
+    .catch(() => null);
+
+  const mergedContactMeta = { ...asJson(existing?.metadata), ...metaPatch };
+
   return prisma.contact.upsert({
     where: { tenantId_channel_externalId: { tenantId, channel, externalId } },
     update: {
       ...(finalName ? { name: finalName } : {}),
       ...(phone ? { phone } : {}),
-      metadata: metaPatch
+      metadata: mergedContactMeta
     },
     create: {
       tenantId,
@@ -573,7 +583,7 @@ async function upsertContact({
       externalId,
       name: finalName,
       phone: phone || null,
-      metadata: metaPatch
+      metadata: mergedContactMeta
     }
   });
 }
@@ -595,7 +605,12 @@ export async function getOrCreateChannelConversation(dbOrPayload, maybePayload) 
 
   let resolvedName = resolveContactName(payload, payload.raw || payload);
   if (resolvedName === "Contato") resolvedName = displayNameFallbackByChannel(channel, peerId);
-  if (displayName && (isGenericTitle(resolvedName) || resolvedName === displayNameFallbackByChannel(channel, peerId))) {
+
+  const fallback = displayNameFallbackByChannel(channel, peerId);
+  if (
+    displayName &&
+    (isGenericTitle(resolvedName) || safeStr(resolvedName) === safeStr(fallback))
+  ) {
     resolvedName = displayName;
   }
 
@@ -727,15 +742,18 @@ async function promoteToInboxPrisma({ convRow, reason = "handoff" }) {
     queuedAt: meta.queuedAt || now
   };
 
+  const hs = patch.handoffSince instanceof Date ? patch.handoffSince.toISOString() : String(patch.handoffSince);
+  const qa = patch.queuedAt instanceof Date ? patch.queuedAt.toISOString() : String(patch.queuedAt);
+
   return prisma.conversation.update({
     where: { id: convRow.id },
     data: {
       currentMode: "human",
       handoffActive: true,
-      handoffSince: new Date(patch.handoffSince),
+      handoffSince: new Date(hs),
       inboxVisible: true,
       inboxStatus: "waiting_human",
-      queuedAt: new Date(patch.queuedAt),
+      queuedAt: new Date(qa),
       metadata: setMeta(convRow, patch)
     }
   });
@@ -873,14 +891,12 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 
   let nameFromMsg = resolveContactName({}, rawMsg);
   if (isGenericTitle(nameFromMsg)) {
-    // não atualiza se é genérico
     nameFromMsg = "";
   }
 
   const fallback = displayNameFallbackByChannel(convNorm.channel, peerId);
   if (safeStr(nameFromMsg) && safeStr(nameFromMsg) !== fallback) {
-    const shouldUpdateTitle =
-      isGenericTitle(currentTitle) || currentTitle === fallback;
+    const shouldUpdateTitle = isGenericTitle(currentTitle) || currentTitle === fallback;
 
     if (shouldUpdateTitle) {
       await prisma.conversation
@@ -922,21 +938,65 @@ export async function appendMessage(dbOrConversationId, conversationIdOrRaw, may
 // ROTAS
 // ======================================================
 
-// GET /conversations?inbox=all
+// GET /conversations
+// Compat:
+// - legado: sem query => retorna somente inboxVisible (como antes)
+// - novo front: quando vier status/source/mode/kind => retorna "all" (não filtra por inboxVisible)
 router.get("/", async (req, res) => {
   try {
     const tenantId = requireTenantOr401(req, res);
     if (!tenantId) return;
 
+    const qStatus = safeStr(req.query.status || "").toLowerCase(); // open|closed|all
+    const qSource = safeStr(req.query.source || "").toLowerCase(); // all|whatsapp|webchat|messenger|instagram
+    const qMode = safeStr(req.query.mode || "").toLowerCase(); // all|bot|human
+    const qKind = safeStr(req.query.kind || "").toLowerCase(); // all|inbox (compat)
+    const qInbox = safeStr(req.query.inbox || "").toLowerCase(); // all|inbox (legado)
+
+    // ✅ regra chave pro teu bug:
+    // se o front novo mandar status/source/mode/kind, a gente NÃO filtra por inboxVisible,
+    // senão webchat/bot-only nunca aparece.
+    const isNewFilterRequest =
+      !!qStatus || !!qSource || !!qMode || !!qKind;
+
+    const shouldReturnAll =
+      qInbox === "all" ||
+      qKind === "all" ||
+      qSource === "all" ||
+      qMode === "all" ||
+      qStatus === "all" ||
+      isNewFilterRequest;
+
+    const where = { tenantId };
+
+    if (qStatus === "open") where.status = "open";
+    if (qStatus === "closed") where.status = "closed";
+
+    if (qSource && qSource !== "all") {
+      // no teu modelo, channel = source
+      where.channel = qSource;
+    }
+
+    // mode (human/bot) é em column ou metadata; então filtramos depois do normalize
+    // kind idem
+
     const rows = await prisma.conversation.findMany({
-      where: { tenantId },
+      where,
       orderBy: { updatedAt: "desc" },
       include: { contact: true }
     });
 
     let items = rows.map(normalizeConversationRow).filter(Boolean);
 
-    if (req.query.inbox !== "all") {
+    // filtro mode
+    if (qMode === "human") items = items.filter((c) => String(c.currentMode).toLowerCase() === "human");
+    if (qMode === "bot") items = items.filter((c) => String(c.currentMode).toLowerCase() !== "human");
+
+    // filtro kind (quando front mandar kind=inbox)
+    if (qKind === "inbox") items = items.filter((c) => c.inboxVisible === true);
+
+    // legado: se não pediu all e não é request novo, mantém comportamento antigo (só inbox)
+    if (!shouldReturnAll && qInbox !== "all") {
       items = items.filter((c) => c.inboxVisible === true);
     }
 
@@ -946,9 +1006,9 @@ router.get("/", async (req, res) => {
         new Date(a.queuedAt || a.updatedAt).getTime()
     );
 
-    res.json(items);
+    return res.json(items);
   } catch (e) {
-    res.status(500).json({ error: "Falha ao listar conversas", detail: String(e?.message || e) });
+    return res.status(500).json({ error: "Falha ao listar conversas", detail: String(e?.message || e) });
   }
 });
 
@@ -972,9 +1032,9 @@ router.get("/:id/messages", async (req, res) => {
       orderBy: { createdAt: "asc" }
     });
 
-    res.json(msgs.map((m) => normalizeMessageRow(convNorm, m)));
+    return res.json(msgs.map((m) => normalizeMessageRow(convNorm, m)));
   } catch (e) {
-    res.status(500).json({ error: "Falha ao listar mensagens", detail: String(e?.message || e) });
+    return res.status(500).json({ error: "Falha ao listar mensagens", detail: String(e?.message || e) });
   }
 });
 
@@ -1037,7 +1097,7 @@ router.post("/:id/messages", async (req, res) => {
 
     return res.status(201).json(r.msg);
   } catch (e) {
-    res.status(500).json({ error: "Falha ao enviar mensagem", detail: String(e?.message || e) });
+    return res.status(500).json({ error: "Falha ao enviar mensagem", detail: String(e?.message || e) });
   }
 });
 
@@ -1090,7 +1150,7 @@ router.patch("/:id/status", async (req, res) => {
     const norm = normalizeConversationRow(updated);
     return res.json({ ok: true, conversation: norm });
   } catch (e) {
-    res.status(500).json({ error: "Falha ao encerrar conversa", detail: String(e?.message || e) });
+    return res.status(500).json({ error: "Falha ao encerrar conversa", detail: String(e?.message || e) });
   }
 });
 
