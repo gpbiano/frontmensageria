@@ -1,8 +1,8 @@
 // backend/src/routes/channels/messengerRouter.js
 // ✅ Alinhado com conversations.js (core)
-// - botEnabled vem EXCLUSIVAMENTE de ChannelConfig.config.botEnabled
+// - botEnabled vem EXCLUSIVAMENTE de ChannelConfig.config.botEnabled (default: TRUE)
 // - Inbox/Handoff é sempre promovido via appendMessage({ handoff:true })
-// - Nunca altera estado direto da conversation (exceto: metadata/title para perfil)
+// - Nunca altera estado direto da conversation (exceto: metadata/title para perfil via Conversation.metadata + Contact)
 // - peerId padrão: ms:<PSID>
 
 import express from "express";
@@ -66,7 +66,9 @@ function validateMetaSignature(req) {
     .update(req.rawBody)
     .digest("hex");
 
-  return timingSafeEqualHex(sig, `sha256=${digest}`) ? { ok: true } : { ok: false };
+  return timingSafeEqualHex(sig, `sha256=${digest}`)
+    ? { ok: true }
+    : { ok: false };
 }
 
 function isMessageEvent(m) {
@@ -102,23 +104,11 @@ function cacheSetMs(senderId, data) {
 // ======================================================
 // ChannelConfig helpers
 // ======================================================
-async function isMessengerBotEnabled(tenantId) {
-  try {
-    const row = await prisma.channelConfig.findFirst({
-      where: { tenantId, channel: "messenger", enabled: true },
-      select: { config: true }
-    });
-    return row?.config?.botEnabled === true;
-  } catch {
-    return false;
-  }
-}
-
 async function getChannelConfigForPageId(pageId) {
   if (!pageId) return null;
 
   return prisma.channelConfig.findFirst({
-    where: { channel: "messenger", enabled: true, pageId },
+    where: { channel: "messenger", enabled: true, pageId: String(pageId) },
     orderBy: { updatedAt: "desc" }
   });
 }
@@ -136,14 +126,31 @@ async function getMsConfig(tenantId, pageId) {
   let cfg = await getChannelConfigForPageId(pageId);
   if (!cfg && tenantId) {
     cfg = await prisma.channelConfig.findFirst({
-      where: { tenantId, channel: "messenger", enabled: true }
+      where: { tenantId: String(tenantId), channel: "messenger", enabled: true },
+      orderBy: { updatedAt: "desc" }
     });
   }
 
   return {
     accessToken: safeStr(cfg?.accessToken),
-    pageId: safeStr(cfg?.pageId || pageId)
+    pageId: safeStr(cfg?.pageId || pageId),
+    config: asJson(cfg?.config),
+    channelId: safeStr(cfg?.id)
   };
+}
+
+// ✅ DEFAULT: bot ligado. Só desliga se config.botEnabled === false
+async function isMessengerBotEnabledForPage(tenantId, pageId) {
+  try {
+    const cfg = await getChannelConfigForPageId(pageId);
+    if (cfg?.tenantId && String(cfg.tenantId) !== String(tenantId)) {
+      // em teoria não acontece (tenantId já vem resolvido por page), mas fica seguro
+    }
+    const c = asJson(cfg?.config);
+    return c.botEnabled !== false;
+  } catch {
+    return true;
+  }
 }
 
 // ======================================================
@@ -189,49 +196,76 @@ async function fetchMessengerProfile({ accessToken, senderId }) {
 // - Conversation NÃO tem campo `title` nem `meta`
 // - Tudo vai em Conversation.metadata + Contact.name/avatarUrl
 // ======================================================
-async function persistIdentity({ tenantId, peerId, name, avatarUrl, metaExtra = {} }) {
+async function persistIdentity({
+  tenantId,
+  peerId,
+  name,
+  avatarUrl,
+  metaExtra = {},
+  preferConversationId = null
+}) {
   try {
-    if (!tenantId || !peerId) return;
+    const tid = safeStr(tenantId);
+    const pid = safeStr(peerId);
+    if (!tid || !pid) return;
 
     const channel = "messenger";
     const safeName = safeStr(name);
     const safeAvatar = safeStr(avatarUrl);
 
-    // 1) Contact é a fonte de verdade (nome/avatar)
-    await prisma.contact
+    // 1) Contact é fonte de verdade (nome/avatar)
+    const contact = await prisma.contact
       .upsert({
-        where: { tenantId_channel_externalId: { tenantId, channel, externalId: peerId } },
+        where: {
+          tenantId_channel_externalId: {
+            tenantId: tid,
+            channel,
+            externalId: pid
+          }
+        },
         update: {
           ...(safeName ? { name: safeName } : {}),
           ...(safeAvatar ? { avatarUrl: safeAvatar } : {}),
-          ...(metaExtra && Object.keys(metaExtra).length ? { metadata: asJson(metaExtra) } : {})
+          ...(metaExtra && Object.keys(metaExtra).length
+            ? { metadata: asJson(metaExtra) }
+            : {})
         },
         create: {
-          tenantId,
+          tenantId: tid,
           channel,
-          externalId: peerId,
+          externalId: pid,
           name: safeName || null,
           avatarUrl: safeAvatar || null,
-          metadata: metaExtra && Object.keys(metaExtra).length ? asJson(metaExtra) : undefined
-        }
-      })
-      .catch(() => {});
-
-    // 2) Atualiza conversation.metadata (merge) para refletir no listing
-    const contactRow = await prisma.contact
-      .findUnique({
-        where: { tenantId_channel_externalId: { tenantId, channel, externalId: peerId } },
+          metadata:
+            metaExtra && Object.keys(metaExtra).length ? asJson(metaExtra) : undefined
+        },
         select: { id: true }
       })
       .catch(() => null);
 
-    if (!contactRow?.id) return;
+    if (!contact?.id) return;
 
-    const conv = await prisma.conversation.findFirst({
-      where: { tenantId, contactId: contactRow.id, channel, status: "open" },
-      orderBy: { updatedAt: "desc" },
-      select: { id: true, metadata: true }
-    });
+    // 2) Atualiza Conversation.metadata (merge) — preferindo a conversation atual
+    let conv = null;
+
+    if (preferConversationId) {
+      conv = await prisma.conversation
+        .findUnique({
+          where: { id: String(preferConversationId) },
+          select: { id: true, metadata: true, contactId: true }
+        })
+        .catch(() => null);
+    }
+
+    if (!conv?.id) {
+      conv = await prisma.conversation
+        .findFirst({
+          where: { tenantId: tid, contactId: contact.id, channel },
+          orderBy: { updatedAt: "desc" },
+          select: { id: true, metadata: true, contactId: true }
+        })
+        .catch(() => null);
+    }
 
     if (!conv?.id) return;
 
@@ -241,16 +275,29 @@ async function persistIdentity({ tenantId, peerId, name, avatarUrl, metaExtra = 
       ...(metaExtra && Object.keys(metaExtra).length ? metaExtra : {})
     };
 
-    if (!Object.keys(patch).length) return;
+    if (Object.keys(patch).length) {
+      await prisma.conversation
+        .update({
+          where: { id: conv.id },
+          data: { metadata: { ...asJson(conv.metadata), ...patch } }
+        })
+        .catch(() => {});
+    }
 
-    await prisma.conversation
-      .update({
-        where: { id: conv.id },
-        data: { metadata: { ...asJson(conv.metadata), ...patch } }
-      })
-      .catch(() => {});
+    // 3) garante vínculo conv -> contact (caso conversations.js tenha criado conv antes do contact)
+    if (String(conv.contactId || "") !== String(contact.id)) {
+      await prisma.conversation
+        .update({
+          where: { id: conv.id },
+          data: { contactId: contact.id }
+        })
+        .catch(() => {});
+    }
   } catch (e) {
-    logger.warn({ err: String(e), tenantId, peerId }, "⚠️ MS: falha ao persistir identity");
+    logger.warn(
+      { err: String(e), tenantId, peerId },
+      "⚠️ MS: falha ao persistir identity"
+    );
   }
 }
 
@@ -261,7 +308,9 @@ async function sendMessengerText({ accessToken, recipientId, text }) {
   if (!accessToken || !recipientId || !text) return;
 
   await fetch(
-    `https://graph.facebook.com/v21.0/me/messages?access_token=${encodeURIComponent(accessToken)}`,
+    `https://graph.facebook.com/v21.0/me/messages?access_token=${encodeURIComponent(
+      accessToken
+    )}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -302,30 +351,30 @@ router.post("/", async (req, res) => {
     if (!tenantId) continue;
 
     const { accessToken } = await getMsConfig(tenantId, pageId);
-    const botEnabled = await isMessengerBotEnabled(tenantId);
+
+    // ✅ botEnabled por page (default: ligado)
+    const botEnabled = await isMessengerBotEnabledForPage(tenantId, pageId);
 
     for (const m of entry.messaging || []) {
       if (!isMessageEvent(m)) continue;
 
       const senderId = safeStr(m.sender?.id);
       const text = extractText(m);
+      const peerId = `ms:${senderId}`;
 
       // ✅ perfil (nome + foto)
       const prof = await fetchMessengerProfile({ accessToken, senderId });
       const displayName = safeStr(prof?.name, "Contato");
       const avatarUrl = safeStr(prof?.avatarUrl);
 
-      const peerId = `ms:${senderId}`;
-
-      // ✅ cria/pega conversa (conversations.js usa title -> metadata.title internamente)
+      // ✅ cria/pega conversa
+      // (conversations.js pode usar title/meta internamente, mas nossa persistência é feita abaixo)
       const convRes = await getOrCreateChannelConversation({
         tenantId,
         source: "messenger",
         channel: "messenger",
         peerId,
         title: displayName || "Contato",
-        // ⚠️ conversations.js ignora `meta`, mas se vier não quebra — ainda assim,
-        // vamos persistir corretamente via persistIdentity abaixo.
         meta: {
           peerId,
           senderId,
@@ -338,20 +387,22 @@ router.post("/", async (req, res) => {
       const conv = convRes.conversation;
 
       // ✅ salva identity no lugar certo (Contact + Conversation.metadata)
-      // Só força quando for "Contato" genérico ou quando temos avatar
+      const convTitle = safeStr(conv?.title); // pode vir vazio dependendo do core
       const isGenericTitle =
-        !safeStr(conv?.title) || safeStr(conv?.title).toLowerCase() === "contato";
+        !convTitle || convTitle.toLowerCase() === "contato";
 
-      if (isGenericTitle || (displayName && displayName !== "Contato") || avatarUrl) {
+      if (
+        isGenericTitle ||
+        (displayName && displayName !== "Contato") ||
+        avatarUrl
+      ) {
         await persistIdentity({
           tenantId,
           peerId,
           name: displayName && displayName !== "Contato" ? displayName : undefined,
           avatarUrl,
-          metaExtra: {
-            senderId,
-            pageId
-          }
+          metaExtra: { senderId, pageId },
+          preferConversationId: conv.id
         });
       }
 
@@ -427,7 +478,7 @@ router.post("/", async (req, res) => {
           messageText: text
         });
 
-        // botEngine normalmente retorna objeto { replyText }, mas aceitamos string também
+        // botEngine pode retornar { replyText } ou string
         botText = safeStr(r?.replyText ?? r);
       } catch {}
 
