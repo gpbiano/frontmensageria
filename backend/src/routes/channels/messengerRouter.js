@@ -2,7 +2,7 @@
 // ✅ Alinhado com conversations.js (core)
 // - botEnabled vem EXCLUSIVAMENTE de ChannelConfig.config.botEnabled
 // - Inbox/Handoff é sempre promovido via appendMessage({ handoff:true })
-// - Nunca altera estado direto da conversation (exceto: título/meta para perfil)
+// - Nunca altera estado direto da conversation (exceto: metadata/title para perfil)
 // - peerId padrão: ms:<PSID>
 
 import express from "express";
@@ -39,6 +39,10 @@ function nowIso() {
 function safeStr(v, fallback = "") {
   const s = typeof v === "string" ? v : v == null ? "" : String(v);
   return s.trim() || fallback;
+}
+
+function asJson(obj) {
+  return obj && typeof obj === "object" ? obj : {};
 }
 
 function timingSafeEqualHex(aHex, bHex) {
@@ -159,7 +163,10 @@ async function fetchMessengerProfile({ accessToken, senderId }) {
     const resp = await fetch(url);
     const json = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      logger.warn({ senderId, status: resp.status, error: json?.error || json }, "⚠️ MS profile fetch falhou");
+      logger.warn(
+        { senderId, status: resp.status, error: json?.error || json },
+        "⚠️ MS profile fetch falhou"
+      );
       return null;
     }
 
@@ -177,32 +184,73 @@ async function fetchMessengerProfile({ accessToken, senderId }) {
   }
 }
 
-async function upsertConversationIdentity({ conversationId, title, avatarUrl, metaExtra = {} }) {
+// ======================================================
+// ✅ Persist identity (Contact + Conversation.metadata)
+// - Conversation NÃO tem campo `title` nem `meta`
+// - Tudo vai em Conversation.metadata + Contact.name/avatarUrl
+// ======================================================
+async function persistIdentity({ tenantId, peerId, name, avatarUrl, metaExtra = {} }) {
   try {
-    if (!conversationId) return;
+    if (!tenantId || !peerId) return;
 
-    const data = {};
-    if (title) data.title = title;
+    const channel = "messenger";
+    const safeName = safeStr(name);
+    const safeAvatar = safeStr(avatarUrl);
 
-    // meta merge (mantém o que já existe)
-    if (avatarUrl || (metaExtra && Object.keys(metaExtra).length)) {
-      data.meta = {
-        ...(metaExtra || {}),
-        ...(avatarUrl ? { avatarUrl } : {})
-      };
-    }
+    // 1) Contact é a fonte de verdade (nome/avatar)
+    await prisma.contact
+      .upsert({
+        where: { tenantId_channel_externalId: { tenantId, channel, externalId: peerId } },
+        update: {
+          ...(safeName ? { name: safeName } : {}),
+          ...(safeAvatar ? { avatarUrl: safeAvatar } : {}),
+          ...(metaExtra && Object.keys(metaExtra).length ? { metadata: asJson(metaExtra) } : {})
+        },
+        create: {
+          tenantId,
+          channel,
+          externalId: peerId,
+          name: safeName || null,
+          avatarUrl: safeAvatar || null,
+          metadata: metaExtra && Object.keys(metaExtra).length ? asJson(metaExtra) : undefined
+        }
+      })
+      .catch(() => {});
 
-    if (!Object.keys(data).length) return;
+    // 2) Atualiza conversation.metadata (merge) para refletir no listing
+    const contactRow = await prisma.contact
+      .findUnique({
+        where: { tenantId_channel_externalId: { tenantId, channel, externalId: peerId } },
+        select: { id: true }
+      })
+      .catch(() => null);
 
-    await prisma.conversation.update({
-      where: { id: String(conversationId) },
-      data: {
-        ...data,
-        updatedAt: new Date()
-      }
+    if (!contactRow?.id) return;
+
+    const conv = await prisma.conversation.findFirst({
+      where: { tenantId, contactId: contactRow.id, channel, status: "open" },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true, metadata: true }
     });
+
+    if (!conv?.id) return;
+
+    const patch = {
+      ...(safeName ? { title: safeName } : {}),
+      ...(safeAvatar ? { avatarUrl: safeAvatar } : {}),
+      ...(metaExtra && Object.keys(metaExtra).length ? metaExtra : {})
+    };
+
+    if (!Object.keys(patch).length) return;
+
+    await prisma.conversation
+      .update({
+        where: { id: conv.id },
+        data: { metadata: { ...asJson(conv.metadata), ...patch } }
+      })
+      .catch(() => {});
   } catch (e) {
-    logger.warn({ err: String(e), conversationId }, "⚠️ MS: falha ao salvar identity na conversation");
+    logger.warn({ err: String(e), tenantId, peerId }, "⚠️ MS: falha ao persistir identity");
   }
 }
 
@@ -262,19 +310,24 @@ router.post("/", async (req, res) => {
       const senderId = safeStr(m.sender?.id);
       const text = extractText(m);
 
-      // ✅ tenta buscar nome + avatar
+      // ✅ perfil (nome + foto)
       const prof = await fetchMessengerProfile({ accessToken, senderId });
       const displayName = safeStr(prof?.name, "Contato");
       const avatarUrl = safeStr(prof?.avatarUrl);
 
+      const peerId = `ms:${senderId}`;
+
+      // ✅ cria/pega conversa (conversations.js usa title -> metadata.title internamente)
       const convRes = await getOrCreateChannelConversation({
         tenantId,
         source: "messenger",
         channel: "messenger",
-        peerId: `ms:${senderId}`,
+        peerId,
         title: displayName || "Contato",
+        // ⚠️ conversations.js ignora `meta`, mas se vier não quebra — ainda assim,
+        // vamos persistir corretamente via persistIdentity abaixo.
         meta: {
-          peerId: `ms:${senderId}`,
+          peerId,
           senderId,
           pageId,
           ...(avatarUrl ? { avatarUrl } : {})
@@ -284,12 +337,16 @@ router.post("/", async (req, res) => {
       if (!convRes?.ok) continue;
       const conv = convRes.conversation;
 
-      // ✅ se já existia como "Contato", atualiza agora com nome/ foto
-      const isGenericTitle = !safeStr(conv?.title) || safeStr(conv?.title).toLowerCase() === "contato";
-      if (isGenericTitle || avatarUrl) {
-        await upsertConversationIdentity({
-          conversationId: conv.id,
-          title: displayName && displayName !== "Contato" ? displayName : undefined,
+      // ✅ salva identity no lugar certo (Contact + Conversation.metadata)
+      // Só força quando for "Contato" genérico ou quando temos avatar
+      const isGenericTitle =
+        !safeStr(conv?.title) || safeStr(conv?.title).toLowerCase() === "contato";
+
+      if (isGenericTitle || (displayName && displayName !== "Contato") || avatarUrl) {
+        await persistIdentity({
+          tenantId,
+          peerId,
+          name: displayName && displayName !== "Contato" ? displayName : undefined,
           avatarUrl,
           metaExtra: {
             senderId,
@@ -364,13 +421,14 @@ router.post("/", async (req, res) => {
       // BOT
       let botText = "";
       try {
-        botText = safeStr(
-          await callGenAIBot({
-            accountSettings: { tenantId, channel: "messenger" },
-            conversation: conv,
-            messageText: text
-          })
-        );
+        const r = await callGenAIBot({
+          accountSettings: { tenantId, channel: "messenger" },
+          conversation: conv,
+          messageText: text
+        });
+
+        // botEngine normalmente retorna objeto { replyText }, mas aceitamos string também
+        botText = safeStr(r?.replyText ?? r);
       } catch {}
 
       if (!botText) botText = "Entendi. Pode me dar mais detalhes?";
