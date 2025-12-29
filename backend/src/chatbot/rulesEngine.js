@@ -1,7 +1,8 @@
 // backend/src/chatbot/rulesEngine.js
 
 /**
- * Configuração única por enquanto — no futuro pode haver contas diferentes
+ * Configuração simples in-memory.
+ * Pode evoluir para DB depois (por tenant/channel/account).
  */
 const accounts = {
   default: {
@@ -32,8 +33,32 @@ function safeArr(v) {
   return Array.isArray(v) ? v : [];
 }
 
+/**
+ * Decide o "enabled" com fallback saudável:
+ * - Se vier explicitamente false → false
+ * - Se vier explicitamente true → true
+ * - Se não vier → true (pra não derrubar o bot por falta de campo)
+ */
+function coerceEnabled(obj) {
+  // prioridades (mais específico primeiro)
+  const direct = obj?.enabled;
+  if (direct === false) return false;
+  if (direct === true) return true;
+
+  const botEnabled = obj?.botEnabled;
+  if (botEnabled === false) return false;
+  if (botEnabled === true) return true;
+
+  const cfgBotEnabled = obj?.config?.botEnabled;
+  if (cfgBotEnabled === false) return false;
+  if (cfgBotEnabled === true) return true;
+
+  return true; // ✅ default
+}
+
 function normalizeAccountSettings(s) {
   const obj = s && typeof s === "object" ? s : {};
+
   const transferKeywords = safeArr(obj.transferKeywords)
     .map((k) => safeStr(k).toLowerCase())
     .filter(Boolean);
@@ -43,35 +68,48 @@ function normalizeAccountSettings(s) {
     : 3;
 
   return {
-    enabled: obj.enabled === true,
+    enabled: coerceEnabled(obj),
     maxBotAttempts,
     transferKeywords
   };
 }
 
+/**
+ * Permite configurar settings por conta "lógica".
+ * Exemplos de accountKey (sugestões):
+ * - "default"
+ * - "instagram:17841478008289331"
+ * - "messenger:903617036165446"
+ * - "tenant:cmjf5y6zt0000qe7495ry0q7e"
+ */
 export function getChatbotSettingsForAccount(accountId = "default") {
-  // ✅ garante sempre um objeto existente
   const base = ensureAccount(accountId);
-  // ✅ normaliza para evitar campos faltando/errados
-  return (accounts[String(accountId || "default").trim() || "default"] = {
+  const normalized = normalizeAccountSettings(base);
+
+  // mantém storage normalizado
+  accounts[String(accountId || "default").trim() || "default"] = {
     ...base,
-    ...normalizeAccountSettings(base)
-  });
+    ...normalized
+  };
+
+  return accounts[String(accountId || "default").trim() || "default"];
 }
 
 /**
  * Lógica que decide se a conversa vai para BOT ou HUMANO
- * ✅ NULL-SAFE: nunca quebra se vier accountSettings/conversation/messageText undefined
+ * NULL-SAFE: nunca quebra se vier undefined
  */
 export function decideRoute({ accountSettings, conversation, messageText } = {}) {
+  // accountSettings pode vir "incompleto" (como no webhook)
+  // → default enabled=true para não forçar handoff
   const settings = normalizeAccountSettings(accountSettings || accounts.default || {});
   const conv = conversation && typeof conversation === "object" ? conversation : {};
   const text = safeStr(messageText, "");
   const lower = text.toLowerCase();
 
-  // ✅ se bot desligado (ou settings ausentes), vai pro humano sem quebrar
+  // se conversa já está em humano/handoff, deixa o caller tratar — aqui só decide bot/human por regras
   if (!settings.enabled) {
-    return { target: "human", reason: "chatbot_disabled_or_missing_settings" };
+    return { target: "human", reason: "chatbot_disabled" };
   }
 
   // palavras-chave que pedem HUMANO
