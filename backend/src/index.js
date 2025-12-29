@@ -218,6 +218,37 @@ app.use(
 );
 
 // ===============================
+// ✅ BODY PARSERS (CRÍTICO)
+// - Precisam vir ANTES do /login (authRouter)
+// - Mas NÃO podem “tocar” o Instagram webhook (usa RAW)
+// ===============================
+const jsonParser = express.json({
+  limit: "5mb",
+  type: ["application/json", "application/*+json"],
+  verify: (req, _res, buf) => {
+    // útil p/ assinatura (WA) e debug
+    req.rawBody = buf;
+  }
+});
+
+const urlParser = express.urlencoded({ extended: true });
+
+// pula parsers no Instagram (porque ele usa RAW 1:1 com assinatura)
+function skipInstagram(req) {
+  return req.originalUrl?.startsWith("/webhook/instagram");
+}
+
+app.use((req, res, next) => {
+  if (skipInstagram(req)) return next();
+  return jsonParser(req, res, next);
+});
+
+app.use((req, res, next) => {
+  if (skipInstagram(req)) return next();
+  return urlParser(req, res, next);
+});
+
+// ===============================
 // 🌍 ROTAS PÚBLICAS
 // ===============================
 app.get("/", (_req, res) => res.json({ status: "ok" }));
@@ -244,6 +275,7 @@ app.get("/health", async (_req, res) => {
   });
 });
 
+// ✅ Auth (precisa do JSON parser já ativo)
 app.use("/", authRouter);
 app.use("/auth", passwordRouter);
 
@@ -255,23 +287,11 @@ app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 // ✅ WEBHOOKS PÚBLICOS
 // ===============================
 
-// Whats/Messenger podem seguir com JSON normal
-app.use(
-  express.json({
-    limit: "5mb",
-    type: ["application/json", "application/*+json"],
-    verify: (req, _res, buf) => {
-      req.rawBody = buf;
-    }
-  })
-);
-app.use(express.urlencoded({ extended: true }));
-
+// Whats/Messenger usam JSON normal (já parseado acima)
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 
-// ✅ CRÍTICO: Instagram com RAW ANTES DE QUALQUER JSON “tocar” nele.
-// Isso garante assinatura 1:1 com Meta.
+// ✅ CRÍTICO: Instagram com RAW (sem JSON antes)
 app.use(
   "/webhook/instagram",
   express.raw({
