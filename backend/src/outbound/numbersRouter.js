@@ -91,11 +91,23 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     const data = {
       tenantId,
       phoneE164: normalized,
-      label: label ? String(label) : null,
       provider: provider ? String(provider) : "meta",
       isActive: isActive !== undefined ? !!isActive : true
     };
-    if (modelHasField("OutboundNumber", "metadata")) data.metadata = metadata ?? undefined;
+
+    // ✅ label só se existir no schema
+    if (modelHasField("OutboundNumber", "label")) {
+      data.label = label ? String(label) : null;
+    } else if (modelHasField("OutboundNumber", "metadata")) {
+      // fallback: guarda label no metadata
+      data.metadata = { ...(metadata || {}), label: label ? String(label) : undefined };
+    }
+
+    if (modelHasField("OutboundNumber", "metadata")) {
+      // preserva metadata existente (sem sobrescrever label se já colocou acima)
+      const base = (typeof data.metadata === "object" && data.metadata) ? data.metadata : {};
+      data.metadata = { ...(metadata || {}), ...base };
+    }
 
     const item = await delegate.create({ data });
     return res.status(201).json({ ok: true, item });
@@ -182,19 +194,34 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
       delegate === prisma.outboundNumber && typeof prisma.outboundNumber?.upsert === "function";
 
     const upserted = [];
+    const supportsLabel = modelHasField("OutboundNumber", "label");
+    const supportsMetadata = modelHasField("OutboundNumber", "metadata");
 
     for (const it of unique) {
       const create = {
         tenantId,
         phoneE164: it.phoneE164,
-        label: it.label ? String(it.label) : null,
         provider: it.provider ? String(it.provider) : "meta",
         isActive: true
       };
-      if (modelHasField("OutboundNumber", "metadata") && it.metadata) create.metadata = it.metadata;
+
+      // ✅ label só se existir; senão joga em metadata
+      if (supportsLabel) {
+        create.label = it.label ? String(it.label) : null;
+      } else if (supportsMetadata) {
+        create.metadata = { ...(it.metadata || {}), label: it.label ? String(it.label) : undefined };
+      } else if (it.metadata) {
+        // se nem metadata existir, ignora
+      }
+
+      // metadata extra
+      if (supportsMetadata) {
+        const base = (typeof create.metadata === "object" && create.metadata) ? create.metadata : {};
+        create.metadata = { ...(it.metadata || {}), ...base };
+      }
 
       const updateData = { ...create };
-      delete updateData.tenantId;
+      delete updateData.tenantId; // não atualiza tenantId
 
       try {
         if (canUpsert) {
@@ -227,7 +254,6 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
       }
     }
 
-    // ✅ Compat: items + numbers
     return res.json({ ok: true, synced: upserted.length, items: upserted, numbers: upserted });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ numbersRouter POST /sync failed");
