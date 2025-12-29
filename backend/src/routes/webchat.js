@@ -415,111 +415,173 @@ async function tryAutoReturnToBot({ tenantId, convRow }) {
 }
 
 async function maybeReplyWithBot({ tenantId, convRow, cleanText }) {
-  const convMeta0 = asJson(convRow?.metadata);
-  if (String(convRow?.status || "") !== "open") return { ok: true, didBot: false };
+  try {
+    if (String(convRow?.status || "") !== "open") return { ok: true, didBot: false };
 
-  // ✅ FIX: respeita currentMode no metadata OU no campo currentMode
-  let mode = String(convMeta0.currentMode || convRow?.currentMode || "").toLowerCase();
+    const convMeta0 = asJson(convRow?.metadata);
+    let mode = String(convMeta0.currentMode || convRow?.currentMode || "").toLowerCase();
 
-  // ✅ AUTO-FIX: se estiver "human" por engano e NÃO for handoff ativo, volta pra bot
-  if (mode === "human") {
-    const fix = await tryAutoReturnToBot({ tenantId, convRow });
+    // ✅ AUTO-FIX: se estiver human por engano e NÃO for handoff ativo, volta pra bot
+    if (mode === "human") {
+      const fix = await tryAutoReturnToBot({ tenantId, convRow });
 
-    if (!fix.changed) {
+      if (!fix.changed) {
+        logger.info(
+          { tenantId, convId: convRow?.id, reason: fix.reason },
+          "🤖 webchat: skip bot (mode=human)"
+        );
+        return { ok: true, didBot: false };
+      }
+
+      const fresh = await prisma.conversation.findFirst({
+        where: { id: convRow.id, tenantId }
+      });
+      if (fresh) {
+        convRow = fresh;
+        const fm = asJson(fresh.metadata);
+        mode = String(fm.currentMode || fresh.currentMode || "").toLowerCase();
+      }
+    }
+
+    if (mode === "human") {
+      logger.info({ tenantId, convId: convRow?.id }, "🤖 webchat: skip bot (still human)");
+      return { ok: true, didBot: false };
+    }
+
+    // ✅ botEnabled per webchat config
+    let botEnabled = false;
+    try {
+      const row = await prisma.channelConfig.findFirst({
+        where: { tenantId, channel: "webchat" },
+        select: { config: true, enabled: true }
+      });
+      const c = row?.config && typeof row.config === "object" ? row.config : {};
+      botEnabled = row?.enabled !== false && c.botEnabled === true;
       logger.info(
-        { tenantId, convId: convRow?.id, reason: fix.reason },
-        "🤖 webchat: skip bot (mode=human)"
+        { tenantId, convId: convRow?.id, botEnabled, hasConfig: !!row },
+        "🤖 webchat: bot config"
+      );
+    } catch (e) {
+      logger.warn({ tenantId, convId: convRow?.id, err: String(e?.message || e) }, "🤖 webchat: bot config read failed");
+      botEnabled = false;
+    }
+
+    if (!botEnabled) {
+      logger.info({ tenantId, convId: convRow?.id }, "🤖 webchat: bot disabled (botEnabled=false)");
+      return { ok: true, didBot: false };
+    }
+
+    // ✅ carrega bot engine (tenta múltiplos paths p/ não quebrar)
+    let botEngine = null;
+    let botEngineFrom = "";
+    const candidates = [
+      "../chatbot/botEngine.js",
+      "../bot/botEngine.js",
+      "../services/botEngine.js",
+      "../core/botEngine.js"
+    ];
+
+    for (const p of candidates) {
+      try {
+        const mod = await import(p);
+        const engine = mod?.default || mod?.botEngine || mod;
+        if (typeof engine === "function" || typeof engine?.run === "function") {
+          botEngine = engine;
+          botEngineFrom = p;
+          break;
+        }
+      } catch {}
+    }
+
+    if (!botEngine) {
+      logger.warn({ tenantId, convId: convRow?.id }, "🤖 webchat: botEngine not found in candidates");
+      return { ok: true, didBot: false };
+    }
+
+    logger.info({ tenantId, convId: convRow?.id, botEngineFrom }, "🤖 webchat: botEngine loaded");
+
+    const history = await getLastMessagesForBot({
+      tenantId,
+      conversationId: convRow.id,
+      take: 10
+    });
+
+    let botRes;
+    try {
+      if (typeof botEngine === "function") {
+        botRes = await botEngine({
+          channel: "webchat",
+          conversation: convRow,
+          userText: cleanText,
+          messages: history
+        });
+      } else {
+        botRes = await botEngine.run({
+          channel: "webchat",
+          conversation: convRow,
+          userText: cleanText,
+          messages: history
+        });
+      }
+    } catch (e) {
+      logger.error(
+        { tenantId, convId: convRow?.id, err: String(e?.message || e) },
+        "🤖 webchat: botEngine execution failed"
       );
       return { ok: true, didBot: false };
     }
 
-    // recarrega convRow/meta após correção
-    const fresh = await prisma.conversation.findFirst({
-      where: { id: convRow.id, tenantId }
-    });
-    if (fresh) {
-      convRow = fresh;
-      const fm = asJson(fresh.metadata);
-      mode = String(fm.currentMode || fresh.currentMode || "").toLowerCase();
+    // ✅ aceita string OU objeto {text|message|reply|output}
+    let botText = "";
+    if (typeof botRes === "string") botText = botRes;
+    else if (botRes && typeof botRes === "object") {
+      botText =
+        String(
+          botRes.text ??
+            botRes.message ??
+            botRes.reply ??
+            botRes.output ??
+            botRes.content ??
+            ""
+        );
     }
-  }
 
-  if (mode === "human") return { ok: true, didBot: false };
+    botText = String(botText || "").trim();
 
-  // bot enabled per webchat config
-  let cfg;
-  try {
-    const row = await prisma.channelConfig.findFirst({
-      where: { tenantId, channel: "webchat" },
-      select: { config: true }
+    logger.info(
+      { tenantId, convId: convRow?.id, botTextLen: botText.length },
+      "🤖 webchat: botEngine returned"
+    );
+
+    if (!botText) return { ok: true, didBot: false };
+
+    const { appendMessage } = await getConversationsCore();
+
+    const r = await appendMessage(String(convRow.id), {
+      channel: "webchat",
+      source: "webchat",
+      type: "text",
+      from: "bot",
+      direction: "out",
+      text: botText,
+      createdAt: nowIso(),
+      tenantId,
+      isBot: true
     });
-    const c = row?.config && typeof row.config === "object" ? row.config : {};
-    cfg = { botEnabled: c.botEnabled === true };
-  } catch {
-    cfg = { botEnabled: false };
-  }
 
-  if (!cfg.botEnabled) return { ok: true, didBot: false };
-
-  // carrega bot engine
-  let botEngine;
-  try {
-    const mod = await import("../chatbot/botEngine.js");
-    botEngine = mod?.default || mod?.botEngine || mod;
-  } catch {
-    return { ok: true, didBot: false };
-  }
-
-  if (typeof botEngine !== "function" && typeof botEngine?.run !== "function") {
-    return { ok: true, didBot: false };
-  }
-
-  const history = await getLastMessagesForBot({
-    tenantId,
-    conversationId: convRow.id,
-    take: 10
-  });
-
-  let botText = "";
-  try {
-    if (typeof botEngine === "function") {
-      botText = await botEngine({
-        channel: "webchat",
-        conversation: convRow,
-        userText: cleanText,
-        messages: history
-      });
-    } else {
-      botText = await botEngine.run({
-        channel: "webchat",
-        conversation: convRow,
-        userText: cleanText,
-        messages: history
-      });
+    if (!r?.ok) {
+      logger.error({ tenantId, convId: convRow?.id, err: r?.error }, "🤖 webchat: append bot message failed");
+      return { ok: false, didBot: false };
     }
-  } catch {
+
+    logger.info({ tenantId, convId: convRow?.id, msgId: r?.msg?.id }, "🤖 webchat: bot message appended");
+    return { ok: true, didBot: true, botMessage: r.msg };
+  } catch (e) {
+    logger.error({ tenantId, convId: convRow?.id, err: String(e?.message || e) }, "🤖 webchat: maybeReplyWithBot crashed");
     return { ok: true, didBot: false };
   }
-
-  botText = String(botText || "").trim();
-  if (!botText) return { ok: true, didBot: false };
-
-  const { appendMessage } = await getConversationsCore();
-
-  const r = await appendMessage(String(convRow.id), {
-    channel: "webchat",
-    source: "webchat",
-    type: "text",
-    from: "bot",
-    direction: "out",
-    text: botText,
-    createdAt: nowIso(),
-    tenantId,
-    isBot: true
-  });
-
-  return r?.ok ? { ok: true, didBot: true, botMessage: r.msg } : { ok: false, didBot: false };
 }
+
 
 /**
  * =========================
