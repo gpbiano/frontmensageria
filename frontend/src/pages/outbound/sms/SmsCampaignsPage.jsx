@@ -18,6 +18,40 @@ function formatDateTime(iso) {
   return s.slice(0, 19).replace("T", " ");
 }
 
+function getAudienceCount(c) {
+  if (Number.isFinite(Number(c?.audienceCount))) return Number(c.audienceCount);
+  if (Number.isFinite(Number(c?.audience?.total))) return Number(c.audience.total);
+  if (Array.isArray(c?.audience?.rows)) return c.audience.rows.length;
+  return 0;
+}
+
+// ✅ status "efetivo" (corrige casos onde backend deixou running sem audiência / sem progresso)
+// evita “textarea travado” por status errado.
+function effectiveStatus(c) {
+  const raw = String(c?.status || "").toLowerCase();
+
+  // Heurística segura:
+  // - se está "running" mas não tem audiência, trata como draft.
+  // - se está "running" mas cursor/sent zerados e não tem startedAt, trata como draft.
+  const audience = getAudienceCount(c);
+  const cursor = Number(c?.metadata?.smsProgress?.cursor || 0);
+  const sent = Number(c?.metadata?.smsProgress?.sent || 0);
+
+  const startedAt =
+    c?.startedAt ||
+    c?.metadata?.timestamps?.startedAt ||
+    c?.metadata?.timestamps?.started_at ||
+    c?.metadata?.timestamps?.started ||
+    null;
+
+  if (raw === "running") {
+    if (!audience) return "draft";
+    if (!startedAt && cursor === 0 && sent === 0) return "draft";
+  }
+
+  return raw || "draft";
+}
+
 function statusLabel(s) {
   const v = String(s || "").toLowerCase();
   if (v === "draft") return "Rascunho";
@@ -35,20 +69,12 @@ function statusPillClass(s) {
 }
 
 function canEditCampaign(c) {
-  const st = String(c?.status || "").toLowerCase();
+  const st = effectiveStatus(c);
   return ["draft", "paused", "failed", ""].includes(st);
 }
 
-
 function canDeleteCampaign(c) {
-  return String(c?.status || "").toLowerCase() === "draft";
-}
-
-function getAudienceCount(c) {
-  if (Number.isFinite(Number(c?.audienceCount))) return Number(c.audienceCount);
-  if (Number.isFinite(Number(c?.audience?.total))) return Number(c.audience.total);
-  if (Array.isArray(c?.audience?.rows)) return c.audience.rows.length;
-  return 0;
+  return effectiveStatus(c) === "draft";
 }
 
 // -------------------------
@@ -189,6 +215,23 @@ function Icon({ name, size = 18, title }) {
   );
 }
 
+// ✅ normaliza a campanha pro Wizard (garante metadata.message, status efetivo, etc.)
+function normalizeCampaignForWizard(c) {
+  const item = c && typeof c === "object" ? { ...c } : null;
+  if (!item) return null;
+
+  const md = item.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {};
+  const msg = String(md?.message || item?.message || "").trim();
+  if (msg) md.message = msg;
+
+  item.metadata = md;
+
+  // status efetivo só pro front (não persiste no backend)
+  item.status = effectiveStatus(item);
+
+  return item;
+}
+
 export default function SmsCampaignsPage({ onExit }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -206,7 +249,12 @@ export default function SmsCampaignsPage({ onExit }) {
     setLoading(true);
     try {
       const r = await fetchSmsCampaigns();
-      setItems(r.items || []);
+
+      // ✅ tolera {items} ou array direto
+      const list = Array.isArray(r) ? r : Array.isArray(r?.items) ? r.items : [];
+
+      // ✅ aplica "status efetivo" para não travar UI por estado inconsistente
+      setItems(list.map((x) => ({ ...x, status: effectiveStatus(x) })));
     } finally {
       setLoading(false);
     }
@@ -265,7 +313,9 @@ export default function SmsCampaignsPage({ onExit }) {
 
   function startEdit(c) {
     setActionsOpenId(null);
-    setEditingCampaign(c);
+
+    // ✅ passa campanha normalizada pro Wizard (resolve “textarea travado” por status/metadata inconsistentes)
+    setEditingCampaign(normalizeCampaignForWizard(c));
     setCreating(true);
   }
 
@@ -413,7 +463,6 @@ export default function SmsCampaignsPage({ onExit }) {
         </div>
       </div>
 
-      {/* ✅ sem card de “Relatórios” */}
       <div className="campaigns-card">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <h3 style={{ margin: 0 }}>Campanhas</h3>
