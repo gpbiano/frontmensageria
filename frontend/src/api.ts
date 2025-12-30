@@ -1,6 +1,10 @@
 // frontend/src/api.ts
 // Central de chamadas da API da plataforma GP Labs
+// ✅ Completa + compat (não quebra imports antigos)
 
+// ------------------------------------------------------
+// TYPES
+// ------------------------------------------------------
 import type {
   Conversation,
   ConversationStatus,
@@ -11,13 +15,9 @@ import type {
   Template
 } from "./types";
 
-/**
- * Base da API
- * Compatível com:
- * - VITE_API_BASE (padrão)
- * - VITE_API_BASE_URL (fallback)
- * - localhost (dev)
- */
+// ------------------------------------------------------
+// API BASE
+// ------------------------------------------------------
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
   import.meta.env.VITE_API_BASE_URL ||
@@ -26,10 +26,9 @@ const API_BASE =
 const AUTH_KEY = "gpLabsAuthToken";
 const AUTH_USER_KEY = "gpLabsAuthUser";
 
-// ======================================================
-// HELPERS DE AUTENTICAÇÃO (FIX DEFINITIVO)
-// ======================================================
-
+// ------------------------------------------------------
+// AUTH HELPERS
+// ------------------------------------------------------
 function safeParseJson<T = any>(raw: string | null): T | null {
   if (!raw) return null;
   try {
@@ -41,8 +40,6 @@ function safeParseJson<T = any>(raw: string | null): T | null {
 
 function getAuthUser(): any | null {
   if (typeof window === "undefined") return null;
-
-  // prioridade: localStorage → sessionStorage
   return (
     safeParseJson(localStorage.getItem(AUTH_USER_KEY)) ||
     safeParseJson(sessionStorage.getItem(AUTH_USER_KEY))
@@ -51,18 +48,9 @@ function getAuthUser(): any | null {
 
 /**
  * ✅ Tenant Header (X-Tenant-Id)
- *
  * Regra do backend (resolveTenant):
- * - Se estiver acessando via subdomínio do tenant, resolve por host
- * - Se estiver acessando via cliente.gplabs.com.br (sem subdomínio), PRECISA mandar header
- *
- * Aceita:
- * - user.tenant.slug  (preferido)
- * - user.tenant.id
- * - user.tenantId
- * - user.tenants[0].tenant.slug
- * - user.tenants[0].tenant.id
- * - user.tenants[0].tenantId
+ * - via subdomínio resolve por host
+ * - via cliente.gplabs.com.br precisa header
  */
 function getTenantId(): string | null {
   const u = getAuthUser();
@@ -81,8 +69,6 @@ function getTenantId(): string | null {
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-
-  // 🔐 prioridade: localStorage → sessionStorage
   const token = localStorage.getItem(AUTH_KEY) || sessionStorage.getItem(AUTH_KEY);
   return token ? String(token) : null;
 }
@@ -104,15 +90,13 @@ function isUnauthorized(res: Response) {
 /**
  * ✅ Regra:
  * - Não deixar "extra headers" sobrescrever Authorization.
- * - Injeta X-Tenant-Id automaticamente (resolve "Tenant não resolvido").
- * - Não sobrescrever Content-Type automaticamente se for FormData.
- * - Merge previsível.
+ * - Injeta X-Tenant-Id automaticamente.
+ * - Não sobrescrever Content-Type quando for FormData.
  */
 function buildHeaders(extra?: HeadersInit): HeadersInit {
   const token = getToken();
   const tenantId = getTenantId();
 
-  // Normaliza extra -> objeto simples
   const normalized: Record<string, string> = {};
   if (extra) {
     const h = new Headers(extra);
@@ -121,12 +105,10 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
     });
   }
 
-  // Remove Authorization vindo de fora (case-insensitive)
   Object.keys(normalized).forEach((k) => {
     if (k.toLowerCase() === "authorization") delete normalized[k];
   });
 
-  // Se já vier x-tenant-id no extra, respeita; senão injeta do storage
   const hasTenantHeader = Object.keys(normalized).some((k) => k.toLowerCase() === "x-tenant-id");
 
   return {
@@ -136,10 +118,9 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
   };
 }
 
-// ======================================================
-// HELPERS INTERNOS
-// ======================================================
-
+// ------------------------------------------------------
+// INTERNAL HELPERS
+// ------------------------------------------------------
 async function safeReadText(res: Response) {
   try {
     return await res.text();
@@ -190,29 +171,55 @@ function buildQuery(params?: Record<string, any>) {
 }
 
 /**
- * ✅ Normaliza respostas que vêm como:
+ * ✅ Normaliza listas:
  * - array direto
  * - { items: [...] }
  * - { data: [...] }
- * - { templates: [...] } / { numbers: [...] }
+ * - { templates: [...] } / { numbers: [...] } / { results: [...] }
  */
 function unwrapList<T = any>(res: any): T[] {
   if (Array.isArray(res)) return res as T[];
   if (res && typeof res === "object") {
-    const cands = [res.items, res.data, res.templates, res.numbers, res.results];
+    const cands = [res.items, res.data, res.templates, res.numbers, res.results, res.pages];
     for (const c of cands) if (Array.isArray(c)) return c as T[];
   }
   return [];
 }
 
-// ======================================================
-// HELPER FETCH (JSON / TEXT / NO CONTENT)
-// ======================================================
+/**
+ * ✅ Helper para fallback de endpoints (quando o backend varia)
+ */
+async function requestWithFallback<T = any>(
+  primary: () => Promise<T>,
+  fallbacks: Array<() => Promise<T>>
+): Promise<T> {
+  try {
+    return await primary();
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    const is404 = /(\b404\b)|not found/i.test(msg);
+    if (!is404) throw e;
 
+    let lastErr = e;
+    for (const fn of fallbacks) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        lastErr = err;
+        const m = String(err?.message || "");
+        const still404 = /(\b404\b)|not found/i.test(m);
+        if (!still404) throw err;
+      }
+    }
+    throw lastErr;
+  }
+}
+
+// ------------------------------------------------------
+// REQUEST (JSON/TEXT/204)
+// ------------------------------------------------------
 async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
-  // ======================================================
-  // ✅ FIX GLOBAL: garante "text" em /messages (evita "text obrigatório")
-  // ======================================================
+  // ✅ FIX GLOBAL: garante "text" em /messages
   let effectiveBody: any = (options as any).body;
 
   const isMessagesEndpoint = /\/messages(\?|$)/.test(path);
@@ -238,11 +245,9 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
 
   const hasBody = effectiveBody !== undefined && effectiveBody !== null;
 
-  // Se já veio string/FormData/etc, respeita.
   const body: any =
     hasBody && isPlainObject(effectiveBody) ? JSON.stringify(effectiveBody) : (effectiveBody as any);
 
-  // Só seta JSON quando body é objeto puro e não veio Content-Type explicitamente
   const shouldSetJson =
     hasBody &&
     isPlainObject(effectiveBody) &&
@@ -279,8 +284,10 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
   if (!res.ok) {
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
+
     // eslint-disable-next-line no-console
     console.error("❌ API ERROR:", res.status, path, payload || text);
+
     throw buildApiError(res.status, path, payload, text);
   }
 
@@ -293,10 +300,9 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
   return text as unknown as T;
 }
 
-// ======================================================
-// HELPER FETCH FORM-DATA (UPLOAD)
-// ======================================================
-
+// ------------------------------------------------------
+// REQUEST (FORM DATA)
+// ------------------------------------------------------
 async function requestForm<T = any>(
   path: string,
   formData: FormData,
@@ -329,8 +335,10 @@ async function requestForm<T = any>(
   if (!res.ok) {
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
+
     // eslint-disable-next-line no-console
     console.error("❌ API FORM ERROR:", res.status, path, payload || text);
+
     throw buildApiError(res.status, path, payload, text);
   }
 
@@ -343,10 +351,9 @@ async function requestForm<T = any>(
   return text as unknown as T;
 }
 
-// ======================================================
-// HELPER DOWNLOAD (BLOB)
-// ======================================================
-
+// ------------------------------------------------------
+// DOWNLOAD (BLOB)
+// ------------------------------------------------------
 async function downloadBlob(path: string, filename: string) {
   if (typeof window === "undefined") {
     throw new Error("downloadBlob só pode ser executado no browser");
@@ -377,8 +384,10 @@ async function downloadBlob(path: string, filename: string) {
   if (!res.ok) {
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
+
     // eslint-disable-next-line no-console
     console.error("❌ DOWNLOAD ERROR:", res.status, path, payload || text);
+
     throw buildApiError(res.status, path, payload, text);
   }
 
@@ -398,11 +407,6 @@ async function downloadBlob(path: string, filename: string) {
 // ======================================================
 // AUTH
 // ======================================================
-
-/**
- * ✅ Use isso no LoginPage se quiser centralizar o storage:
- * setAuthSession({ token, user }, rememberMe)
- */
 export function setAuthSession(
   data: { token?: string; user?: any; tenant?: any },
   rememberMe: boolean = true
@@ -411,7 +415,6 @@ export function setAuthSession(
 
   const storage = rememberMe ? localStorage : sessionStorage;
 
-  // limpa os dois sempre (evita mismatch)
   localStorage.removeItem(AUTH_KEY);
   sessionStorage.removeItem(AUTH_KEY);
   localStorage.removeItem(AUTH_USER_KEY);
@@ -430,8 +433,6 @@ export async function login(email: string, password: string): Promise<LoginRespo
     body: { email, password }
   });
 
-  // ✅ grava token + user nos DOIS storages (padrão do projeto)
-  // ✅ IMPORTANTE: guardar tenant junto no user (pra header X-Tenant-Id)
   if (typeof window !== "undefined") {
     const token = (data as any)?.token;
     const user = (data as any)?.user;
@@ -464,25 +465,30 @@ export function getAuthTenantId() {
   return getTenantId();
 }
 
-// (PÚBLICO) Criar senha por token (invite/reset)
 export async function verifyPasswordToken(token: string) {
   return request(`/auth/password/verify?token=${encodeURIComponent(token)}`);
 }
 
 export async function setPasswordWithToken(token: string, password: string) {
-  return request(`/auth/password/set`, {
-    method: "POST",
-    body: { token, password }
-  });
+  return request(`/auth/password/set`, { method: "POST", body: { token, password } });
 }
 
 // ======================================================
-// SETTINGS — CHANNELS (Configurações → Canais)
+// ME / TENANT (helpers comuns)
 // ======================================================
+export async function fetchMe() {
+  return request("/me", { method: "GET" });
+}
 
+export async function fetchTenant() {
+  return request("/tenant", { method: "GET" });
+}
+
+// ======================================================
+// SETTINGS — CHANNELS
+// ======================================================
 export type ChannelStatus = "connected" | "not_connected" | "disconnected" | "disabled" | "soon";
 
-// Campo comum que o backend devolve via shapeChannel()
 export interface BaseChannelRecord {
   enabled: boolean;
   status: ChannelStatus;
@@ -498,18 +504,17 @@ export interface BaseChannelRecord {
 }
 
 export interface WebchatChannelConfig {
-  primaryColor?: string; // compat front
-  color?: string; // compat backend
+  primaryColor?: string;
+  color?: string;
   position?: "left" | "right";
   buttonText?: string;
   title?: string;
-  headerTitle?: string; // compat
+  headerTitle?: string;
   greeting?: string;
   allowedOrigins?: string[];
   sessionTtlSeconds?: number;
 }
 
-// ✅ WhatsApp config (pode crescer sem quebrar o front)
 export interface WhatsAppChannelConfig {
   businessName?: string;
   phoneNumber?: string;
@@ -531,13 +536,12 @@ export interface WhatsAppChannelRecord extends BaseChannelRecord {
   config?: WhatsAppChannelConfig;
 }
 
-// ✅ Messenger records
 export interface MessengerPageItem {
   id: string;
   name: string;
   pictureUrl?: string;
   category?: string;
-  pageAccessToken?: string; // backend devolve
+  pageAccessToken?: string;
 }
 
 export interface MessengerChannelConfig {
@@ -550,7 +554,6 @@ export interface MessengerChannelRecord extends BaseChannelRecord {
   config?: MessengerChannelConfig;
 }
 
-// ✅ Instagram records
 export interface InstagramChannelConfig {
   instagramBusinessId?: string;
   igUsername?: string;
@@ -572,12 +575,6 @@ export interface ChannelsState {
   instagram?: InstagramChannelRecord;
 }
 
-/**
- * ✅ Compat com backend atual:
- * - pode retornar ARRAY: [{ channel: "whatsapp", ... }, ...]
- * - ou objeto: { channels: {...} }
- * - ou objeto: {...}
- */
 export async function fetchChannels(): Promise<ChannelsState> {
   const res = await request<any>("/settings/channels");
 
@@ -598,10 +595,6 @@ export async function fetchChannels(): Promise<ChannelsState> {
   return (res || {}) as ChannelsState;
 }
 
-/**
- * ✅ Alinhado com backend atual:
- * channels.js retorna o objeto do canal atualizado (não {ok, webchat})
- */
 export async function updateWebchatChannel(payload: {
   enabled?: boolean;
   allowedOrigins?: string[];
@@ -634,10 +627,7 @@ export async function fetchWebchatSnippet(): Promise<{
   return request("/settings/channels/webchat/snippet");
 }
 
-// ===============================
-// ✅ WHATSAPP — EMBEDDED SIGNUP
-// ===============================
-
+// WhatsApp Embedded Signup
 export async function startWhatsAppEmbeddedSignup(): Promise<{
   appId: string;
   redirectUri?: string;
@@ -661,17 +651,8 @@ export async function disconnectWhatsAppChannel(): Promise<{ ok: boolean }> {
   return request("/settings/channels/whatsapp", { method: "DELETE" });
 }
 
-// ===============================
-// ✅ MESSENGER — SELF-SERVICE (Settings UI)
-// ===============================
-
-/**
- * ✅ Backend atual (channels.js):
- * - POST /settings/channels/messenger/pages { userAccessToken }
- */
-export async function listMessengerPages(
-  userAccessToken?: string
-): Promise<{ pages: MessengerPageItem[] }> {
+// Messenger
+export async function listMessengerPages(userAccessToken?: string): Promise<{ pages: MessengerPageItem[] }> {
   const tok = String(userAccessToken || "").trim();
   if (!tok) throw new Error("userAccessToken_required");
 
@@ -681,33 +662,19 @@ export async function listMessengerPages(
   });
 }
 
-/**
- * ✅ Backend:
- * - POST /settings/channels/messenger/connect { pageId, pageAccessToken, subscribedFields? }
- */
 export async function connectMessengerChannel(payload: {
   pageId: string;
   pageAccessToken: string;
   subscribedFields?: string[];
 }): Promise<{ ok: boolean; messenger?: MessengerChannelRecord }> {
-  return request("/settings/channels/messenger/connect", {
-    method: "POST",
-    body: payload
-  });
+  return request("/settings/channels/messenger/connect", { method: "POST", body: payload });
 }
 
-/**
- * Backend:
- * - DELETE /settings/channels/messenger
- */
 export async function disconnectMessengerChannel(): Promise<{ ok: boolean }> {
   return request("/settings/channels/messenger", { method: "DELETE" });
 }
 
-// ===============================
-// ✅ INSTAGRAM — SELF-SERVICE (Settings UI) — Zenvia-like
-// ===============================
-
+// Instagram
 export type InstagramPageItem = {
   id: string;
   name: string;
@@ -715,11 +682,6 @@ export type InstagramPageItem = {
   category?: string | null;
 };
 
-/**
- * Backend:
- * - POST /settings/channels/instagram/start
- * Retorna appId, redirectUri, state e scopes.
- */
 export async function startInstagramBusinessLogin(): Promise<{
   appId: string;
   redirectUri: string;
@@ -730,10 +692,6 @@ export async function startInstagramBusinessLogin(): Promise<{
   return request("/settings/channels/instagram/start", { method: "POST" });
 }
 
-/**
- * ✅ Backend:
- * - POST /settings/channels/instagram/callback { code, state }
- */
 export async function finishInstagramBusinessLogin(payload: {
   code: string;
   state: string;
@@ -744,63 +702,35 @@ export async function finishInstagramBusinessLogin(payload: {
   tokenKind?: "long_lived" | "short_lived" | "page" | "user" | string;
   expiresIn?: number | null;
 }> {
-  return request("/settings/channels/instagram/callback", {
-    method: "POST",
-    body: payload
-  });
+  return request("/settings/channels/instagram/callback", { method: "POST", body: payload });
 }
 
-/**
- * ✅ Backend:
- * - POST /settings/channels/instagram/connect { pageId, connectState, subscribedFields? }
- */
 export async function connectInstagramChannel(payload: {
   pageId: string;
   connectState: string;
   subscribedFields?: string[];
 }): Promise<{ ok: boolean; instagram?: InstagramChannelRecord; resolved?: any }> {
-  return request("/settings/channels/instagram/connect", {
-    method: "POST",
-    body: payload
-  });
+  return request("/settings/channels/instagram/connect", { method: "POST", body: payload });
 }
 
-/**
- * Backend:
- * - DELETE /settings/channels/instagram
- */
-export async function disconnectInstagramChannel(): Promise<{
-  ok: boolean;
-  instagram?: InstagramChannelRecord;
-}> {
+export async function disconnectInstagramChannel(): Promise<{ ok: boolean; instagram?: InstagramChannelRecord }> {
   return request("/settings/channels/instagram", { method: "DELETE" });
 }
 
-/**
- * ✅ Compat (caso algum lugar do front antigo ainda importe estes nomes)
- */
+// Compat aliases
 export const startInstagramOAuth = startInstagramBusinessLogin;
 export const finishInstagramOAuth = finishInstagramBusinessLogin;
 
-/**
- * Opcional/compat: alguns fronts antigos listavam páginas via endpoint separado.
- */
-export async function listInstagramPages(
-  userAccessToken: string
-): Promise<{ pages: InstagramPageItem[] }> {
+export async function listInstagramPages(userAccessToken: string): Promise<{ pages: InstagramPageItem[] }> {
   const tok = String(userAccessToken || "").trim();
   if (!tok) throw new Error("userAccessToken_required");
 
-  return request("/settings/channels/instagram/pages", {
-    method: "POST",
-    body: { userAccessToken: tok }
-  });
+  return request("/settings/channels/instagram/pages", { method: "POST", body: { userAccessToken: tok } });
 }
 
 // ======================================================
-// SETTINGS — USERS (Configurações → Usuários)
+// SETTINGS — USERS
 // ======================================================
-
 export type UserRole = "admin" | "manager" | "agent" | "viewer";
 
 export interface UserRecord {
@@ -831,11 +761,7 @@ export async function createUser(payload: {
   name: string;
   email: string;
   role: UserRole;
-}): Promise<{
-  success: boolean;
-  user: UserRecord;
-  token?: { id: string; type: string; expiresAt: string };
-}> {
+}): Promise<{ success: boolean; user: UserRecord; token?: { id: string; type: string; expiresAt: string } }> {
   return request("/settings/users", { method: "POST", body: payload });
 }
 
@@ -843,31 +769,27 @@ export async function updateUser(
   id: number,
   payload: Partial<Pick<UserRecord, "name" | "role" | "isActive">>
 ): Promise<{ success: boolean; user: UserRecord }> {
-  return request(`/settings/users/${encodeURIComponent(String(id))}`, {
-    method: "PATCH",
-    body: payload
-  });
+  return request(`/settings/users/${encodeURIComponent(String(id))}`, { method: "PATCH", body: payload });
 }
 
 export async function deactivateUser(id: number): Promise<{ success: boolean; user: UserRecord }> {
-  return request(`/settings/users/${encodeURIComponent(String(id))}/deactivate`, {
-    method: "PATCH"
-  });
+  return request(`/settings/users/${encodeURIComponent(String(id))}/deactivate`, { method: "PATCH" });
+}
+
+export async function activateUser(id: number): Promise<{ success: boolean; user: UserRecord }> {
+  return request(`/settings/users/${encodeURIComponent(String(id))}/activate`, { method: "PATCH" });
 }
 
 export async function resetUserPassword(id: number): Promise<{
   success: boolean;
   token?: { id: string; type: string; expiresAt: string };
 }> {
-  return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, {
-    method: "POST"
-  });
+  return request(`/settings/users/${encodeURIComponent(String(id))}/reset-password`, { method: "POST" });
 }
 
 // ======================================================
-// SETTINGS — GROUPS (Configurações → Grupos)
+// SETTINGS — GROUPS
 // ======================================================
-
 export interface GroupRecord {
   id: string;
   name: string;
@@ -878,18 +800,12 @@ export interface GroupRecord {
   updatedAt?: string;
 }
 
-export async function fetchGroups(params?: {
-  includeInactive?: boolean;
-}): Promise<{ items: GroupRecord[]; total: number }> {
+export async function fetchGroups(params?: { includeInactive?: boolean }): Promise<{ items: GroupRecord[]; total: number }> {
   const qs = buildQuery(params?.includeInactive ? { includeInactive: "true" } : undefined);
   return request(`/settings/groups${qs}`);
 }
 
-export async function createGroup(payload: {
-  name: string;
-  color?: string;
-  slaMinutes?: number;
-}): Promise<GroupRecord> {
+export async function createGroup(payload: { name: string; color?: string; slaMinutes?: number }): Promise<GroupRecord> {
   return request("/settings/groups", { method: "POST", body: payload });
 }
 
@@ -897,28 +813,20 @@ export async function updateGroup(
   id: string,
   payload: Partial<Pick<GroupRecord, "name" | "color" | "slaMinutes">>
 ): Promise<GroupRecord> {
-  return request(`/settings/groups/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: payload
-  });
+  return request(`/settings/groups/${encodeURIComponent(id)}`, { method: "PATCH", body: payload });
 }
 
 export async function deactivateGroup(id: string): Promise<{ ok: boolean; group: GroupRecord }> {
-  return request(`/settings/groups/${encodeURIComponent(id)}/deactivate`, {
-    method: "PATCH"
-  });
+  return request(`/settings/groups/${encodeURIComponent(id)}/deactivate`, { method: "PATCH" });
 }
 
 export async function activateGroup(id: string): Promise<{ ok: boolean; group: GroupRecord }> {
-  return request(`/settings/groups/${encodeURIComponent(id)}/activate`, {
-    method: "PATCH"
-  });
+  return request(`/settings/groups/${encodeURIComponent(id)}/activate`, { method: "PATCH" });
 }
 
 // ======================================================
 // SETTINGS — GROUP MEMBERS
 // ======================================================
-
 export type GroupMemberRole = "agent" | "manager";
 
 export interface GroupMemberItem {
@@ -947,10 +855,7 @@ export async function addGroupMember(
   groupId: string,
   payload: { userId: number; role?: GroupMemberRole }
 ): Promise<{ success: boolean; member: any; user?: any }> {
-  return request(`/settings/groups/${encodeURIComponent(groupId)}/members`, {
-    method: "POST",
-    body: payload
-  });
+  return request(`/settings/groups/${encodeURIComponent(groupId)}/members`, { method: "POST", body: payload });
 }
 
 export async function updateGroupMember(
@@ -969,9 +874,7 @@ export async function deactivateGroupMember(
   userId: number
 ): Promise<{ success: boolean; member: any }> {
   return request(
-    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
-      String(userId)
-    )}/deactivate`,
+    `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/deactivate`,
     { method: "PATCH" }
   );
 }
@@ -988,9 +891,8 @@ export async function activateGroupMember(
 }
 
 // ======================================================
-// CONVERSAS
+// CONVERSAS / MENSAGENS
 // ======================================================
-
 export type ConversationKind = "all" | "bot" | "human" | "bot_only" | "human_only";
 
 export type FetchConversationsOptions = {
@@ -1017,30 +919,22 @@ export async function fetchConversations(
   return Array.isArray(data) ? (data as Conversation[]) : [];
 }
 
+export async function fetchConversationById(conversationId: string) {
+  return request(`/conversations/${encodeURIComponent(conversationId)}`, { method: "GET" });
+}
+
 export async function fetchMessages(conversationId: string): Promise<Message[]> {
   const data = await request<any>(`/conversations/${encodeURIComponent(conversationId)}/messages`);
   return Array.isArray(data) ? (data as Message[]) : [];
 }
 
-/**
- * ✅ IMPORTANTE:
- * O backend valida "text" como obrigatório para mensagens de texto.
- * Então SEMPRE enviamos "text".
- */
-export async function sendTextMessage(
-  conversationId: string,
-  text: string,
-  senderName?: string
-): Promise<Message> {
+export async function sendTextMessage(conversationId: string, text: string, senderName?: string): Promise<Message> {
   const t = String(text ?? "").trim();
   if (!t) throw new Error("Mensagem vazia.");
 
   return request(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
-    body: {
-      text: t,
-      ...(senderName ? { senderName } : {})
-    }
+    body: { text: t, ...(senderName ? { senderName } : {}) }
   });
 }
 
@@ -1072,10 +966,7 @@ export async function sendFileMessage(
     senderName?: string;
   }
 ): Promise<Message> {
-  const file = opts.file;
-  const type = String(opts.type || "").toLowerCase();
-
-  const asset = await uploadAsset(file);
+  const asset = await uploadAsset(opts.file);
 
   const mediaUrl =
     (asset as any)?.url ||
@@ -1090,7 +981,7 @@ export async function sendFileMessage(
   }
 
   return sendMediaMessage(conversationId, {
-    type,
+    type: String(opts.type || "").toLowerCase(),
     mediaUrl: String(mediaUrl).trim(),
     caption: opts.caption,
     senderName: opts.senderName
@@ -1108,24 +999,32 @@ export async function updateConversationStatus(
   });
 }
 
-export async function updateConversationNotes(
-  conversationId: string,
-  notes: string
-): Promise<Conversation> {
+export async function assignConversation(conversationId: string, payload: { userId?: number | null; groupId?: string | null }) {
+  return request(`/conversations/${encodeURIComponent(conversationId)}/assign`, {
+    method: "PATCH",
+    body: payload
+  });
+}
+
+export async function updateConversationNotes(conversationId: string, notes: string): Promise<Conversation> {
   return request(`/conversations/${encodeURIComponent(conversationId)}/notes`, {
     method: "PATCH",
     body: { notes }
   });
 }
 
-// ======================================================
-// EXPORTS — HISTÓRICO (CSV / EXCEL)
-// ======================================================
-
+// Exports de histórico
 export async function downloadConversationCSV(conversationId: string) {
   return downloadBlob(
     `/conversations/${encodeURIComponent(conversationId)}/export.csv`,
     `conversation_${conversationId}.csv`
+  );
+}
+
+export async function downloadConversationXLSX(conversationId: string) {
+  return downloadBlob(
+    `/conversations/${encodeURIComponent(conversationId)}/export.xlsx`,
+    `conversation_${conversationId}.xlsx`
   );
 }
 
@@ -1149,7 +1048,6 @@ export async function downloadHistoryExcel(params?: {
 // ======================================================
 // OUTBOUND — NÚMEROS
 // ======================================================
-
 export async function fetchNumbers(): Promise<PhoneNumberRecord[]> {
   const res = await request<any>("/outbound/numbers");
   return unwrapList<PhoneNumberRecord>(res);
@@ -1160,9 +1058,8 @@ export async function syncNumbers(): Promise<{ ok?: boolean; success?: boolean; 
 }
 
 // ======================================================
-// OUTBOUND — TEMPLATES
+// OUTBOUND — TEMPLATES (WhatsApp)
 // ======================================================
-
 export async function fetchTemplates(): Promise<Template[]> {
   const res = await request<any>("/outbound/templates");
   return unwrapList<Template>(res);
@@ -1178,10 +1075,7 @@ export async function createTemplate(payload: {
   language: string;
   components: any[];
 }): Promise<Template> {
-  const res = await request<any>("/outbound/templates", {
-    method: "POST",
-    body: payload
-  });
+  const res = await request<any>("/outbound/templates", { method: "POST", body: payload });
 
   if (res?.item) return res.item as Template;
   if (res?.template) return res.template as Template;
@@ -1189,9 +1083,8 @@ export async function createTemplate(payload: {
 }
 
 // ======================================================
-// OUTBOUND — ASSETS (ARQUIVOS)
+// OUTBOUND — ASSETS
 // ======================================================
-
 export async function fetchAssets(): Promise<MediaItem[]> {
   const data = await request<any>("/outbound/assets");
   return Array.isArray(data) ? (data as MediaItem[]) : [];
@@ -1204,15 +1097,12 @@ export async function uploadAsset(file: File): Promise<MediaItem> {
 }
 
 export async function deleteAsset(id: string | number): Promise<{ success: boolean }> {
-  return request(`/outbound/assets/${encodeURIComponent(String(id))}`, {
-    method: "DELETE"
-  });
+  return request(`/outbound/assets/${encodeURIComponent(String(id))}`, { method: "DELETE" });
 }
 
 // ======================================================
-// OUTBOUND — CAMPANHAS (WHATSAPP)
+// OUTBOUND — CAMPANHAS (WhatsApp)
 // ======================================================
-
 export type CampaignStatus = "draft" | "ready" | "sending" | "done" | "failed";
 
 export interface CampaignAudience {
@@ -1253,6 +1143,10 @@ export async function fetchCampaigns(): Promise<CampaignRecord[]> {
   return Array.isArray(data) ? (data as CampaignRecord[]) : [];
 }
 
+export async function fetchCampaignById(campaignId: string): Promise<CampaignRecord> {
+  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}`);
+}
+
 export async function createCampaign(payload: {
   name: string;
   numberId: string;
@@ -1265,38 +1159,22 @@ export async function createCampaign(payload: {
 export async function uploadCampaignAudience(campaignId: string, file: File) {
   const fd = new FormData();
   fd.append("file", file);
-
   return requestForm(`/outbound/campaigns/${encodeURIComponent(campaignId)}/audience`, fd);
 }
 
-export async function startCampaign(
-  campaignId: string
-): Promise<{ success: boolean; sent?: number; failed?: number }> {
-  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/start`, {
-    method: "POST"
-  });
+export async function startCampaign(campaignId: string): Promise<{ success: boolean; sent?: number; failed?: number }> {
+  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/start`, { method: "POST" });
 }
 
 export async function pauseCampaign(campaignId: string): Promise<{ success: boolean }> {
-  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/pause`, {
-    method: "PATCH"
-  });
+  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/pause`, { method: "PATCH" });
 }
 
 export async function resumeCampaign(campaignId: string): Promise<{ success: boolean }> {
-  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/resume`, {
-    method: "PATCH"
-  });
+  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}/resume`, { method: "PATCH" });
 }
 
-export async function fetchCampaignById(campaignId: string): Promise<CampaignRecord> {
-  return request(`/outbound/campaigns/${encodeURIComponent(campaignId)}`);
-}
-
-// ======================================================
-// CAMPAIGNS — REPORT / EXPORTS
-// ======================================================
-
+// REPORTS (WhatsApp)
 export function metaErrorShortLink(code: string | number) {
   return `${API_BASE}/r/meta-error/${encodeURIComponent(String(code))}`;
 }
@@ -1318,7 +1196,6 @@ export async function downloadCampaignReportPDF(campaignId: string) {
 // ======================================================
 // OUTBOUND — OPT-OUT
 // ======================================================
-
 export interface OptOutItem {
   id: string;
   phone: string;
@@ -1349,19 +1226,12 @@ export async function fetchOptOut(params?: {
   return request(`/outbound/optout${suffix ? `?${suffix}` : ""}`);
 }
 
-export async function createOptOut(payload: {
-  phone: string;
-  name?: string;
-  reason?: string;
-  source?: "manual";
-}) {
+export async function createOptOut(payload: { phone: string; name?: string; reason?: string; source?: "manual" }) {
   return request("/outbound/optout", { method: "POST", body: payload });
 }
 
 export async function deleteOptOut(id: string) {
-  return request(`/outbound/optout/${encodeURIComponent(id)}`, {
-    method: "DELETE"
-  });
+  return request(`/outbound/optout/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function importOptOutCSV(file: File) {
@@ -1374,12 +1244,7 @@ export async function fetchOptOutWhatsAppContacts() {
   return request("/outbound/optout/whatsapp-contacts");
 }
 
-export async function downloadOptOutExport(params?: {
-  search?: string;
-  source?: string;
-  from?: string;
-  to?: string;
-}) {
+export async function downloadOptOutExport(params?: { search?: string; source?: string; from?: string; to?: string }) {
   const qs = new URLSearchParams();
   if (params?.search) qs.set("search", params.search);
   if (params?.source) qs.set("source", params.source);
@@ -1395,10 +1260,9 @@ export async function downloadOptOutExport(params?: {
   return { success: true };
 }
 
-// ============================
-// SMS TEMPLATES (NOVO - FRONT)
-// ============================
-
+// ======================================================
+// SMS TEMPLATES (NOVO)
+// ======================================================
 export type SmsTemplateStatus = "active" | "inactive" | "archived" | string;
 
 export type SmsTemplateItem = {
@@ -1415,10 +1279,7 @@ export type SmsTemplateItem = {
 };
 
 export async function fetchSmsTemplates(params?: { q?: string; status?: string }) {
-  const qs = buildQuery({
-    q: params?.q || "",
-    status: params?.status || ""
-  });
+  const qs = buildQuery({ q: params?.q || "", status: params?.status || "" });
   const res = await request<any>(`/outbound/sms-templates${qs}`, { method: "GET" });
   return unwrapList<SmsTemplateItem>(res);
 }
@@ -1430,7 +1291,6 @@ export async function createSmsTemplate(payload: {
   status?: SmsTemplateStatus;
   metadata?: any;
 }) {
-  // manda text + message por compat (back pode estar usando um ou outro)
   const body = {
     name: payload.name,
     status: payload.status || "active",
@@ -1442,45 +1302,46 @@ export async function createSmsTemplate(payload: {
   return request(`/outbound/sms-templates`, { method: "POST", body });
 }
 
-// ============================
-// SMS CAMPAIGNS
-// ============================
-
-export type SmsCampaignStatus =
-  | "draft"
-  | "running"
-  | "paused"
-  | "canceled"
-  | "finished"
-  | "failed";
-
-async function requestWithFallback<T = any>(
-  primary: () => Promise<T>,
-  fallbacks: Array<() => Promise<T>>
-): Promise<T> {
-  try {
-    return await primary();
-  } catch (e: any) {
-    const msg = String(e?.message || "");
-    const is404 = /(\b404\b)|not found/i.test(msg);
-    if (!is404) throw e;
-
-    let lastErr = e;
-    for (const fn of fallbacks) {
-      try {
-        return await fn();
-      } catch (err: any) {
-        lastErr = err;
-        const m = String(err?.message || "");
-        const still404 = /(\b404\b)|not found/i.test(m);
-        if (!still404) throw err;
-      }
-    }
-    throw lastErr;
-  }
+export async function updateSmsTemplate(id: string, payload: Partial<SmsTemplateItem>) {
+  const path = `/outbound/sms-templates/${encodeURIComponent(id)}`;
+  return requestWithFallback(
+    () => request(path, { method: "PATCH", body: payload }),
+    [() => request(path, { method: "PUT", body: payload })]
+  );
 }
 
-export async function fetchSmsCampaigns() {
+export async function deleteSmsTemplate(id: string) {
+  const path = `/outbound/sms-templates/${encodeURIComponent(id)}`;
+  return requestWithFallback(
+    () => request(path, { method: "DELETE" }),
+    [() => request(`${path}/delete`, { method: "POST" })]
+  );
+}
+
+// ======================================================
+// SMS CAMPAIGNS
+// ======================================================
+export type SmsCampaignStatus = "draft" | "running" | "paused" | "canceled" | "finished" | "failed";
+
+export type SmsCampaignItem = {
+  id: string;
+  tenantId?: string;
+  channel?: "sms" | string;
+  name: string;
+  status: SmsCampaignStatus | string;
+
+  // dependendo do schema do backend:
+  audience?: any;
+  audienceCount?: number;
+
+  metadata?: any;
+  stats?: any;
+
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export async function fetchSmsCampaigns(): Promise<any> {
   return request(`/outbound/sms-campaigns`, { method: "GET" });
 }
 
@@ -1493,74 +1354,33 @@ export async function updateSmsCampaign(
   payload: { name?: string; message?: string; metadata?: any }
 ) {
   const path = `/outbound/sms-campaigns/${encodeURIComponent(id)}`;
-
-  // ✅ backend pode variar (mas no router atual existe PATCH)
   return requestWithFallback(
     () => request(path, { method: "PATCH", body: payload }),
     [
-      () => request(path, { method: "POST", body: payload }),
-      () => request(path, { method: "PUT", body: payload })
+      () => request(path, { method: "PUT", body: payload }),
+      () => request(path, { method: "POST", body: payload })
     ]
   );
 }
 
 export async function deleteSmsCampaign(id: string) {
   const path = `/outbound/sms-campaigns/${encodeURIComponent(id)}`;
-
-  // ✅ no router atual existe DELETE
   return requestWithFallback(
     () => request(path, { method: "DELETE" }),
-    [
-      () => request(`${path}/delete`, { method: "POST" }),
-      () => request(`${path}/cancel`, { method: "PATCH" })
-    ]
+    [() => request(`${path}/delete`, { method: "POST" }), () => request(`${path}/cancel`, { method: "PATCH" })]
   );
 }
 
-/**
- * ✅ EXPORT QUE ESTAVA FALTANDO (fix Cloudflare build)
- * POST /outbound/sms-campaigns/:id/start
- * aceita { limit?: number }
- */
+export async function uploadSmsCampaignAudience(id: string, file: File) {
+  const fd = new FormData();
+  fd.append("file", file);
+  return requestForm(`/outbound/sms-campaigns/${encodeURIComponent(id)}/audience`, fd);
+}
+
 export async function startSmsCampaign(id: string, payload?: { limit?: number }) {
   if (!id) throw new Error("campaign_id_required");
   const body = payload && typeof payload === "object" ? payload : {};
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start`, {
-    method: "POST",
-    body
-  });
-}
-
-export async function uploadSmsCampaignAudience(campaignId: string, file: File) {
-  if (!file) throw new Error("Arquivo CSV não informado");
-
-  const fd = new FormData();
-  fd.append("file", file);
-
-  // ✅ FIX: usar buildHeaders() pra incluir X-Tenant-Id também
-  // e não setar Content-Type manualmente (FormData)
-  const res = await fetch(`${API_BASE}/outbound/sms-campaigns/${encodeURIComponent(campaignId)}/audience`, {
-    method: "POST",
-    credentials: "include",
-    headers: buildHeaders(),
-    body: fd
-  });
-
-  if (isUnauthorized(res)) {
-    clearAuth();
-    throw new Error("Sessão expirada ou token inválido. Faça login novamente.");
-  }
-
-  if (!res.ok) {
-    let msg = "Erro ao importar audiência";
-    try {
-      const j = await res.json();
-      msg = j?.error || j?.message || msg;
-    } catch {}
-    throw new Error(msg);
-  }
-
-  return res.json();
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start`, { method: "POST", body });
 }
 
 export async function pauseSmsCampaign(id: string) {
@@ -1579,18 +1399,33 @@ export async function fetchSmsCampaignReport(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, { method: "GET" });
 }
 
-// ======================================================
-// ALIASES (compat com imports antigos do front)
-// ======================================================
+export async function downloadSmsCampaignReportCSV(id: string) {
+  return downloadBlob(
+    `/outbound/sms-campaigns/${encodeURIComponent(id)}/report.csv`,
+    `sms_report_${id}.csv`
+  );
+}
 
+// ======================================================
+// COMPAT EXPORTS (nomes antigos)
+// ======================================================
 export async function downloadConversationHistoryCSV(conversationId: string) {
   return downloadConversationCSV(conversationId);
 }
 
-// ⚠️ bug antigo: Excel estava apontando pro CSV
 export async function downloadConversationHistoryExcel(conversationId: string) {
-  return downloadBlob(
-    `/conversations/${encodeURIComponent(conversationId)}/export.xlsx`,
-    `conversation_${conversationId}.xlsx`
-  );
+  return downloadConversationXLSX(conversationId);
 }
+
+// ======================================================
+// RAW HELPERS EXPORT (às vezes usado em debug/admin)
+// ======================================================
+export const __internal = {
+  API_BASE,
+  request,
+  requestForm,
+  downloadBlob,
+  buildHeaders,
+  getToken,
+  getTenantId
+};
