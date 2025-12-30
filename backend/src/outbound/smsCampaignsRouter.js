@@ -93,8 +93,8 @@ function buildProviderUrl({ base, user, pass, phone, message }) {
   const url = new URL(base);
   url.searchParams.set("usuario", user);
   url.searchParams.set("senha", pass);
-  url.searchParams.set("celular", String(phone));
-  url.searchParams.set("mensagem", String(message));
+  url.searchParams.set("celular", String(phone || ""));
+  url.searchParams.set("mensagem", String(message || ""));
   return url.toString();
 }
 
@@ -247,20 +247,64 @@ function renderMessage(template, vars) {
 
 function resolveMessageTemplate(campaign) {
   const md = safeObj(campaign?.metadata);
-  // ✅ no seu schema, SMS é metadata.message
+  // ✅ no schema, SMS é metadata.message
   return String(md?.message || "").trim() || String(md?.smsMessage || "").trim();
+}
+
+// =========================
+// Audience normalization (robust)
+// =========================
+function normalizeAudienceRows(audience) {
+  // aceita:
+  // - audience = [{phone, vars}, ...]
+  // - audience = { rows: [...] }
+  // - row com numero/phone/phoneE164 e vars em vars/variables/meta
+  const rawRows = Array.isArray(audience)
+    ? audience
+    : Array.isArray(audience?.rows)
+      ? audience.rows
+      : [];
+
+  const rows = [];
+  for (const r of rawRows) {
+    if (!r || typeof r !== "object") continue;
+
+    const phoneRaw = r.phone || r.numero || r.number || r.phoneE164 || r.celular || r.telefone || "";
+    const phone = normalizePhone(phoneRaw);
+    if (!phone) continue;
+
+    const vars =
+      (r.vars && typeof r.vars === "object" ? r.vars : null) ||
+      (r.variables && typeof r.variables === "object" ? r.variables : null) ||
+      (r.meta && typeof r.meta === "object" ? r.meta : null) ||
+      {};
+
+    rows.push({ phone, vars });
+  }
+
+  return rows;
 }
 
 // =========================
 // OutboundLog helpers (analytics)
 // =========================
-async function writeLog({ tenantId, campaignId, phone, status, error, provider, providerMsgId, cost, metadata }) {
+async function writeLog({
+  tenantId,
+  campaignId,
+  phone,
+  status,
+  error,
+  provider,
+  providerMsgId,
+  cost,
+  metadata
+}) {
   const logModel = resolveLogModel();
   const logModelName = getLogModelName();
   if (!logModel) return;
   if (!modelHasField(logModelName, "tenantId")) return;
 
-  // ✅ Decimal: não força number (pode ser string/number) ou null
+  // ✅ Decimal: aceita number ou string; senão null
   const costValue =
     cost === null || cost === undefined || cost === ""
       ? null
@@ -348,7 +392,13 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
       data.metadata = {
         ...baseMetadata,
         message,
-        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() },
+        smsProgress: {
+          cursor: 0,
+          sent: 0,
+          success: 0,
+          failed: 0,
+          lastRunAt: new Date().toISOString()
+        },
         timestamps: { createdAt: new Date().toISOString() }
       };
     }
@@ -382,7 +432,11 @@ router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, r
 
     const st = String(campaign.status || "");
     if (![STATUS.DRAFT, STATUS.PAUSED, STATUS.FAILED].includes(st)) {
-      return res.status(409).json({ ok: false, error: "cannot_edit_in_this_status", status: campaign.status });
+      return res.status(409).json({
+        ok: false,
+        error: "cannot_edit_in_this_status",
+        status: campaign.status
+      });
     }
 
     const name = req.body?.name !== undefined ? String(req.body?.name || "").trim() : undefined;
@@ -412,11 +466,16 @@ router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, r
         mergedMd.message = bodyMessage;
       }
 
-      mergedMd.timestamps = { ...(safeObj(mergedMd.timestamps) || {}), updatedAt: new Date().toISOString() };
+      mergedMd.timestamps = {
+        ...(safeObj(mergedMd.timestamps) || {}),
+        updatedAt: new Date().toISOString()
+      };
 
       data.metadata = mergedMd;
     } else {
-      if (bodyMessage !== undefined) return res.status(409).json({ ok: false, error: "schema_has_no_metadata_field" });
+      if (bodyMessage !== undefined) {
+        return res.status(409).json({ ok: false, error: "schema_has_no_metadata_field" });
+      }
     }
 
     if (!Object.keys(data).length) return res.json({ ok: true, item: campaign, note: "no_changes" });
@@ -451,9 +510,14 @@ router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, 
 
     const st = String(campaign.status || "");
     if (st !== STATUS.DRAFT) {
-      return res.status(409).json({ ok: false, error: "only_draft_can_be_deleted", status: campaign.status });
+      return res.status(409).json({
+        ok: false,
+        error: "only_draft_can_be_deleted",
+        status: campaign.status
+      });
     }
 
+    // best-effort: limpa logs
     try {
       if (logModel && modelHasField(logModelName, "campaignId")) {
         await logModel.deleteMany({
@@ -505,7 +569,7 @@ router.post(
       else if (typeof req.body?.csvText === "string") csvText = req.body.csvText;
       else if (typeof req.body?.csv === "string") csvText = req.body.csv;
 
-      if (!csvText.trim()) return res.status(400).json({ ok: false, error: "csv_required" });
+      if (!String(csvText || "").trim()) return res.status(400).json({ ok: false, error: "csv_required" });
 
       const parsed = parseCsv(csvText);
       if (!parsed.rows.length) {
@@ -522,7 +586,13 @@ router.post(
       const baseMd = safeObj(campaign?.metadata);
       const nextMd = {
         ...baseMd,
-        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() }
+        smsProgress: {
+          cursor: 0,
+          sent: 0,
+          success: 0,
+          failed: 0,
+          lastRunAt: new Date().toISOString()
+        }
       };
 
       const data = {};
@@ -531,7 +601,13 @@ router.post(
       if (modelHasField(modelName, "metadata")) data.metadata = nextMd;
 
       const item = await model.update({ where: { id }, data });
-      return res.json({ ok: true, item, audienceCount: parsed.rows.length, imported: parsed.rows.length });
+
+      return res.json({
+        ok: true,
+        item,
+        audienceCount: parsed.rows.length,
+        imported: parsed.rows.length
+      });
     } catch (err) {
       logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/audience failed");
       return res.status(500).json({ ok: false, error: "internal_error" });
@@ -644,8 +720,8 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
 
   const modelName = getModelName();
 
-  const PROGRESS_FLUSH_EVERY = Number(process.env.SMS_PROGRESS_FLUSH_EVERY || 10);
-  const STATUS_CHECK_EVERY = Number(process.env.SMS_STATUS_CHECK_EVERY || 10);
+  const PROGRESS_FLUSH_EVERY = Math.max(1, Number(process.env.SMS_PROGRESS_FLUSH_EVERY || 10));
+  const STATUS_CHECK_EVERY = Math.max(1, Number(process.env.SMS_STATUS_CHECK_EVERY || 10));
 
   try {
     const tenantId = getTenantId(req);
@@ -662,12 +738,8 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
     }
 
-    // ✅ audiência robusta: aceita {rows: []} OU array direto
-    const rawAudience = campaign.audience;
-    const rows =
-      Array.isArray(rawAudience) ? rawAudience
-      : Array.isArray(rawAudience?.rows) ? rawAudience.rows
-      : [];
+    // ✅ audiência robusta: aceita {rows: []} OU array direto (e normaliza phones)
+    const rows = normalizeAudienceRows(campaign.audience);
 
     if (!rows.length) {
       return res.status(400).json({
@@ -699,9 +771,11 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
 
     // ✅ aceita limit via BODY OU querystring
     const reqLimit =
-      Number(req.body?.limit || 0) > 0 ? Number(req.body.limit)
-      : Number(req.query?.limit || 0) > 0 ? Number(req.query.limit)
-      : 0;
+      Number(req.body?.limit || 0) > 0
+        ? Number(req.body.limit)
+        : Number(req.query?.limit || 0) > 0
+          ? Number(req.query.limit)
+          : 0;
 
     const maxToSend = reqLimit > 0 ? reqLimit : Number.MAX_SAFE_INTEGER;
 
@@ -725,11 +799,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     if (!current) return res.status(404).json({ ok: false, error: "not_found" });
 
     // recalcula rows da versão atualizada
-    const rawAudience2 = current.audience;
-    const rows2 =
-      Array.isArray(rawAudience2) ? rawAudience2
-      : Array.isArray(rawAudience2?.rows) ? rawAudience2.rows
-      : [];
+    const rows2 = normalizeAudienceRows(current.audience);
 
     if (!rows2.length) {
       return res.status(400).json({ ok: false, error: "audience_required_after_update" });
@@ -760,6 +830,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
             success: prog.success + localSuccess,
             failed: prog.failed + localFailed
           });
+
           return res.status(202).json({
             ok: true,
             paused: statusNow === STATUS.PAUSED,
@@ -773,8 +844,8 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       }
 
       const row = rows2[i] || {};
-      const phone = row.phone || row.numero || row.number || row.phoneE164 || "";
-      const vars = row.vars || row.variables || row.meta || {};
+      const phone = row.phone;
+      const vars = row.vars || {};
 
       const text = renderMessage(messageTemplate, vars);
       const url = buildProviderUrl({
@@ -934,7 +1005,6 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
-
 
 // =========================
 // PAUSE

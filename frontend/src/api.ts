@@ -1152,12 +1152,10 @@ export async function downloadHistoryExcel(params?: {
 
 export async function fetchNumbers(): Promise<PhoneNumberRecord[]> {
   const res = await request<any>("/outbound/numbers");
-  // ✅ backend atual devolve { ok:true, items:[...] } (e às vezes numbers:[...])
   return unwrapList<PhoneNumberRecord>(res);
 }
 
 export async function syncNumbers(): Promise<{ ok?: boolean; success?: boolean; items?: PhoneNumberRecord[] }> {
-  // ✅ mantém compat com front antigo (success) e novo (ok)
   return request("/outbound/numbers/sync", { method: "POST" });
 }
 
@@ -1167,7 +1165,6 @@ export async function syncNumbers(): Promise<{ ok?: boolean; success?: boolean; 
 
 export async function fetchTemplates(): Promise<Template[]> {
   const res = await request<any>("/outbound/templates");
-  // ✅ backend atual devolve { ok:true, items:[...] }
   return unwrapList<Template>(res);
 }
 
@@ -1213,7 +1210,7 @@ export async function deleteAsset(id: string | number): Promise<{ success: boole
 }
 
 // ======================================================
-// OUTBOUND — CAMPANHAS
+// OUTBOUND — CAMPANHAS (WHATSAPP)
 // ======================================================
 
 export type CampaignStatus = "draft" | "ready" | "sending" | "done" | "failed";
@@ -1497,7 +1494,7 @@ export async function updateSmsCampaign(
 ) {
   const path = `/outbound/sms-campaigns/${encodeURIComponent(id)}`;
 
-  // ✅ backend pode não ter PATCH (seu log mostrou 404). Faz fallback.
+  // ✅ backend pode variar (mas no router atual existe PATCH)
   return requestWithFallback(
     () => request(path, { method: "PATCH", body: payload }),
     [
@@ -1510,8 +1507,7 @@ export async function updateSmsCampaign(
 export async function deleteSmsCampaign(id: string) {
   const path = `/outbound/sms-campaigns/${encodeURIComponent(id)}`;
 
-  // ✅ backend pode não ter DELETE (seu log mostrou 404). Faz fallback.
-  // ordem: DELETE → POST /delete → PATCH /cancel (último recurso)
+  // ✅ no router atual existe DELETE
   return requestWithFallback(
     () => request(path, { method: "DELETE" }),
     [
@@ -1521,16 +1517,50 @@ export async function deleteSmsCampaign(id: string) {
   );
 }
 
+/**
+ * ✅ EXPORT QUE ESTAVA FALTANDO (fix Cloudflare build)
+ * POST /outbound/sms-campaigns/:id/start
+ * aceita { limit?: number }
+ */
 export async function startSmsCampaign(id: string, payload?: { limit?: number }) {
   if (!id) throw new Error("campaign_id_required");
-
-  // ✅ manda limit no BODY (seu wizard usa {limit:200})
   const body = payload && typeof payload === "object" ? payload : {};
-
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start`, {
     method: "POST",
     body
   });
+}
+
+export async function uploadSmsCampaignAudience(campaignId: string, file: File) {
+  if (!file) throw new Error("Arquivo CSV não informado");
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  // ✅ FIX: usar buildHeaders() pra incluir X-Tenant-Id também
+  // e não setar Content-Type manualmente (FormData)
+  const res = await fetch(`${API_BASE}/outbound/sms-campaigns/${encodeURIComponent(campaignId)}/audience`, {
+    method: "POST",
+    credentials: "include",
+    headers: buildHeaders(),
+    body: fd
+  });
+
+  if (isUnauthorized(res)) {
+    clearAuth();
+    throw new Error("Sessão expirada ou token inválido. Faça login novamente.");
+  }
+
+  if (!res.ok) {
+    let msg = "Erro ao importar audiência";
+    try {
+      const j = await res.json();
+      msg = j?.error || j?.message || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  return res.json();
 }
 
 export async function pauseSmsCampaign(id: string) {
@@ -1564,4 +1594,3 @@ export async function downloadConversationHistoryExcel(conversationId: string) {
     `conversation_${conversationId}.xlsx`
   );
 }
-
