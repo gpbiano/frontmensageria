@@ -1,5 +1,5 @@
 // frontend/src/pages/outbound/analytics/CampaignsAnalyticsPage.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchCampaigns } from "../../../api";
 import CampaignReport from "./CampaignReport.jsx";
 
@@ -13,13 +13,7 @@ function safeLower(v) {
 }
 
 function normalizeErrorCode(row) {
-  return (
-    row?.errorCode ??
-    row?.metaErrorCode ??
-    row?.error?.code ??
-    row?.metaError?.code ??
-    null
-  );
+  return row?.errorCode ?? row?.metaErrorCode ?? row?.error?.code ?? row?.metaError?.code ?? null;
 }
 
 function formatBR(iso) {
@@ -71,6 +65,43 @@ function IconFile({ size = 16 }) {
   );
 }
 
+// =========================
+// Mini chart (sem libs)
+// =========================
+function MiniBar({ label, valuePct = 0, hint, color = "rgba(46, 204, 113, 0.95)" }) {
+  const v = Number.isFinite(Number(valuePct)) ? Number(valuePct) : 0;
+  const width = Math.max(0, Math.min(100, v));
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
+        <span style={{ opacity: 0.9 }}>{label}</span>
+        <b title={hint || ""} style={{ fontVariantNumeric: "tabular-nums" }}>
+          {width.toFixed(1)}%
+        </b>
+      </div>
+      <div
+        style={{
+          height: 8,
+          borderRadius: 999,
+          background: "rgba(255,255,255,.10)",
+          overflow: "hidden",
+          marginTop: 5
+        }}
+      >
+        <div
+          style={{
+            width: `${width}%`,
+            height: "100%",
+            background: color,
+            transition: "width .35s ease"
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function CampaignsAnalyticsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -86,10 +117,14 @@ export default function CampaignsAnalyticsPage() {
   const [campaignId, setCampaignId] = useState("all");
   const [templateName, setTemplateName] = useState("all");
 
+  // ✅ NOVO: filtro por tipo/canal (SMS/WhatsApp)
+  // Observação: vamos aceitar tanto c.channel quanto c.type (robusto)
+  const [campaignType, setCampaignType] = useState("all"); // all | sms | whatsapp
+
   // export dropdown
   const [exportOpen, setExportOpen] = useState(false);
   const [exportBusy, setExportBusy] = useState(""); // "csv" | "pdf" | "pdf_campaign" | ""
-  const exportRef = useMemo(() => ({ current: null }), []);
+  const exportRef = useRef(null);
   useOutsideClick(exportRef, () => setExportOpen(false));
 
   async function load() {
@@ -137,9 +172,15 @@ export default function CampaignsAnalyticsPage() {
       if (campaignId !== "all" && String(c?.id) !== String(campaignId)) return false;
       if (templateName !== "all" && c?.templateName !== templateName) return false;
 
+      // ✅ filtro por tipo (sms/whatsapp)
+      if (campaignType !== "all") {
+        const ch = safeLower(c?.channel || c?.type || "");
+        if (ch !== campaignType) return false;
+      }
+
       return true;
     });
-  }, [campaigns, from, to, campaignId, templateName]);
+  }, [campaigns, from, to, campaignId, templateName, campaignType]);
 
   const aggregate = useMemo(() => {
     const allRows = [];
@@ -154,9 +195,11 @@ export default function CampaignsAnalyticsPage() {
     });
 
     const total = allRows.length;
-    const delivered = allRows.filter((r) => r.status === "delivered").length;
+
+    // WhatsApp tende a ter delivered/read/failed; SMS pode vir como success/failed/sent etc.
+    const delivered = allRows.filter((r) => ["delivered", "success", "sent"].includes(r.status)).length;
     const read = allRows.filter((r) => r.status === "read").length;
-    const failed = allRows.filter((r) => r.status === "failed").length;
+    const failed = allRows.filter((r) => ["failed", "error"].includes(r.status)).length;
 
     const deliveryRate = total ? (delivered / total) * 100 : 0;
     const readRate = total ? (read / total) * 100 : 0;
@@ -169,9 +212,7 @@ export default function CampaignsAnalyticsPage() {
   // EXPORT URLs (backend)
   // =========================
   const API_BASE =
-    import.meta.env.VITE_API_BASE ||
-    import.meta.env.VITE_API_BASE_URL ||
-    "http://localhost:3010";
+    import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || "http://localhost:3010";
 
   const analyticsCsvUrl = useMemo(() => {
     const qs = new URLSearchParams();
@@ -179,8 +220,9 @@ export default function CampaignsAnalyticsPage() {
     if (to) qs.set("to", to);
     if (campaignId) qs.set("campaignId", campaignId);
     if (templateName) qs.set("template", templateName);
+    if (campaignType !== "all") qs.set("type", campaignType); // ✅ NOVO
     return `${API_BASE}/outbound/campaigns/analytics/export.csv?${qs.toString()}`;
-  }, [API_BASE, from, to, campaignId, templateName]);
+  }, [API_BASE, from, to, campaignId, templateName, campaignType]);
 
   const analyticsPdfUrl = useMemo(() => {
     const qs = new URLSearchParams();
@@ -188,14 +230,14 @@ export default function CampaignsAnalyticsPage() {
     if (to) qs.set("to", to);
     if (campaignId) qs.set("campaignId", campaignId);
     if (templateName) qs.set("template", templateName);
+    if (campaignType !== "all") qs.set("type", campaignType); // ✅ NOVO
     return `${API_BASE}/outbound/campaigns/analytics/export.pdf?${qs.toString()}`;
-  }, [API_BASE, from, to, campaignId, templateName]);
+  }, [API_BASE, from, to, campaignId, templateName, campaignType]);
 
   const canExportCampaignPDF = campaignId !== "all" && String(campaignId).trim() !== "";
   const campaignPdfUrl = canExportCampaignPDF
-  ? `${API_BASE}/outbound/campaigns/${encodeURIComponent(String(campaignId))}/export.pdf`
-  : null;
-
+    ? `${API_BASE}/outbound/campaigns/${encodeURIComponent(String(campaignId))}/export.pdf`
+    : null;
 
   function openExport(kind, url) {
     if (!url) return;
@@ -203,7 +245,6 @@ export default function CampaignsAnalyticsPage() {
     try {
       window.open(url, "_blank", "noreferrer");
     } finally {
-      // feedback breve (download abre em nova aba)
       setTimeout(() => setExportBusy(""), 450);
       setExportOpen(false);
     }
@@ -213,17 +254,28 @@ export default function CampaignsAnalyticsPage() {
     const parts = [];
     if (campaignId !== "all") parts.push(`Campanha #${campaignId}`);
     if (templateName !== "all") parts.push(`Template ${templateName}`);
+    if (campaignType !== "all") parts.push(`Tipo ${campaignType.toUpperCase()}`);
     parts.push(`Período ${from} → ${to}`);
     return parts.join(" • ");
-  }, [campaignId, templateName, from, to]);
+  }, [campaignId, templateName, campaignType, from, to]);
+
+  // ✅ Gráfico por canal (quantidade de campanhas no filtro)
+  const channelSplit = useMemo(() => {
+    const total = filteredCampaigns.length || 0;
+    if (!total) return { sms: 0, whatsapp: 0 };
+    const sms = filteredCampaigns.filter((c) => safeLower(c?.channel || c?.type) === "sms").length;
+    const whatsapp = filteredCampaigns.filter((c) => safeLower(c?.channel || c?.type) === "whatsapp").length;
+    return {
+      sms: (sms / total) * 100,
+      whatsapp: (whatsapp / total) * 100
+    };
+  }, [filteredCampaigns]);
 
   return (
     <div className="page outbound-page">
       <div className="page-header">
         <h1>Analytics</h1>
-        <p className="page-subtitle">
-          Visão Meta-like com filtros, performance por template e falhas.
-        </p>
+        <p className="page-subtitle">Visão unificada (SMS + WhatsApp) com filtros, performance e falhas.</p>
 
         <div className="page-actions" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button className="btn btn-secondary" onClick={load} disabled={loading}>
@@ -231,10 +283,7 @@ export default function CampaignsAnalyticsPage() {
           </button>
 
           {/* ✅ Dropdown Export (CSV/PDF filtrado + PDF campanha) */}
-          <div
-            ref={(el) => (exportRef.current = el)}
-            style={{ position: "relative", display: "inline-flex" }}
-          >
+          <div ref={exportRef} style={{ position: "relative", display: "inline-flex" }}>
             <button
               className="btn btn-primary"
               onClick={() => setExportOpen((v) => !v)}
@@ -263,9 +312,7 @@ export default function CampaignsAnalyticsPage() {
                   zIndex: 50
                 }}
               >
-                <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
-                  {exportLabel}
-                </div>
+                <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>{exportLabel}</div>
 
                 <button
                   className="btn btn-secondary"
@@ -284,9 +331,7 @@ export default function CampaignsAnalyticsPage() {
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                     <IconFile /> CSV (filtrado)
                   </span>
-                  <span style={{ fontSize: 12, opacity: 0.75 }}>
-                    {exportBusy === "csv" ? "..." : "Baixar"}
-                  </span>
+                  <span style={{ fontSize: 12, opacity: 0.75 }}>{exportBusy === "csv" ? "..." : "Baixar"}</span>
                 </button>
 
                 <button
@@ -306,9 +351,7 @@ export default function CampaignsAnalyticsPage() {
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                     <IconFile /> PDF (filtrado)
                   </span>
-                  <span style={{ fontSize: 12, opacity: 0.75 }}>
-                    {exportBusy === "pdf" ? "..." : "Baixar"}
-                  </span>
+                  <span style={{ fontSize: 12, opacity: 0.75 }}>{exportBusy === "pdf" ? "..." : "Baixar"}</span>
                 </button>
 
                 <button
@@ -354,31 +397,27 @@ export default function CampaignsAnalyticsPage() {
           <div className="glp-toolbar__left" style={{ flexWrap: "wrap" }}>
             <div className="glp-field">
               <div className="glp-field__label">De</div>
-              <input
-                className="glp-input"
-                type="date"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-              />
+              <input className="glp-input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
             </div>
 
             <div className="glp-field">
               <div className="glp-field__label">Até</div>
-              <input
-                className="glp-input"
-                type="date"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-              />
+              <input className="glp-input" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+            </div>
+
+            {/* ✅ NOVO: Tipo */}
+            <div className="glp-field">
+              <div className="glp-field__label">Tipo</div>
+              <select className="glp-select" value={campaignType} onChange={(e) => setCampaignType(e.target.value)}>
+                <option value="all">Todas</option>
+                <option value="sms">SMS</option>
+                <option value="whatsapp">WhatsApp</option>
+              </select>
             </div>
 
             <div className="glp-field">
               <div className="glp-field__label">Campanha</div>
-              <select
-                className="glp-select"
-                value={campaignId}
-                onChange={(e) => setCampaignId(e.target.value)}
-              >
+              <select className="glp-select" value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
                 <option value="all">Todas</option>
                 {campaigns.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -390,11 +429,7 @@ export default function CampaignsAnalyticsPage() {
 
             <div className="glp-field">
               <div className="glp-field__label">Template</div>
-              <select
-                className="glp-select"
-                value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
-              >
+              <select className="glp-select" value={templateName} onChange={(e) => setTemplateName(e.target.value)}>
                 <option value="all">Todos</option>
                 {templates.map((t, index) => (
                   <option key={`${t}-${index}`} value={t}>
@@ -407,8 +442,7 @@ export default function CampaignsAnalyticsPage() {
 
           <div className="glp-toolbar__right">
             <span className="glp-muted">
-              Campanhas filtradas: {filteredCampaigns.length} • Gerado em{" "}
-              {formatBR(new Date().toISOString())}
+              Campanhas filtradas: {filteredCampaigns.length} • Gerado em {formatBR(new Date().toISOString())}
             </span>
           </div>
         </div>
@@ -429,6 +463,46 @@ export default function CampaignsAnalyticsPage() {
           <div className="glp-card">
             <div className="glp-card__label">Falhas</div>
             <div className="glp-card__value">{aggregate.failRate.toFixed(1)}%</div>
+          </div>
+        </div>
+
+        {/* ✅ Gráficos (ref Aivo) */}
+        <div className="glp-grid glp-grid--2" style={{ marginTop: 16 }}>
+          <div className="glp-card">
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+              <h3 style={{ margin: 0 }}>Performance</h3>
+              <span className="muted" style={{ fontSize: 12 }}>
+                base: {aggregate.total} envios
+              </span>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <MiniBar label="Entrega (proxy)" valuePct={aggregate.deliveryRate} color="rgba(46, 204, 113, .95)" />
+              <MiniBar label="Leitura" valuePct={aggregate.readRate} color="rgba(52, 152, 219, .95)" />
+              <MiniBar label="Falhas" valuePct={aggregate.failRate} color="rgba(231, 76, 60, .95)" />
+            </div>
+
+            <div className="muted" style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+              * SMS pode não ter “read”; quando não existir, fica 0%.
+            </div>
+          </div>
+
+          <div className="glp-card">
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+              <h3 style={{ margin: 0 }}>Mix por canal</h3>
+              <span className="muted" style={{ fontSize: 12 }}>
+                base: {filteredCampaigns.length} campanhas
+              </span>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <MiniBar label="SMS" valuePct={channelSplit.sms} color="rgba(155, 89, 182, .95)" />
+              <MiniBar label="WhatsApp" valuePct={channelSplit.whatsapp} color="rgba(37, 211, 102, .95)" />
+            </div>
+
+            <div className="muted" style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+              * Percentual por quantidade de campanhas no filtro (não por envios).
+            </div>
           </div>
         </div>
 
