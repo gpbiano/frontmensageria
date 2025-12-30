@@ -173,6 +173,29 @@ async function fetchSmsTemplates({ q = "", status = "" } = {}) {
   return data?.items || [];
 }
 
+async function createSmsTemplate({ name, text, status = "active" }) {
+  const token = getToken();
+  if (!token) throw new Error("Você não está autenticado. Faça login novamente.");
+
+  const r = await fetch(`${API_BASE}/outbound/sms-templates`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ name, text, status })
+  });
+
+  if (!r.ok) {
+    const txt = await r.text().catch(() => "");
+    throw new Error(txt || `Erro ao salvar modelo (HTTP ${r.status})`);
+  }
+
+  const data = await r.json().catch(() => ({}));
+  // esperado: { item } ou { template }
+  return data?.item || data?.template || data;
+}
+
 export default function SmsCampaignCreateWizard({ mode = "create", initialCampaign = null, onExit }) {
   const [stepIndex, setStepIndex] = useState(0);
 
@@ -191,6 +214,15 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
   const [templateId, setTemplateId] = useState(
     initialCampaign?.templateId || initialCampaign?.metadata?.templateId || ""
   );
+
+  // ✅ Pergunta: “Deseja salvar como modelo?”
+  const [saveAsTemplate, setSaveAsTemplate] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState(() => {
+    // sugestão inteligente: usa o nome da campanha
+    return initialCampaign?.templateName || "";
+  });
+  const [newTemplateStatus, setNewTemplateStatus] = useState("active"); // active | draft
+  const [savingTemplateBusy, setSavingTemplateBusy] = useState(false);
 
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -221,6 +253,24 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function reloadTemplates({ keepSelection = true } = {}) {
+    setTemplatesBusy(true);
+    try {
+      const items = await fetchSmsTemplates();
+      const list = Array.isArray(items) ? items : [];
+      setTemplates(list);
+
+      if (keepSelection && templateId) {
+        const ok = list.some((t) => String(t.id) === String(templateId));
+        if (!ok) setTemplateId("");
+      }
+    } catch {
+      setTemplates([]);
+    } finally {
+      setTemplatesBusy(false);
+    }
+  }
+
   // ✅ Carrega modelos SMS (quando abrir o wizard)
   useEffect(() => {
     let alive = true;
@@ -231,8 +281,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
         const items = await fetchSmsTemplates();
         if (!alive) return;
         setTemplates(Array.isArray(items) ? items : []);
-      } catch (e) {
-        // não trava o wizard se não tiver router ainda / perms
+      } catch {
         if (!alive) return;
         setTemplates([]);
       } finally {
@@ -244,7 +293,16 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sugere nome do modelo automaticamente quando marcar “salvar como modelo”
+  useEffect(() => {
+    if (!saveAsTemplate) return;
+    if (String(newTemplateName || "").trim()) return;
+    setNewTemplateName(String(name || "Modelo SMS").trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveAsTemplate]);
 
   const detectedVars = useMemo(() => extractTemplateVars(message), [message]);
 
@@ -332,16 +390,51 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     setInfo(`✅ Modelo aplicado: ${tpl.name}`);
   }
 
+  async function maybeSaveTemplate() {
+    if (!saveAsTemplate) return null;
+
+    const tName = String(newTemplateName || "").trim();
+    if (!tName) throw new Error('Informe o nome do modelo (marcado "Deseja salvar como modelo?").');
+
+    const text = String(message || "").trim();
+    if (!text) throw new Error("A mensagem está vazia — não dá para salvar um modelo vazio.");
+
+    setSavingTemplateBusy(true);
+    try {
+      const created = await createSmsTemplate({ name: tName, text, status: newTemplateStatus });
+      const newId = created?.id || created?.templateId || created?.item?.id || null;
+
+      // atualiza lista e já seleciona o modelo criado
+      await reloadTemplates({ keepSelection: false });
+      if (newId) setTemplateId(String(newId));
+
+      // feedback + desmarca
+      setInfo(`✅ Modelo salvo: ${tName}`);
+      setSaveAsTemplate(false);
+
+      return created;
+    } finally {
+      setSavingTemplateBusy(false);
+    }
+  }
+
   async function handleCreateOrSave() {
     setBusy(true);
     setError("");
     setInfo("");
 
     try {
+      // 1) Se quiser salvar como modelo, salva primeiro (para já capturar id)
+      const tpl = await maybeSaveTemplate().catch((e) => {
+        throw e;
+      });
+
+      const finalTemplateId = tpl?.id ? String(tpl.id) : templateId ? String(templateId) : "";
+
       // guarda templateId no metadata (sem depender de campo no schema)
       const metadata = {
         ...(campaign?.metadata || {}),
-        ...(templateId ? { templateId } : {})
+        ...(finalTemplateId ? { templateId: finalTemplateId } : {})
       };
 
       if (mode === "edit" && campaign?.id) {
@@ -353,15 +446,14 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
         const r = await updateSmsCampaign(campaign.id, { name, message, metadata });
         const item = r?.item || r?.campaign || r;
         setCampaign(item);
-        setInfo("✅ Alterações salvas.");
+        setInfo((prev) => prev || "✅ Alterações salvas.");
       } else {
         const r = await createSmsCampaign({ name, message, metadata });
         const item = r?.item || r;
         setCampaign(item);
-        setInfo("✅ Campanha criada.");
+        setInfo((prev) => prev || "✅ Campanha criada.");
       }
 
-      // ao salvar/criar, segue para próximo passo
       next();
     } catch (e) {
       setError(e?.message || "Erro ao salvar campanha.");
@@ -558,8 +650,13 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                 Fechar
               </button>
 
-              <button className="btn primary" type="button" onClick={handleCreateOrSave} disabled={busy}>
-                {busy ? "Salvando..." : mode === "edit" ? "Salvar" : "Criar"}
+              <button
+                className="btn primary"
+                type="button"
+                onClick={handleCreateOrSave}
+                disabled={busy || savingTemplateBusy}
+              >
+                {busy || savingTemplateBusy ? "Salvando..." : mode === "edit" ? "Salvar" : "Criar"}
               </button>
             </div>
           </div>
@@ -601,7 +698,62 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                 </div>
               </label>
 
-              <label className="field">
+              {/* ✅ Pergunta solicitada */}
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,.10)",
+                  background: "rgba(255,255,255,.03)"
+                }}
+              >
+                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: editable ? "pointer" : "not-allowed" }}>
+                  <input
+                    type="checkbox"
+                    checked={saveAsTemplate}
+                    onChange={(e) => setSaveAsTemplate(e.target.checked)}
+                    disabled={busy || !editable}
+                  />
+                  <span style={{ fontWeight: 600 }}>Deseja salvar como modelo?</span>
+                </label>
+
+                {saveAsTemplate ? (
+                  <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 160px", gap: 10 }}>
+                    <div>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                        Nome do modelo
+                      </div>
+                      <input
+                        value={newTemplateName}
+                        onChange={(e) => setNewTemplateName(e.target.value)}
+                        disabled={busy || !editable}
+                        placeholder="Ex: Cobrança amigável • SMS"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                        Status
+                      </div>
+                      <select
+                        value={newTemplateStatus}
+                        onChange={(e) => setNewTemplateStatus(e.target.value)}
+                        disabled={busy || !editable}
+                      >
+                        <option value="active">Ativo</option>
+                        <option value="draft">Rascunho</option>
+                      </select>
+                    </div>
+
+                    <div className="muted" style={{ gridColumn: "1 / -1", fontSize: 12 }}>
+                      Ao salvar, este texto vira um modelo em <b>Templates</b> e a campanha fica vinculada a ele.
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <label className="field" style={{ marginTop: 12 }}>
                 <span>Mensagem</span>
                 <textarea
                   ref={messageRef}

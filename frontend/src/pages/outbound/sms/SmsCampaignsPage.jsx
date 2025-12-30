@@ -4,13 +4,6 @@ import { fetchSmsCampaigns, deleteSmsCampaign } from "../../../api";
 import SmsCampaignCreateWizard from "./SmsCampaignCreateWizard.jsx";
 import "../../../styles/campaigns.css";
 
-const AUTH_KEY = "gpLabsAuthToken";
-
-function getToken() {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(AUTH_KEY);
-}
-
 function filenameSafe(s) {
   return String(s || "")
     .trim()
@@ -187,6 +180,12 @@ function Icon({ name, size = 18, title }) {
       <>
         <path {...stroke} d="M6 9l6 6 6-6" />
       </>
+    ),
+    search: (
+      <>
+        <circle {...stroke} cx="11" cy="11" r="7" />
+        <path {...stroke} d="M20 20l-3.5-3.5" />
+      </>
     )
   };
 
@@ -257,22 +256,13 @@ export default function SmsCampaignsPage({ onExit }) {
 
   function downloadTemplateFromCampaign(c) {
     const msg = String(c?.metadata?.message || c?.message || "").trim() || "Olá {{1}}!";
-
-    const { csvText, headers, vars } = buildCsvTemplate({ message: msg, delimiter: ";" });
-
-    // ✅ “campo pra guardar modelo” (sem mexer no DB): salva dentro de metadata
-    // Observação: isso só fica salvo se o backend já persiste metadata no update/create.
-    // Mesmo sem persistir, aqui resolve o download e temos a estrutura pronta.
-    // Se você quiser persistir de fato, eu te passo o PATCH /sms-campaigns/:id pra gravar metadata.smsCsvModel.
+    const { csvText } = buildCsvTemplate({ message: msg, delimiter: ";" });
 
     const fname = `modelo_audiencia_sms_${filenameSafe(c?.name || "campanha")}_${String(c?.id || "").slice(
       0,
       8
     )}.csv`;
     downloadTextFile({ content: csvText, filename: fname });
-
-    // eslint-disable-next-line no-console
-    console.info("Modelo CSV:", { headers, vars });
   }
 
   function startCreate() {
@@ -351,7 +341,7 @@ export default function SmsCampaignsPage({ onExit }) {
   }
 
   // =========================
-  // Page (envios apenas)
+  // Page (envios apenas) — SEM "Relatórios" aqui
   // =========================
   return (
     <div className="campaigns-page" ref={actionsWrapRef}>
@@ -396,10 +386,7 @@ export default function SmsCampaignsPage({ onExit }) {
             }}
           >
             <span className="muted" style={{ display: "inline-flex" }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-                <path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-              </svg>
+              <Icon name="search" size={16} />
             </span>
             <input
               value={query}
@@ -437,8 +424,8 @@ export default function SmsCampaignsPage({ onExit }) {
         </div>
       </div>
 
-      <div className="campaigns-grid">
-        {/* LISTA */}
+      {/* ✅ força 1 coluna (remove o “card” da direita e evita sobra de espaço) */}
+      <div className="campaigns-grid" style={{ gridTemplateColumns: "1fr" }}>
         <div className="campaigns-card">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
             <h3 style={{ margin: 0 }}>Campanhas</h3>
@@ -468,13 +455,7 @@ export default function SmsCampaignsPage({ onExit }) {
                   const open = actionsOpenId === c.id;
 
                   return (
-                    <div
-                      className="campaigns-row"
-                      key={c.id}
-                      style={{
-                        borderRadius: 10
-                      }}
-                    >
+                    <div className="campaigns-row" key={c.id} style={{ borderRadius: 10 }}>
                       <div className="truncate" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <span className="truncate" style={{ fontWeight: 600 }}>
                           {c.name}
@@ -492,7 +473,7 @@ export default function SmsCampaignsPage({ onExit }) {
 
                       <div className="muted">{formatDateTime(c.createdAt)}</div>
 
-                      {/* ✅ AÇÕES: dropdown (não sobrepõe / não quebra layout) */}
+                      {/* ✅ AÇÕES: dropdown (sem sobreposição quebrada) */}
                       <div style={{ textAlign: "right", position: "relative" }}>
                         <button
                           className="btn small secondary"
@@ -524,39 +505,22 @@ export default function SmsCampaignsPage({ onExit }) {
                               boxShadow: "0 10px 30px rgba(0,0,0,0.25)"
                             }}
                           >
-                            {canEditCampaign(c) ? (
-                              <button
-                                className="btn small secondary"
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActionsOpenId(null);
-                                  startEdit(c);
-                                }}
-                                style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
-                              >
-                                <span style={{ display: "inline-flex", marginRight: 8 }}>
-                                  <Icon name="edit" size={16} />
-                                </span>
-                                Abrir / Editar
-                              </button>
-                            ) : (
-                              <button
-                                className="btn small secondary"
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActionsOpenId(null);
-                                  startEdit(c);
-                                }}
-                                style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
-                              >
-                                <span style={{ display: "inline-flex", marginRight: 8 }}>
-                                  <Icon name="edit" size={16} />
-                                </span>
-                                Abrir (somente leitura)
-                              </button>
-                            )}
+                            <button
+                              className="btn small secondary"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActionsOpenId(null);
+                                startEdit(c);
+                              }}
+                              style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
+                              title={canEditCampaign(c) ? "Abrir / Editar" : "Abrir (somente leitura)"}
+                            >
+                              <span style={{ display: "inline-flex", marginRight: 8 }}>
+                                <Icon name="edit" size={16} />
+                              </span>
+                              {canEditCampaign(c) ? "Abrir / Editar" : "Abrir (somente leitura)"}
+                            </button>
 
                             <button
                               className="btn small secondary"
@@ -584,10 +548,7 @@ export default function SmsCampaignsPage({ onExit }) {
                                   setActionsOpenId(null);
                                   handleDeleteFromList(c);
                                 }}
-                                style={{
-                                  width: "100%",
-                                  justifyContent: "flex-start"
-                                }}
+                                style={{ width: "100%", justifyContent: "flex-start" }}
                                 title="Excluir campanha (rascunho)"
                               >
                                 <span style={{ display: "inline-flex", marginRight: 8 }}>
@@ -596,9 +557,7 @@ export default function SmsCampaignsPage({ onExit }) {
                                 Excluir
                               </button>
                             ) : (
-                              <div style={{ fontSize: 12, opacity: 0.75 }}>
-                                Excluir disponível só em rascunho.
-                              </div>
+                              <div style={{ fontSize: 12, opacity: 0.75 }}>Excluir disponível só em rascunho.</div>
                             )}
                           </div>
                         ) : null}
@@ -609,23 +568,11 @@ export default function SmsCampaignsPage({ onExit }) {
               </div>
             )}
           </div>
-        </div>
 
-        {/* DIREITA: placeholder (sem relatório aqui) */}
-        <div className="campaigns-card">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <h3 style={{ margin: 0 }}>Relatórios</h3>
-              <span className="muted" style={{ fontSize: 13 }}>
-                Relatórios e analytics agora ficam em <b>Reportes</b>.
-              </span>
-            </div>
-          </div>
-
-          <div className="alert" style={{ marginTop: 12 }}>
-            ✅ Esta tela é apenas para criação e disparo de SMS.
-            <br />
-            Vá em <b>Reportes → Analytics</b> para acompanhar performance e gráficos.
+          {/* ✅ aviso simples (sem card de relatório) */}
+          <div className="alert" style={{ marginTop: 14 }}>
+            ✅ Esta tela é apenas para criação e disparo de SMS. Relatórios/analytics ficam em{" "}
+            <b>Reportes → Analytics</b>.
           </div>
         </div>
       </div>
