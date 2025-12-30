@@ -1425,11 +1425,14 @@ export async function fetchSmsCampaigns() {
   return request(`/outbound/sms-campaigns`, { method: "GET" });
 }
 
-export async function createSmsCampaign(payload: { name: string; message: string }) {
+export async function createSmsCampaign(payload: { name: string; message: string; metadata?: any }) {
   return request(`/outbound/sms-campaigns`, { method: "POST", body: payload });
 }
 
-export async function updateSmsCampaign(id: string, payload: { name?: string; message?: string }) {
+export async function updateSmsCampaign(
+  id: string,
+  payload: { name?: string; message?: string; metadata?: any }
+) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: payload
@@ -1472,6 +1475,88 @@ export async function fetchSmsCampaignReport(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, { method: "GET" });
 }
 
+// ============================
+// SMS TEMPLATES (Modelos de SMS)  ✅ NOVO
+// ============================
+
+export type SmsTemplateStatus = "active" | "draft" | "disabled";
+
+export interface SmsTemplateRecord {
+  id: string;
+  name: string;
+  text: string;
+  status?: SmsTemplateStatus;
+  metadata?: any;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Lista modelos de SMS
+ * Backend esperado:
+ * - GET /outbound/sms-templates?q=&status=
+ * Retornos aceitos:
+ * - { items: [...] }
+ * - { data: [...] }
+ * - array direto
+ */
+export async function fetchSmsTemplates(params?: { q?: string; status?: SmsTemplateStatus | string }) {
+  const qs = buildQuery({
+    q: params?.q || "",
+    status: params?.status || ""
+  });
+
+  const res = await request<any>(`/outbound/sms-templates${qs}`, { method: "GET" });
+  return unwrapList<SmsTemplateRecord>(res);
+}
+
+/**
+ * Cria modelo de SMS
+ * Backend esperado:
+ * - POST /outbound/sms-templates { name, text, status?, metadata? }
+ * Retornos aceitos:
+ * - { item: {...} }
+ * - { template: {...} }
+ * - objeto direto
+ */
+export async function createSmsTemplate(payload: {
+  name: string;
+  text: string;
+  status?: SmsTemplateStatus;
+  metadata?: any;
+}) {
+  const res = await request<any>(`/outbound/sms-templates`, { method: "POST", body: payload });
+
+  if (res?.item) return res.item as SmsTemplateRecord;
+  if (res?.template) return res.template as SmsTemplateRecord;
+  return res as SmsTemplateRecord;
+}
+
+/**
+ * Atualiza modelo de SMS (opcional)
+ * - PATCH /outbound/sms-templates/:id
+ */
+export async function updateSmsTemplate(
+  id: string,
+  payload: { name?: string; text?: string; status?: SmsTemplateStatus; metadata?: any }
+) {
+  const res = await request<any>(`/outbound/sms-templates/${encodeURIComponent(String(id))}`, {
+    method: "PATCH",
+    body: payload
+  });
+
+  if (res?.item) return res.item as SmsTemplateRecord;
+  if (res?.template) return res.template as SmsTemplateRecord;
+  return res as SmsTemplateRecord;
+}
+
+/**
+ * Remove modelo de SMS (opcional)
+ * - DELETE /outbound/sms-templates/:id
+ */
+export async function deleteSmsTemplate(id: string) {
+  return request(`/outbound/sms-templates/${encodeURIComponent(String(id))}`, { method: "DELETE" });
+}
 
 // ======================================================
 // ALIASES (compat com imports antigos do front)
@@ -1488,3 +1573,4 @@ export async function downloadConversationHistoryExcel(conversationId: string) {
     `conversation_${conversationId}.xlsx`
   );
 }
+
