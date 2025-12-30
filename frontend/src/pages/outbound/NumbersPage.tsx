@@ -2,19 +2,113 @@
 
 import { useEffect, useState } from "react";
 import { fetchNumbers, syncNumbers } from "../../api";
-import type { PhoneNumberRecord } from "../../types";
 import "../../styles/outbound.css";
 
+type BackendNumber = {
+  id?: string;
+  tenantId?: string;
+
+  // vindo do backend
+  phoneE164?: string;
+  provider?: string;
+  isActive?: boolean;
+  metadata?: any;
+  createdAt?: string;
+  updatedAt?: string;
+
+  // compat (caso já exista no seu types antigo)
+  name?: string;
+  displayNumber?: string;
+  quality?: string;
+  limitPerDay?: number;
+  connected?: boolean;
+};
+
+type NormalizedNumber = {
+  key: string;
+  name: string;
+  displayNumber: string;
+  quality: string | null;
+  limitPerDay: number | null;
+  connected: boolean;
+  updatedAt: string;
+};
+
 export default function NumbersPage() {
-  const [numbers, setNumbers] = useState<PhoneNumberRecord[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [syncing, setSyncing] = useState<boolean>(false);
+  const [numbers, setNumbers] = useState<NormalizedNumber[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  function toPtBrDate(iso?: string) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleString("pt-BR");
+  }
+
+  function normalize(list: BackendNumber[]): NormalizedNumber[] {
+    return list.map((n, idx) => {
+      const md = n?.metadata || {};
+
+      const phone =
+        md.displayPhoneNumber ||
+        md.display_phone_number ||
+        n.displayNumber ||
+        n.phoneE164 ||
+        "—";
+
+      const name =
+        md.verifiedName ||
+        md.verified_name ||
+        md.displayPhoneNumber ||
+        n.name ||
+        phone;
+
+      const quality =
+        md.qualityRating ||
+        md.quality_rating ||
+        n.quality ||
+        null;
+
+      const connected =
+        typeof n.connected === "boolean"
+          ? n.connected
+          : Boolean(n.isActive);
+
+      const key =
+        n.id ||
+        n.phoneE164 ||
+        md.metaPhoneNumberId ||
+        `${phone}_${idx}`;
+
+      return {
+        key,
+        name,
+        displayNumber: phone,
+        quality: quality ? String(quality) : null,
+        limitPerDay: typeof n.limitPerDay === "number" ? n.limitPerDay : null,
+        connected,
+        updatedAt: toPtBrDate(n.updatedAt)
+      };
+    });
+  }
 
   async function load() {
     setLoading(true);
     try {
-      const data = await fetchNumbers();
-      setNumbers(Array.isArray(data) ? data : []);
+      const res: any = await fetchNumbers();
+
+      // ✅ backend pode retornar array direto OU { items } OU { numbers }
+      const list: BackendNumber[] =
+        Array.isArray(res)
+          ? res
+          : Array.isArray(res?.items)
+          ? res.items
+          : Array.isArray(res?.numbers)
+          ? res.numbers
+          : [];
+
+      setNumbers(normalize(list));
     } catch (err) {
       console.error("Erro ao carregar números:", err);
       setNumbers([]);
@@ -86,27 +180,25 @@ export default function NumbersPage() {
               </tr>
             ) : (
               numbers.map((n) => (
-                <tr key={n.displayNumber || n.name}>
+                <tr key={n.key}>
                   <td className="cell-bold">{n.name}</td>
                   <td>WhatsApp</td>
                   <td>{n.displayNumber}</td>
                   <td>
-                    <span
-                      className={`quality-dot ${
-                        n.quality ? n.quality.toLowerCase() : ""
-                      }`}
-                    />
-                    {n.quality}
+                    {n.quality ? (
+                      <>
+                        <span className={`quality-dot ${n.quality.toLowerCase()}`} />
+                        {n.quality}
+                      </>
+                    ) : (
+                      "—"
+                    )}
                   </td>
-                  <td>
-                    {n.limitPerDay
-                      ? `${n.limitPerDay} / 24hs`
-                      : "–"}
-                  </td>
+                  <td>{n.limitPerDay ? `${n.limitPerDay} / 24hs` : "—"}</td>
                   <td className={n.connected ? "status-ok" : "status-error"}>
                     {n.connected ? "Conectado" : "Desconectado"}
                   </td>
-                  <td>{n.updatedAt || "—"}</td>
+                  <td>{n.updatedAt}</td>
                 </tr>
               ))
             )}
