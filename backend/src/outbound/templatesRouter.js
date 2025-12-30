@@ -18,17 +18,6 @@ function resolveModel(names) {
   for (const n of names) if (prisma?.[n]) return prisma[n];
   return null;
 }
-function getModelName(delegate) {
-  return String(delegate?._model || delegate?.name || "OutboundTemplate");
-}
-function modelHasField(modelName, field) {
-  try {
-    const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
-    return !!m?.fields?.some((f) => f.name === field);
-  } catch {
-    return true;
-  }
-}
 function getTenantId(req) {
   const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
   return tid ? String(tid) : null;
@@ -53,13 +42,12 @@ function getMetaEnv() {
   const apiVersion = apiVersionRaw.startsWith("v") ? apiVersionRaw : `v${apiVersionRaw}`;
   return { wabaId, token, apiVersion };
 }
-
-const MODEL_CANDIDATES = ["outboundTemplate", "OutboundTemplate", "template", "Template"];
-
 function canonStatus(metaStatus) {
   const s = String(metaStatus || "").trim();
   return s ? s.toUpperCase() : "DRAFT";
 }
+
+const MODEL_CANDIDATES = ["outboundTemplate", "OutboundTemplate", "template", "Template"];
 
 // ======================================================
 // GET /outbound/templates
@@ -72,18 +60,12 @@ router.get("/", requireAuth, async (req, res) => {
     const delegate = prisma?.outboundTemplate || resolveModel(MODEL_CANDIDATES);
     if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
 
-    const modelName = getModelName(delegate);
-
-    const where = { tenantId };
-    // se existir channel no model, filtra whatsapp
-    if (modelHasField(modelName, "channel")) where.channel = "whatsapp";
-
+    // No teu schema, channel existe e é obrigatório → sempre filtra whatsapp
     const items = await delegate.findMany({
-      where,
-      orderBy: modelHasField(modelName, "updatedAt") ? { updatedAt: "desc" } : undefined
+      where: { tenantId, channel: "whatsapp" },
+      orderBy: { updatedAt: "desc" }
     });
 
-    // ✅ Compat: items + templates
     return res.json({ ok: true, items, templates: items, count: items.length });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ templatesRouter GET / failed");
@@ -101,8 +83,6 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
 
     const delegate = prisma?.outboundTemplate || resolveModel(MODEL_CANDIDATES);
     if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
-
-    const modelName = getModelName(delegate);
 
     const { wabaId, token, apiVersion } = getMetaEnv();
     if (!wabaId || !token) {
@@ -167,59 +147,41 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
         continue;
       }
 
-      // ✅ status CANONICAL (Meta): APPROVED / PENDING / REJECTED / PAUSED ...
       const status = canonStatus(tpl?.status);
 
       const contentObj = {
         metaTemplateId: tpl?.id || null,
         category: tpl?.category || null,
         language: tpl?.language || null,
-        status: tpl?.status || null, // mantém status original também
+        status: tpl?.status || null,
         rejectedReason: tpl?.rejected_reason || null,
         components: Array.isArray(tpl?.components) ? tpl.components : [],
         latestTemplate: tpl?.latest_template || null,
         qualityScore: tpl?.quality_score || null
       };
 
-      // 🔥 Campos base (sempre)
-      const create = { tenantId };
-      const updateData = {};
+      // ✅ No teu schema: tenantId + channel + name são críticos
+      const create = {
+        tenantId,
+        channel: "whatsapp",
+        name,
+        language: tpl?.language ? String(tpl.language) : null,
+        status,
+        content: contentObj,
+        metadata: { raw: tpl, metaStatus: status, syncedAt: nowIso }
+      };
 
-      if (modelHasField(modelName, "channel")) {
-        create.channel = "whatsapp";
-        updateData.channel = "whatsapp";
-      }
-
-      if (modelHasField(modelName, "name")) {
-        create.name = name;
-        updateData.name = name;
-      }
-
-      if (modelHasField(modelName, "language")) {
-        const lang = tpl?.language ? String(tpl.language) : null;
-        create.language = lang;
-        updateData.language = lang;
-      }
-
-      // ✅ aqui é o FIX: salvar status igual Meta (UPPERCASE)
-      if (modelHasField(modelName, "status")) {
-        create.status = status;
-        updateData.status = status;
-      }
-
-      if (modelHasField(modelName, "content")) {
-        create.content = contentObj;
-        updateData.content = contentObj;
-      }
-
-      if (modelHasField(modelName, "metadata")) {
-        const md = { raw: tpl, metaStatus: status, syncedAt: nowIso };
-        create.metadata = md;
-        updateData.metadata = md;
-      }
+      const updateData = {
+        channel: "whatsapp",
+        name,
+        language: tpl?.language ? String(tpl.language) : null,
+        status,
+        content: contentObj,
+        metadata: { raw: tpl, metaStatus: status, syncedAt: nowIso }
+      };
 
       try {
-        if (canUpsert && modelHasField(modelName, "channel")) {
+        if (canUpsert) {
           await prisma.outboundTemplate.upsert({
             where: { tenantId_channel_name: { tenantId, channel: "whatsapp", name } },
             create,
@@ -227,10 +189,11 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
           });
           updated++;
         } else if (typeof delegate.updateMany === "function") {
-          const where = { tenantId, name };
-          if (modelHasField(modelName, "channel")) where.channel = "whatsapp";
+          const upd = await delegate.updateMany({
+            where: { tenantId, channel: "whatsapp", name },
+            data: updateData
+          });
 
-          const upd = await delegate.updateMany({ where, data: updateData });
           if (upd?.count > 0) updated++;
           else {
             await delegate.create({ data: create });
@@ -242,6 +205,7 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
         }
       } catch (e) {
         const msg = String(e?.message || e);
+        // duplicidade por unique(tenantId, channel, name)
         if (msg.includes("P2002") || msg.toLowerCase().includes("unique")) {
           skipped++;
           continue;
@@ -251,16 +215,11 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
       }
     }
 
-    // retorna lista atual
-    const whereNow = { tenantId };
-    if (modelHasField(modelName, "channel")) whereNow.channel = "whatsapp";
-
     const items = await delegate.findMany({
-      where: whereNow,
-      orderBy: modelHasField(modelName, "updatedAt") ? { updatedAt: "desc" } : undefined
+      where: { tenantId, channel: "whatsapp" },
+      orderBy: { updatedAt: "desc" }
     });
 
-    // ✅ Compat: items + templates
     return res.json({
       ok: true,
       fetched: all.length,
