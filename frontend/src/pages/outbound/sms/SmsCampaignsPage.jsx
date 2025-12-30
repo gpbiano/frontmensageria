@@ -353,7 +353,7 @@ export default function SmsCampaignsPage({ onExit }) {
           </div>
 
           <p className="muted" style={{ margin: 0 }}>
-            Envio de SMS integrado via IAGENTE. Crie rascunhos, suba audiência e inicie o disparo.
+            Envio de SMS integrado. Crie rascunhos, suba audiência e inicie o disparo.
           </p>
         </div>
 

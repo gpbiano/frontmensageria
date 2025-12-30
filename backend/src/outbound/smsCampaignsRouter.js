@@ -1,20 +1,6 @@
 // backend/src/outbound/smsCampaignsRouter.js
 // ✅ PRISMA-FIRST
 // Base: /outbound/sms-campaigns
-//
-// Endpoints:
-// - GET    /
-// - POST   /                 (create)
-// - PATCH  /:id              (update name/message/metadata) ✅
-// - POST   /:id/audience     (CSV upload)
-// - POST   /:id/start        (process queue - supports resume via cursor)
-// - PATCH  /:id/pause
-// - PATCH  /:id/resume
-// - PATCH  /:id/cancel
-// - GET    /:id/report
-// - GET    /:id/report.csv
-//
-// ⚠️ Nota: o fornecedor não aparece no frontend. Aqui no backend fica somente a integração.
 
 import express from "express";
 import multer from "multer";
@@ -29,7 +15,7 @@ const router = express.Router();
 // =========================
 // Upload CSV
 // =========================
-const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB
+const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } });
 
 // =========================
 // Feature flag SMS (add-on)
@@ -46,6 +32,21 @@ function resolveModel() {
   return prisma?.outboundCampaign || prisma?.OutboundCampaign || null;
 }
 
+function getModelName(model) {
+  // Prisma client delegate não expõe facilmente; usamos fallback estável
+  return "OutboundCampaign";
+}
+
+function modelHasField(modelName, field) {
+  try {
+    const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
+    return !!m?.fields?.some((f) => f.name === field);
+  } catch {
+    // se não conseguir inspecionar, assume true para não quebrar em prod
+    return true;
+  }
+}
+
 function getTenantId(req) {
   const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
   return tid ? String(tid) : null;
@@ -57,13 +58,11 @@ function assertPrisma(res, model) {
     return false;
   }
   if (!model) {
-    res
-      .status(503)
-      .json({
-        ok: false,
-        error: "prisma_model_missing",
-        details: { expected: "outboundCampaign" }
-      });
+    res.status(503).json({
+      ok: false,
+      error: "prisma_model_missing",
+      details: { expected: "outboundCampaign|OutboundCampaign" }
+    });
     return false;
   }
   return true;
@@ -75,22 +74,18 @@ async function getSmsCampaign(model, tenantId, id) {
   });
 }
 
-function asObject(v) {
-  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
-}
-
 // =========================
 // Provider helpers (env)
 // =========================
-function assertIagenteEnv() {
+function assertSmsProviderEnv() {
   const user = String(process.env.IAGENTE_SMS_USER || "").trim();
   const pass = String(process.env.IAGENTE_SMS_PASS || "").trim();
   const base = String(process.env.IAGENTE_SMS_BASE_URL || "").trim();
-  if (!user || !pass || !base) return { ok: false, error: "missing_iagente_env" };
+  if (!user || !pass || !base) return { ok: false, error: "missing_sms_provider_env" };
   return { ok: true, user, pass, base };
 }
 
-function buildIagenteUrl({ base, user, pass, phone, message }) {
+function buildProviderUrl({ base, user, pass, phone, message }) {
   const url = new URL(base);
   url.searchParams.set("usuario", user);
   url.searchParams.set("senha", pass);
@@ -103,9 +98,7 @@ function buildIagenteUrl({ base, user, pass, phone, message }) {
 // CSV helpers
 // =========================
 function normalizePhone(raw) {
-  const d = String(raw || "")
-    .trim()
-    .replace(/[^\d]/g, "");
+  const d = String(raw || "").replace(/[^\d]/g, "");
   return d.length >= 10 ? d : null;
 }
 
@@ -143,11 +136,7 @@ function parseCsv(text) {
     const phone = normalizePhone(cols[phoneIdx]);
 
     if (!phone) {
-      out.errors.push({
-        line: i + 1,
-        error: "invalid_phone",
-        value: cols[phoneIdx] || ""
-      });
+      out.errors.push({ line: i + 1, error: "invalid_phone", value: cols[phoneIdx] || "" });
       continue;
     }
 
@@ -190,12 +179,11 @@ function canCancel(s) {
 }
 
 // =========================
-// Progress (persistido em metadata.smsProgress)
+// Progress helpers (metadata.smsProgress)
 // =========================
 function getProgress(campaign) {
-  const md = asObject(campaign?.metadata);
-  const p = asObject(md.smsProgress);
-
+  const md = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
+  const p = md?.smsProgress && typeof md.smsProgress === "object" ? md.smsProgress : {};
   const cursor = Number.isFinite(Number(p.cursor)) ? Number(p.cursor) : 0;
 
   return {
@@ -207,8 +195,8 @@ function getProgress(campaign) {
   };
 }
 
-async function persistProgress(model, id, campaign, patch) {
-  const baseMd = asObject(campaign?.metadata);
+async function persistProgress(model, modelName, id, campaign, patch) {
+  const baseMd = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
   const baseProg = getProgress(campaign);
 
   const nextProg = {
@@ -219,34 +207,31 @@ async function persistProgress(model, id, campaign, patch) {
 
   const nextMd = { ...baseMd, smsProgress: nextProg };
 
-  await model.update({
-    where: { id: String(id) },
-    data: { metadata: nextMd }
-  });
+  const data = {};
+  if (modelHasField(modelName, "metadata")) data.metadata = nextMd;
 
+  await model.update({ where: { id: String(id) }, data });
   return nextProg;
 }
 
 function renderMessage(template, vars) {
   let text = String(template || "");
   for (const [k, v] of Object.entries(vars || {})) {
-    // substitui {{chave}} por vars[chave]
     text = text.replaceAll(`{{${k}}}`, String(v ?? ""));
   }
   return text;
 }
 
 function resolveMessageTemplate(campaign) {
-  // hoje você guarda a mensagem em metadata.message (e não em um campo message)
-  const md = asObject(campaign?.metadata);
-  const msg = String(md?.message || "").trim();
-  return msg;
-}
+  // ✅ fallback robusto pra evitar message_required indevido
+  const md = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
+  const direct =
+    String(campaign?.message || "").trim() ||
+    String(campaign?.text || "").trim() ||
+    String(md?.message || "").trim() ||
+    String(md?.smsMessage || "").trim();
 
-function escapeCsv(v) {
-  const s = String(v ?? "");
-  if (/[",\n\r;]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
+  return direct;
 }
 
 // =========================
@@ -283,6 +268,8 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
+  const modelName = getModelName(model);
+
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
@@ -292,28 +279,29 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     if (!name) return res.status(400).json({ ok: false, error: "name_required" });
     if (!message) return res.status(400).json({ ok: false, error: "message_required" });
 
-    const baseMetadata = asObject(req.body?.metadata);
+    const baseMetadata =
+      req.body?.metadata && typeof req.body.metadata === "object" ? req.body.metadata : {};
 
-    const item = await model.create({
-      data: {
-        tenantId,
-        channel: "sms",
-        name,
-        status: STATUS.DRAFT,
-        metadata: {
-          ...baseMetadata,
-          message, // ✅ fica guardado aqui
-          smsProgress: {
-            cursor: 0,
-            sent: 0,
-            success: 0,
-            failed: 0,
-            lastRunAt: new Date().toISOString()
-          }
-        }
-      }
-    });
+    const data = {
+      tenantId,
+      channel: "sms",
+      name,
+      status: STATUS.DRAFT
+    };
 
+    // ✅ salva message direto no model SE existir
+    if (modelHasField(modelName, "message")) data.message = message;
+
+    // ✅ e também em metadata.message (padrão do wizard)
+    if (modelHasField(modelName, "metadata")) {
+      data.metadata = {
+        ...baseMetadata,
+        message,
+        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() }
+      };
+    }
+
+    const item = await model.create({ data });
     return res.status(201).json({ ok: true, item });
   } catch (err) {
     logger.error({ err: err?.message || err, body: req.body }, "❌ smsCampaignsRouter POST / failed");
@@ -322,15 +310,15 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
 });
 
 // =========================
-// UPDATE campaign (edit rascunho)
-// PATCH /outbound/sms-campaigns/:id
-// body: { name?, message?, metadata? }
+// UPLOAD AUDIENCE
 // =========================
-router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+router.post("/:id/audience", requireAuth, requireRole("admin", "manager"), upload.single("file"), async (req, res) => {
   if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
 
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
+
+  const modelName = getModelName(model);
 
   try {
     const tenantId = getTenantId(req);
@@ -341,122 +329,49 @@ router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, r
     if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
 
     if (String(campaign.status) === STATUS.RUNNING) {
-      return res.status(409).json({ ok: false, error: "cannot_update_while_running" });
-    }
-    if ([STATUS.CANCELED, STATUS.FINISHED].includes(String(campaign.status))) {
-      return res.status(409).json({ ok: false, error: "cannot_update_closed_campaign" });
+      return res.status(409).json({ ok: false, error: "cannot_update_audience_while_running" });
     }
 
-    const name = req.body?.name !== undefined ? String(req.body?.name || "").trim() : null;
-    const message = req.body?.message !== undefined ? String(req.body?.message || "").trim() : null;
-    const patchMetadata = asObject(req.body?.metadata);
+    let csvText = "";
+    if (req.file?.buffer) csvText = req.file.buffer.toString("utf8");
+    else if (typeof req.body?.csvText === "string") csvText = req.body.csvText;
+    else if (typeof req.body?.csv === "string") csvText = req.body.csv;
 
-    if (name !== null && !name) return res.status(400).json({ ok: false, error: "name_required" });
-    if (message !== null && !message) return res.status(400).json({ ok: false, error: "message_required" });
+    if (!csvText.trim()) return res.status(400).json({ ok: false, error: "csv_required" });
 
-    const baseMd = asObject(campaign.metadata);
+    const parsed = parseCsv(csvText);
+    if (!parsed.rows.length) {
+      return res.status(400).json({ ok: false, error: "csv_empty_or_invalid", details: parsed.errors });
+    }
+
+    const audience = {
+      rows: parsed.rows,
+      total: parsed.rows.length,
+      errors: parsed.errors,
+      importedAt: new Date().toISOString()
+    };
+
+    const baseMd = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
     const nextMd = {
       ...baseMd,
-      ...patchMetadata
+      smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() }
     };
-    if (message !== null) nextMd.message = message;
 
     const data = {};
-    if (name !== null) data.name = name;
-    data.metadata = nextMd;
+    if (modelHasField(modelName, "audience")) data.audience = audience;
+    if (modelHasField(modelName, "metadata")) data.metadata = nextMd;
 
-    const item = await model.update({
-      where: { id },
-      data
-    });
+    const item = await model.update({ where: { id }, data });
 
-    return res.json({ ok: true, item });
+    return res.json({ ok: true, item, imported: parsed.rows.length, errors: parsed.errors.length });
   } catch (err) {
-    logger.error({ err: err?.message || err, body: req.body }, "❌ smsCampaignsRouter PATCH /:id failed");
+    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/audience failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
 // =========================
-// UPLOAD AUDIENCE
-// =========================
-router.post(
-  "/:id/audience",
-  requireAuth,
-  requireRole("admin", "manager"),
-  upload.single("file"),
-  async (req, res) => {
-    if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
-    const model = resolveModel();
-    if (!assertPrisma(res, model)) return;
-
-    try {
-      const tenantId = getTenantId(req);
-      if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
-
-      const id = String(req.params.id || "");
-      const campaign = await getSmsCampaign(model, tenantId, id);
-      if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
-
-      if (String(campaign.status) === STATUS.RUNNING) {
-        return res.status(409).json({ ok: false, error: "cannot_update_audience_while_running" });
-      }
-
-      let csvText = "";
-      if (req.file?.buffer) csvText = req.file.buffer.toString("utf8");
-      else if (typeof req.body?.csvText === "string") csvText = req.body.csvText;
-      else if (typeof req.body?.csv === "string") csvText = req.body.csv;
-
-      if (!csvText.trim()) return res.status(400).json({ ok: false, error: "csv_required" });
-
-      const parsed = parseCsv(csvText);
-      if (!parsed.rows.length) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "csv_empty_or_invalid", details: parsed.errors });
-      }
-
-      const audience = {
-        rows: parsed.rows,
-        total: parsed.rows.length,
-        errors: parsed.errors,
-        importedAt: new Date().toISOString()
-      };
-
-      // reset progress (a audiência mudou)
-      const baseMd = asObject(campaign?.metadata);
-      const nextMd = {
-        ...baseMd,
-        smsProgress: {
-          cursor: 0,
-          sent: 0,
-          success: 0,
-          failed: 0,
-          lastRunAt: new Date().toISOString()
-        }
-      };
-
-      const item = await model.update({
-        where: { id },
-        data: { audience, metadata: nextMd }
-      });
-
-      return res.json({
-        ok: true,
-        item,
-        audienceCount: parsed.rows.length,
-        errorsCount: parsed.errors.length
-      });
-    } catch (err) {
-      logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/audience failed");
-      return res.status(500).json({ ok: false, error: "internal_error" });
-    }
-  }
-);
-
-// =========================
-// START (envio) — resume via cursor
+// START (envio) + RESUME exato (cursor)
 // =========================
 router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
@@ -464,8 +379,10 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  const PROGRESS_FLUSH_EVERY = Number(process.env.SMS_PROGRESS_FLUSH_EVERY || 10); // persist a cada N envios
-  const STATUS_CHECK_EVERY = Number(process.env.SMS_STATUS_CHECK_EVERY || 10); // checa pause/cancel a cada N envios
+  const modelName = getModelName(model);
+
+  const PROGRESS_FLUSH_EVERY = Number(process.env.SMS_PROGRESS_FLUSH_EVERY || 10);
+  const STATUS_CHECK_EVERY = Number(process.env.SMS_STATUS_CHECK_EVERY || 10);
 
   try {
     const tenantId = getTenantId(req);
@@ -475,24 +392,20 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     const campaign = await getSmsCampaign(model, tenantId, id);
     if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
 
-    // evita dupla execução
     if (String(campaign.status) === STATUS.RUNNING) {
       return res.status(409).json({ ok: false, error: "already_running" });
     }
-
     if (!canStart(campaign.status)) {
       return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
     }
-
-    const rows = campaign?.audience?.rows;
-    if (!Array.isArray(rows) || !rows.length) {
+    if (!campaign.audience?.rows?.length) {
       return res.status(400).json({ ok: false, error: "audience_required" });
     }
 
     const messageTemplate = resolveMessageTemplate(campaign);
     if (!messageTemplate) return res.status(400).json({ ok: false, error: "message_required" });
 
-    const env = assertIagenteEnv();
+    const env = assertSmsProviderEnv();
     if (!env.ok) return res.status(500).json({ ok: false, error: env.error });
 
     // seta RUNNING
@@ -507,16 +420,14 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       }
     });
 
-    // recarrega pra pegar estado atual (principalmente status e metadata atualizado)
     let current = await getSmsCampaign(model, tenantId, id);
     if (!current) return res.status(404).json({ ok: false, error: "not_found" });
 
-    const audienceRows = current.audience.rows;
+    const rows = current.audience.rows;
     let prog = getProgress(current);
 
-    // se cursor passou do total (ex: audiência menor), ajusta
-    if (prog.cursor > audienceRows.length) {
-      prog = await persistProgress(model, id, current, { cursor: audienceRows.length });
+    if (prog.cursor > rows.length) {
+      prog = await persistProgress(model, modelName, id, current, { cursor: rows.length });
       current = await getSmsCampaign(model, tenantId, id);
     }
 
@@ -530,48 +441,33 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     const samples = [];
     const SAMPLE_LIMIT = 50;
 
-    for (let i = prog.cursor; i < audienceRows.length && localSent < maxToSend; i++) {
-      // checa pause/cancel periodicamente (no DB)
+    for (let i = prog.cursor; i < rows.length && localSent < maxToSend; i++) {
       if (localSent % STATUS_CHECK_EVERY === 0) {
         const st = await getSmsCampaign(model, tenantId, id);
         const statusNow = String(st?.status || "");
         if (statusNow === STATUS.PAUSED) {
-          await persistProgress(model, id, st, {
+          await persistProgress(model, modelName, id, st, {
             cursor: i,
             sent: prog.sent + localSent,
             success: prog.success + localSuccess,
             failed: prog.failed + localFailed
           });
-          return res.status(202).json({
-            ok: true,
-            status: STATUS.PAUSED,
-            cursor: i,
-            sent: prog.sent + localSent,
-            success: prog.success + localSuccess,
-            failed: prog.failed + localFailed
-          });
+          return res.status(202).json({ ok: true, paused: true, cursor: i, sent: prog.sent + localSent });
         }
         if (statusNow === STATUS.CANCELED) {
-          await persistProgress(model, id, st, {
+          await persistProgress(model, modelName, id, st, {
             cursor: i,
             sent: prog.sent + localSent,
             success: prog.success + localSuccess,
             failed: prog.failed + localFailed
           });
-          return res.status(202).json({
-            ok: true,
-            status: STATUS.CANCELED,
-            cursor: i,
-            sent: prog.sent + localSent,
-            success: prog.success + localSuccess,
-            failed: prog.failed + localFailed
-          });
+          return res.status(202).json({ ok: true, canceled: true, cursor: i, sent: prog.sent + localSent });
         }
       }
 
-      const row = audienceRows[i];
+      const row = rows[i];
       const text = renderMessage(messageTemplate, row.vars || {});
-      const url = buildIagenteUrl({
+      const url = buildProviderUrl({
         base: env.base,
         user: env.user,
         pass: env.pass,
@@ -602,53 +498,41 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
           i,
           phone: row.phone,
           ok,
-          httpStatus: statusCode,
-          providerRaw: String(body || "").slice(0, 500)
+          status: statusCode,
+          body: String(body || "").slice(0, 500)
         });
       }
 
-      // persiste progresso a cada N envios
       if (localSent % PROGRESS_FLUSH_EVERY === 0) {
         const refreshed = await getSmsCampaign(model, tenantId, id);
         if (!refreshed) break;
 
-        prog = await persistProgress(model, id, refreshed, {
+        prog = await persistProgress(model, modelName, id, refreshed, {
           cursor: i + 1,
           sent: prog.sent + localSent,
           success: prog.success + localSuccess,
           failed: prog.failed + localFailed
         });
 
-        // zera contadores locais (já incorporados em prog)
         localSent = 0;
         localSuccess = 0;
         localFailed = 0;
       }
     }
 
-    // flush final (se sobrou local)
     current = await getSmsCampaign(model, tenantId, id);
     if (!current) return res.status(404).json({ ok: false, error: "not_found" });
 
-    // cursor final = posição onde paramos
-    const finalCursor = Math.min(
-      audienceRows.length,
-      Math.max(prog.cursor, prog.cursor + localSent)
-    );
-
-    prog = await persistProgress(model, id, current, {
-      cursor: finalCursor,
+    prog = await persistProgress(model, modelName, id, current, {
+      cursor: Math.min(rows.length, prog.cursor + localSent),
       sent: prog.sent + localSent,
       success: prog.success + localSuccess,
       failed: prog.failed + localFailed
     });
 
-    // terminou tudo? então finaliza
-    const done = prog.cursor >= audienceRows.length;
+    const done = prog.cursor >= rows.length;
 
     if (done) {
-      const finishedAtIso = new Date().toISOString();
-
       await model.update({
         where: { id },
         data: {
@@ -658,7 +542,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
             total: prog.sent,
             success: prog.success,
             failed: prog.failed,
-            finishedAt: finishedAtIso,
+            finishedAt: new Date().toISOString(),
             samples
           }
         }
@@ -666,23 +550,20 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
 
       return res.json({
         ok: true,
-        status: STATUS.FINISHED,
         finished: true,
         cursor: prog.cursor,
-        totalAudience: audienceRows.length,
+        totalAudience: rows.length,
         sent: prog.sent,
         success: prog.success,
         failed: prog.failed
       });
     }
 
-    // não terminou (limit usado)
     return res.json({
       ok: true,
-      status: STATUS.RUNNING,
       finished: false,
       cursor: prog.cursor,
-      totalAudience: audienceRows.length,
+      totalAudience: rows.length,
       sent: prog.sent,
       success: prog.success,
       failed: prog.failed
@@ -690,7 +571,6 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/start failed");
 
-    // best effort: marca failed
     try {
       const model = resolveModel();
       const tenantId = getTenantId(req);
@@ -703,10 +583,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
             data: {
               status: STATUS.FAILED,
               finishedAt: new Date(),
-              report: {
-                error: String(err?.message || err),
-                failedAt: new Date().toISOString()
-              }
+              report: { error: String(err?.message || err), failedAt: new Date().toISOString() }
             }
           });
         }
@@ -743,7 +620,7 @@ router.patch("/:id/pause", requireAuth, requireRole("admin", "manager"), async (
       data: { status: STATUS.PAUSED, pausedAt: new Date() }
     });
 
-    return res.json({ ok: true, item, status: STATUS.PAUSED });
+    return res.json({ ok: true, item });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id/pause failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
@@ -751,7 +628,7 @@ router.patch("/:id/pause", requireAuth, requireRole("admin", "manager"), async (
 });
 
 // =========================
-// RESUME (volta para PAUSED->DRAFT; depois chame POST /start)
+// RESUME (só muda status; depois chame POST /start)
 // =========================
 router.patch("/:id/resume", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
@@ -776,12 +653,7 @@ router.patch("/:id/resume", requireAuth, requireRole("admin", "manager"), async 
       data: { status: STATUS.DRAFT, pausedAt: null }
     });
 
-    return res.json({
-      ok: true,
-      item,
-      status: STATUS.DRAFT,
-      note: "call POST /:id/start to continue from cursor"
-    });
+    return res.json({ ok: true, item, note: "call POST /:id/start to continue from cursor" });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id/resume failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
@@ -814,113 +686,10 @@ router.patch("/:id/cancel", requireAuth, requireRole("admin", "manager"), async 
       data: { status: STATUS.CANCELED, canceledAt: new Date() }
     });
 
-    return res.json({ ok: true, item, status: STATUS.CANCELED });
+    return res.json({ ok: true, item });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id/cancel failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
-  }
-});
-
-// =========================
-// REPORT (JSON)
-// =========================
-router.get("/:id/report", requireAuth, async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
-  const model = resolveModel();
-  if (!assertPrisma(res, model)) return;
-
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
-
-    const id = String(req.params.id || "");
-    const campaign = await getSmsCampaign(model, tenantId, id);
-    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
-
-    const prog = getProgress(campaign);
-    const report = asObject(campaign.report);
-
-    const totalAudience = Number(campaign?.audience?.total || campaign?.audience?.rows?.length || 0);
-    const status = String(campaign.status || STATUS.DRAFT);
-
-    // resultados (para UI): prioriza report.samples; senão, vazio
-    const results = Array.isArray(report.samples)
-      ? report.samples.map((s) => ({
-          phone: s.phone,
-          status: s.ok ? "sent" : "failed",
-          providerRaw: s.providerRaw || s.body || "",
-          error: s.ok ? "" : (s.providerRaw || s.body || "")
-        }))
-      : [];
-
-    return res.json({
-      ok: true,
-      id: campaign.id,
-      name: campaign.name,
-      status,
-      total: totalAudience,
-      sent: prog.sent,
-      success: prog.success,
-      failed: prog.failed,
-      cursor: prog.cursor,
-      results,
-      report
-    });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter GET /:id/report failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
-});
-
-// =========================
-// REPORT CSV (download)
-// =========================
-router.get("/:id/report.csv", requireAuth, async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).send("sms_not_enabled");
-
-  const model = resolveModel();
-  if (!assertPrisma(res, model)) return;
-
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).send("tenant_not_resolved");
-
-    const id = String(req.params.id || "");
-    const campaign = await getSmsCampaign(model, tenantId, id);
-    if (!campaign) return res.status(404).send("not_found");
-
-    const prog = getProgress(campaign);
-    const report = asObject(campaign.report);
-
-    const rows = [];
-    rows.push(["phone", "status", "httpStatus", "providerRaw"].join(";"));
-
-    if (Array.isArray(report.samples)) {
-      for (const s of report.samples) {
-        rows.push(
-          [
-            escapeCsv(s.phone),
-            escapeCsv(s.ok ? "sent" : "failed"),
-            escapeCsv(s.httpStatus || s.status || ""),
-            escapeCsv(String(s.providerRaw || s.body || ""))
-          ].join(";")
-        );
-      }
-    }
-
-    // se não tiver samples, ainda assim exporta um resumo
-    if (rows.length === 1) {
-      rows.push([escapeCsv("-"), escapeCsv("summary"), escapeCsv(""), escapeCsv(`sent=${prog.sent},success=${prog.success},failed=${prog.failed}`)].join(";"));
-    }
-
-    const csv = rows.join("\n");
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="sms-report_${campaign.id}.csv"`);
-    return res.status(200).send(csv);
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter GET /:id/report.csv failed");
-    return res.status(500).send("internal_error");
   }
 });
 
