@@ -152,6 +152,10 @@ function getTemplateText(tpl) {
   ).trim();
 }
 
+function getTemplateId(tpl) {
+  return String(tpl?.id || tpl?.templateId || tpl?._id || "").trim();
+}
+
 export default function SmsCampaignCreateWizard({ mode = "create", initialCampaign = null, onExit }) {
   const [stepIndex, setStepIndex] = useState(0);
 
@@ -201,16 +205,23 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Carrega modelos SMS (via api.ts, com headers + tenant)
+  // ✅ Carrega modelos SMS (via api.ts, com headers + tenant) — robusto (array ou {items})
   useEffect(() => {
     let alive = true;
 
     async function load() {
       setTemplatesBusy(true);
       try {
-        const items = await fetchSmsTemplates();
+        const r = await fetchSmsTemplates();
         if (!alive) return;
-        setTemplates(Array.isArray(items) ? items : []);
+
+        const items =
+          Array.isArray(r) ? r :
+          Array.isArray(r?.items) ? r.items :
+          Array.isArray(r?.data?.items) ? r.data.items :
+          [];
+
+        setTemplates(items);
       } catch {
         if (!alive) return;
         setTemplates([]);
@@ -289,6 +300,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     insertVariable(`var_${nextN}`);
   }
 
+  // ✅ Aplica modelo no campo mensagem (robusto com id variado)
   function handleSelectTemplate(id) {
     setError("");
     setInfo("");
@@ -296,11 +308,17 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
     if (!id) return;
 
-    const tpl = templates.find((t) => String(t.id) === String(id));
-    if (!tpl) return;
+    const tpl = templates.find((t) => getTemplateId(t) === String(id));
+    if (!tpl) {
+      setInfo("⚠️ Modelo selecionado, mas não encontrado na lista (ID divergente).");
+      return;
+    }
 
     const text = getTemplateText(tpl);
-    if (!text) return;
+    if (!text) {
+      setInfo("⚠️ Modelo não possui texto/mensagem.");
+      return;
+    }
 
     if (!editable) return;
 
@@ -354,7 +372,9 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
             status: "active",
             metadata: { source: "sms-campaign-wizard" }
           });
-          setInfo((prev) => (prev ? `${prev}\n✅ Modelo salvo: ${modelName}` : `✅ Modelo salvo: ${modelName}`));
+          setInfo((prev) =>
+            prev ? `${prev}\n✅ Modelo salvo: ${modelName}` : `✅ Modelo salvo: ${modelName}`
+          );
           setSaveAsTemplate(false);
           setSaveTemplateName("");
         } catch (e) {
@@ -437,7 +457,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     setInfo("");
 
     try {
-      // ✅ agora manda limit no BODY (resolve seu 400)
+      // ✅ manda limit no BODY (compat com seu backend atual)
       const r = await startSmsCampaign(campaign.id, { limit: 200 });
 
       const nextStatus =
@@ -588,11 +608,14 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                   disabled={busy || !editable || templatesBusy}
                 >
                   <option value="">— Selecionar modelo —</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} {t.status ? `(${t.status})` : ""}
-                    </option>
-                  ))}
+                  {templates.map((t) => {
+                    const id = getTemplateId(t);
+                    return (
+                      <option key={id || t.name} value={id}>
+                        {t.name} {t.status ? `(${t.status})` : ""}
+                      </option>
+                    );
+                  })}
                 </select>
                 <div className="muted" style={{ marginTop: 6 }}>
                   {templatesBusy
