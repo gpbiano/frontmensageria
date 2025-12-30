@@ -43,8 +43,6 @@ function statusLabel(s) {
 
 function statusPillClass(s) {
   const v = String(s || "").toLowerCase();
-  // reaproveita .pill do campaigns.css (se existir)
-  // e adiciona classes previsíveis pra você estilizar
   return `pill ${v || "unknown"}`;
 }
 
@@ -54,11 +52,92 @@ function canEditCampaign(c) {
 }
 
 function getAudienceCount(c) {
-  // compat: audienceCount (se vier pronto) ou audience.total (do router) ou 0
   if (Number.isFinite(Number(c?.audienceCount))) return Number(c.audienceCount);
   if (Number.isFinite(Number(c?.audience?.total))) return Number(c.audience.total);
   if (Array.isArray(c?.audience?.rows)) return c.audience.rows.length;
   return 0;
+}
+
+// -------------------------
+// CSV template helpers
+// -------------------------
+function extractTemplateVars(message) {
+  const text = String(message || "");
+  const re = /{{\s*([^}]+?)\s*}}/g;
+
+  const out = new Set();
+  let m;
+
+  while ((m = re.exec(text)) !== null) {
+    const raw = String(m[1] || "").trim();
+    if (!raw) continue;
+
+    // {{1}} -> var_1
+    if (/^\d+$/.test(raw)) {
+      out.add(`var_${raw}`);
+      continue;
+    }
+
+    // {{var_1}} -> var_1
+    if (/^var_\d+$/i.test(raw)) {
+      out.add(raw.toLowerCase());
+      continue;
+    }
+
+    // {{nome}} -> nome
+    out.add(raw);
+  }
+
+  const arr = Array.from(out);
+
+  const varOnes = arr
+    .filter((k) => /^var_\d+$/i.test(k))
+    .sort((a, b) => Number(a.split("_")[1]) - Number(b.split("_")[1]));
+
+  const others = arr
+    .filter((k) => !/^var_\d+$/i.test(k))
+    .sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+  return [...varOnes, ...others];
+}
+
+function buildCsvTemplate({ message, delimiter = ";" }) {
+  const vars = extractTemplateVars(message);
+  const headers = ["numero", ...vars];
+
+  const row1 = ["5511999999999"];
+  const row2 = ["5511988887777"];
+
+  for (const v of vars) {
+    if (/^var_\d+$/i.test(v)) {
+      const n = v.split("_")[1];
+      row1.push(`Exemplo_${n}_A`);
+      row2.push(`Exemplo_${n}_B`);
+    } else {
+      row1.push(`Exemplo_${v}_A`);
+      row2.push(`Exemplo_${v}_B`);
+    }
+  }
+
+  const lines = [
+    headers.join(delimiter),
+    row1.join(delimiter),
+    row2.join(delimiter)
+  ];
+
+  return { csvText: lines.join("\n"), headers, vars };
+}
+
+function downloadTextFile({ content, filename, mime = "text/csv;charset=utf-8" }) {
+  const blob = new Blob([content], { type: mime });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 // Ícones leves (sem dependência externa)
@@ -111,6 +190,14 @@ function Icon({ name, size = 18, title }) {
       <>
         <path {...stroke} d="M9 18l6-6-6-6" />
       </>
+    ),
+    template: (
+      <>
+        <path {...stroke} d="M4 4h16v16H4z" />
+        <path {...stroke} d="M7 8h10" />
+        <path {...stroke} d="M7 12h10" />
+        <path {...stroke} d="M7 16h6" />
+      </>
     )
   };
 
@@ -127,7 +214,7 @@ export default function SmsCampaignsPage({ onExit }) {
   const [loading, setLoading] = useState(true);
 
   const [creating, setCreating] = useState(false);
-  const [editingCampaign, setEditingCampaign] = useState(null); // ✅ editar rascunho
+  const [editingCampaign, setEditingCampaign] = useState(null);
 
   const [selected, setSelected] = useState(null);
   const [report, setReport] = useState(null);
@@ -259,6 +346,26 @@ export default function SmsCampaignsPage({ onExit }) {
     }
   }
 
+  function downloadTemplateFromCampaign(c) {
+    const msg =
+      String(c?.metadata?.message || c?.message || "").trim() ||
+      "Olá {{1}}!";
+
+    const { csvText, headers, vars } = buildCsvTemplate({ message: msg, delimiter: ";" });
+
+    const fname = `modelo_audiencia_sms_${filenameSafe(c?.name || "campanha")}_${String(c?.id || "").slice(0, 8)}.csv`;
+    downloadTextFile({ content: csvText, filename: fname });
+
+    const humanVars = vars.length ? vars.join(", ") : "nenhuma";
+    // feedback simples via alert visual (reaproveita o downloadError área)
+    setDownloadError("");
+    setReportError("");
+    // opcional: você pode trocar pra toast; aqui usamos downloadError? melhor não.
+    // então só usamos console/info sutil:
+    // eslint-disable-next-line no-console
+    console.info("Modelo baixado:", { headers, vars: humanVars });
+  }
+
   function startCreate() {
     stopPolling();
     setSelected(null);
@@ -307,11 +414,6 @@ export default function SmsCampaignsPage({ onExit }) {
           </div>
         </div>
 
-        {/* ✅ Preparado para você me mandar o Wizard:
-           - mode: "create" | "edit"
-           - initialCampaign: objeto da campanha (rascunho)
-           - onExit: recarrega a lista
-        */}
         <SmsCampaignCreateWizard
           mode={mode}
           initialCampaign={editingCampaign}
@@ -476,20 +578,37 @@ export default function SmsCampaignsPage({ onExit }) {
 
                       <div style={{ textAlign: "right", display: "flex", justifyContent: "flex-end", gap: 8 }}>
                         {canEditCampaign(c) ? (
-                          <button
-                            className="btn small secondary"
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              startEdit(c);
-                            }}
-                            title="Editar campanha (rascunho)"
-                          >
-                            <span style={{ display: "inline-flex", marginRight: 6 }}>
-                              <Icon name="edit" size={16} />
-                            </span>
-                            Editar
-                          </button>
+                          <>
+                            <button
+                              className="btn small secondary"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startEdit(c);
+                              }}
+                              title="Editar campanha (rascunho)"
+                            >
+                              <span style={{ display: "inline-flex", marginRight: 6 }}>
+                                <Icon name="edit" size={16} />
+                              </span>
+                              Editar
+                            </button>
+
+                            <button
+                              className="btn small secondary"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                downloadTemplateFromCampaign(c);
+                              }}
+                              title="Baixar planilha exemplo (CSV) baseada na mensagem da campanha"
+                            >
+                              <span style={{ display: "inline-flex", marginRight: 6 }}>
+                                <Icon name="template" size={16} />
+                              </span>
+                              Modelo CSV
+                            </button>
+                          </>
                         ) : null}
 
                         <button

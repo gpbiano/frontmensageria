@@ -1425,76 +1425,53 @@ export async function fetchSmsCampaigns() {
   return request(`/outbound/sms-campaigns`, { method: "GET" });
 }
 
-export async function createSmsCampaign(payload: { name: string; message: string; metadata?: any }) {
+export async function createSmsCampaign(payload: { name: string; message: string }) {
   return request(`/outbound/sms-campaigns`, { method: "POST", body: payload });
 }
 
-/**
- * ✅ Upload audiência:
- * - Preferimos multipart/form-data (multer) para máxima compatibilidade.
- * - Mantém compat com backends que aceitam JSON (csvText/csv) via fallback manual se você quiser.
- */
-export async function uploadSmsCampaignAudience(id: string, file: File) {
-  const fd = new FormData();
-  fd.append("file", file);
-
-  return requestForm(`/outbound/sms-campaigns/${encodeURIComponent(id)}/audience`, fd);
-}
-
-export async function startSmsCampaign(id: string) {
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start`, {
-    method: "POST"
-  });
-}
-
-export async function pauseSmsCampaign(id: string) {
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/pause`, {
-    method: "PATCH"
-  });
-}
-
-export async function resumeSmsCampaign(id: string) {
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/resume`, {
-    method: "PATCH"
-  });
-}
-
-export async function cancelSmsCampaign(id: string) {
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/cancel`, {
-    method: "PATCH"
-  });
-}
-
-/**
- * ✅ Excluir campanha:
- * Regra fica no backend (só permitir status=draft).
- */
-export async function deleteSmsCampaign(id: string) {
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}`, {
-    method: "DELETE"
-  });
-}
-
-/**
- * ✅ Editar campanha (rascunho):
- * Depende do backend ter PATCH /outbound/sms-campaigns/:id.
- * Se ainda não existir, mantenha a função — só não chame.
- */
-export async function updateSmsCampaign(
-  id: string,
-  payload: { name?: string; message?: string; metadata?: any }
-) {
+export async function updateSmsCampaign(id: string, payload: { name?: string; message?: string }) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: payload
   });
 }
 
-export async function fetchSmsCampaignReport(id: string) {
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, {
-    method: "GET"
+export async function deleteSmsCampaign(id: string) {
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function uploadSmsCampaignAudience(id: string, file: File) {
+  const csvText = await file.text();
+
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/audience`, {
+    method: "POST",
+    body: { csvText }
   });
 }
+
+export async function startSmsCampaign(id: string, opts?: { limit?: number }) {
+  const qs = opts?.limit ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start${qs}`, {
+    method: "POST"
+  });
+}
+
+export async function pauseSmsCampaign(id: string) {
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/pause`, { method: "PATCH" });
+}
+
+export async function resumeSmsCampaign(id: string) {
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/resume`, { method: "PATCH" });
+}
+
+export async function cancelSmsCampaign(id: string) {
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/cancel`, { method: "PATCH" });
+}
+
+export async function fetchSmsCampaignReport(id: string) {
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, { method: "GET" });
+}
+
 
 // ======================================================
 // ALIASES (compat com imports antigos do front)
