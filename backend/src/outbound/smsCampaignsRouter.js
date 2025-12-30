@@ -1,6 +1,12 @@
 // backend/src/outbound/smsCampaignsRouter.js
 // ✅ PRISMA-FIRST (SEM data.json)
 // Base: /outbound/sms-campaigns
+//
+// Este router usa o model OutboundCampaign com channel="sms" para campanhas de SMS.
+// Fluxo:
+// 1) POST   /outbound/sms-campaigns           -> cria campanha (draft)
+// 2) POST   /outbound/sms-campaigns/:id/audience (CSV) -> importa audiência (audience Json)
+// 3) (futuro) POST /outbound/sms-campaigns/:id/start   -> dispara via IAGENTE
 
 import express from "express";
 import multer from "multer";
@@ -17,6 +23,20 @@ const upload = multer({
 });
 
 /* =========================
+ * Feature Flag (Add-on SMS)
+ * =========================
+ * - Se quiser controlar por tenant no futuro, aqui é o ponto.
+ * - Por enquanto, gate global por ENV:
+ *    SMS_ENABLED=true
+ */
+function isSmsEnabled() {
+  const v = String(process.env.SMS_ENABLED || "").trim().toLowerCase();
+  // default: enabled (para não quebrar ambiente existente)
+  if (!v) return true;
+  return v === "true" || v === "1" || v === "yes" || v === "on";
+}
+
+/* =========================
  * Helpers (Prisma-safe)
  * ========================= */
 function resolveModel(names) {
@@ -29,6 +49,7 @@ function modelHasField(modelName, field) {
     const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
     return !!m?.fields?.some((f) => f.name === field);
   } catch {
+    // se não conseguir ler dmmf, assume true (safe fallback)
     return true;
   }
 }
@@ -57,7 +78,7 @@ function assertPrisma(res, model, candidates) {
 /* =========================
  * CSV parsing (SMS audience)
  * - aceita separador , ou ;
- * - header opcional: numero (ou phone), var_1, var_2...
+ * - header opcional: numero (ou phone/telefone), var_1, var_2...
  * - linhas vazias/invalidas viram errors
  * ========================= */
 function normalizePhone(raw) {
@@ -65,14 +86,11 @@ function normalizePhone(raw) {
     .trim()
     .replace(/[^\d+]/g, "");
 
-  // remove leading +
   const digits = s.startsWith("+") ? s.slice(1) : s;
 
   // muito curto -> inválido
   if (digits.length < 10) return null;
 
-  // se já veio com 55 + DDD + número, mantém
-  // se veio sem 55 mas com DDD/número, você pode decidir forçar 55 (aqui NÃO forçamos)
   return digits;
 }
 
@@ -107,9 +125,11 @@ function parseCsvPhones(csvText) {
   let startIdx = 0;
   let phoneIdx = 0;
   let varIdxs = [];
+  let varHeaders = [];
 
   if (hasHeader) {
     startIdx = 1;
+
     phoneIdx =
       firstLower.indexOf("numero") !== -1
         ? firstLower.indexOf("numero")
@@ -117,14 +137,12 @@ function parseCsvPhones(csvText) {
           ? firstLower.indexOf("phone")
           : firstLower.indexOf("telefone");
 
-    // var_1, var_2... (ou qualquer coluna além do numero)
-    varIdxs = firstCols
-      .map((_, i) => i)
-      .filter((i) => i !== phoneIdx);
+    varIdxs = firstCols.map((_, i) => i).filter((i) => i !== phoneIdx);
+    varHeaders = firstCols;
   } else {
-    // sem header: primeira coluna é número, resto variáveis
     phoneIdx = 0;
     varIdxs = firstCols.map((_, i) => i).filter((i) => i !== 0);
+    varHeaders = []; // sem header
   }
 
   for (let i = startIdx; i < lines.length; i++) {
@@ -141,12 +159,12 @@ function parseCsvPhones(csvText) {
 
     const vars = {};
     for (const idx of varIdxs) {
-      const key =
-        hasHeader && firstCols[idx]
-          ? String(firstCols[idx]).trim()
-          : `var_${idx}`; // fallback se sem header
+      const headerName = hasHeader ? String(varHeaders[idx] || "").trim() : "";
 
-      if (!key) continue;
+      // ✅ se não tem header, usamos var_1, var_2... (baseado na ordem, não no índice bruto)
+      const fallbackKey = `var_${varIdxs.indexOf(idx) + 1}`;
+      const key = headerName || fallbackKey;
+
       vars[key] = cols[idx] !== undefined ? String(cols[idx]) : "";
     }
 
@@ -171,6 +189,7 @@ router.get("/", requireAuth, async (req, res) => {
   const modelName = PRISMA_MODEL_NAME;
 
   try {
+    if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
     if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
 
     const tenantId = getTenantId(req);
@@ -178,7 +197,6 @@ router.get("/", requireAuth, async (req, res) => {
 
     const where = {};
     if (modelHasField(modelName, "tenantId")) where.tenantId = tenantId;
-    // SMS -> channel="sms"
     if (modelHasField(modelName, "channel")) where.channel = "sms";
 
     const items = await model.findMany({
@@ -196,12 +214,17 @@ router.get("/", requireAuth, async (req, res) => {
 /* ======================================================
  * POST /outbound/sms-campaigns (create)
  * body: { name, message, metadata? }
+ *
+ * ✅ FIX DEFINITIVO:
+ * - channel e name são REQUIRED no schema -> setamos SEMPRE
+ * - tenantId também é REQUIRED no teu schema -> setamos SEMPRE
  * ====================================================== */
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   const model = resolveModel(MODEL_CANDIDATES);
   const modelName = PRISMA_MODEL_NAME;
 
   try {
+    if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
     if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
 
     const tenantId = getTenantId(req);
@@ -214,12 +237,12 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     if (!name) return res.status(400).json({ ok: false, error: "name_required" });
     if (!message.trim()) return res.status(400).json({ ok: false, error: "message_required" });
 
-    const data = {};
-
-    // ✅ IMPORTANTÍSSIMO: channel e name são REQUIRED no schema
-    if (modelHasField(modelName, "tenantId")) data.tenantId = tenantId;
-    if (modelHasField(modelName, "channel")) data.channel = "sms";
-    if (modelHasField(modelName, "name")) data.name = name;
+    // ✅ Campos obrigatórios: SEMPRE SETAR
+    const data = {
+      tenantId,
+      channel: "sms",
+      name
+    };
 
     if (modelHasField(modelName, "status")) data.status = "draft";
     if (modelHasField(modelName, "metadata")) data.metadata = { ...metadata, message };
@@ -239,6 +262,10 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
  * - multipart/form-data (file)
  * - text/csv (raw)
  * - application/json { csv }
+ *
+ * ⚠️ IMPORTANTE:
+ * - pra multipart, o client precisa enviar:
+ *   field name: "file"
  * ====================================================== */
 router.post(
   "/:id/audience",
@@ -250,12 +277,14 @@ router.post(
     const modelName = PRISMA_MODEL_NAME;
 
     try {
+      if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
       if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
 
       const tenantId = getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-      const id = String(req.params.id || "");
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, error: "id_required" });
 
       const existing = await model.findFirst({
         where: {
@@ -274,7 +303,7 @@ router.post(
       if (req.file?.buffer) {
         csvText = req.file.buffer.toString("utf-8");
       }
-      // ✅ raw text/csv
+      // ✅ raw text/csv (se algum middleware de body estiver entregando como string)
       else if (typeof req.body === "string" && req.body.trim()) {
         csvText = req.body;
       }
@@ -305,6 +334,7 @@ router.post(
       const data = {};
       if (modelHasField(modelName, "audience")) data.audience = audience;
 
+      // ✅ opcional: manter status como "draft" (não muda aqui)
       const item = await model.update({ where: { id }, data });
 
       return res.json({
