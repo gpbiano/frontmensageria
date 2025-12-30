@@ -254,53 +254,9 @@ function resolveMessageTemplate(campaign) {
 }
 
 // =========================
-// ✅ Audience helpers (campo audience OU fallback em metadata.smsAudience)
-// =========================
-function getAudienceFromCampaign(campaign) {
-  const a1 = safeObj(campaign?.audience);
-  if (Array.isArray(a1?.rows) && a1.rows.length) {
-    return { source: "audience", rows: a1.rows, total: Number(a1.total) || a1.rows.length };
-  }
-
-  const md = safeObj(campaign?.metadata);
-  const a2 = safeObj(md?.smsAudience);
-  if (Array.isArray(a2?.rows) && a2.rows.length) {
-    return { source: "metadata.smsAudience", rows: a2.rows, total: Number(a2.total) || a2.rows.length };
-  }
-
-  return { source: "none", rows: [], total: 0 };
-}
-
-// =========================
-// ✅ limit helper (query OR body)
-// =========================
-function readLimit(req) {
-  const q = req?.query?.limit;
-  if (Number(q) > 0) return Number(q);
-
-  const b = req?.body?.limit;
-  if (Number(b) > 0) return Number(b);
-
-  const b2 = req?.body?.payload?.limit;
-  if (Number(b2) > 0) return Number(b2);
-
-  return 0;
-}
-
-// =========================
 // OutboundLog helpers (analytics)
 // =========================
-async function writeLog({
-  tenantId,
-  campaignId,
-  phone,
-  status,
-  error,
-  provider,
-  providerMsgId,
-  cost,
-  metadata
-}) {
+async function writeLog({ tenantId, campaignId, phone, status, error, provider, providerMsgId, cost, metadata }) {
   const logModel = resolveLogModel();
   const logModelName = getLogModelName();
   if (!logModel) return; // ✅ se não existe, não quebra
@@ -385,13 +341,7 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
       data.metadata = {
         ...baseMetadata,
         message,
-        smsProgress: {
-          cursor: 0,
-          sent: 0,
-          success: 0,
-          failed: 0,
-          lastRunAt: new Date().toISOString()
-        },
+        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() },
         timestamps: {
           createdAt: new Date().toISOString()
         }
@@ -402,6 +352,132 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     return res.status(201).json({ ok: true, item });
   } catch (err) {
     logger.error({ err: err?.message || err, body: req.body }, "❌ smsCampaignsRouter POST / failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// =========================
+// UPDATE campaign (FIX PROD: wizard salva via PATCH /:id)
+// =========================
+router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
+
+  const model = resolveModel();
+  if (!assertPrisma(res, model)) return;
+
+  const modelName = getModelName();
+
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const id = String(req.params.id || "");
+    const campaign = await getSmsCampaign(model, tenantId, id);
+    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
+
+    const st = String(campaign.status || "");
+    if (![STATUS.DRAFT, STATUS.PAUSED, STATUS.FAILED].includes(st)) {
+      return res.status(409).json({ ok: false, error: "cannot_edit_in_this_status", status: campaign.status });
+    }
+
+    const name = req.body?.name !== undefined ? String(req.body?.name || "").trim() : undefined;
+
+    // aceita message OU metadata.message vindo do front
+    const bodyMessage =
+      req.body?.message !== undefined
+        ? String(req.body?.message || "").trim()
+        : req.body?.metadata?.message !== undefined
+          ? String(req.body?.metadata?.message || "").trim()
+          : undefined;
+
+    // metadata (merge)
+    const patchMdRaw = safeObj(req.body?.metadata);
+    const baseMd = safeObj(campaign?.metadata);
+
+    const data = {};
+
+    if (name !== undefined) {
+      if (!name) return res.status(400).json({ ok: false, error: "name_required" });
+      data.name = name;
+    }
+
+    if (modelHasField(modelName, "metadata")) {
+      const mergedMd = { ...baseMd, ...patchMdRaw };
+
+      // se veio message, grava em metadata.message (fonte de verdade)
+      if (bodyMessage !== undefined) {
+        if (!bodyMessage) return res.status(400).json({ ok: false, error: "message_required" });
+        mergedMd.message = bodyMessage;
+      }
+
+      // timestamp de update
+      mergedMd.timestamps = { ...(safeObj(mergedMd.timestamps) || {}), updatedAt: new Date().toISOString() };
+
+      data.metadata = mergedMd;
+    } else {
+      // se não tem metadata no schema, não tem onde salvar a mensagem
+      if (bodyMessage !== undefined) {
+        return res.status(409).json({ ok: false, error: "schema_has_no_metadata_field" });
+      }
+    }
+
+    if (!Object.keys(data).length) {
+      return res.json({ ok: true, item: campaign, note: "no_changes" });
+    }
+
+    const item = await model.update({ where: { id }, data });
+    return res.json({ ok: true, item });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// =========================
+// DELETE campaign (FIX PROD: lista tenta DELETE /:id)
+// =========================
+router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
+
+  const model = resolveModel();
+  if (!assertPrisma(res, model)) return;
+
+  const logModel = resolveLogModel();
+  const logModelName = getLogModelName();
+
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const id = String(req.params.id || "");
+    const campaign = await getSmsCampaign(model, tenantId, id);
+    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
+
+    const st = String(campaign.status || "");
+    if (st !== STATUS.DRAFT) {
+      return res.status(409).json({
+        ok: false,
+        error: "only_draft_can_be_deleted",
+        status: campaign.status
+      });
+    }
+
+    // best-effort: limpa logs (se model existir)
+    try {
+      if (logModel && modelHasField(logModelName, "campaignId")) {
+        await logModel.deleteMany({
+          where: { tenantId: String(tenantId), campaignId: String(id), channel: "sms" }
+        });
+      }
+    } catch (e) {
+      logger.warn({ err: e?.message || e }, "⚠️ smsCampaignsRouter DELETE: log cleanup failed (ignored)");
+    }
+
+    await model.delete({ where: { id: String(id) } });
+
+    return res.json({ ok: true, deleted: true, id });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter DELETE /:id failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
@@ -459,31 +535,14 @@ router.post(
         smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() }
       };
 
-      // ✅ fallback: se não existir campo audience no schema, salva em metadata.smsAudience
-      const metadataWithAudience = {
-        ...nextMd,
-        smsAudience: audience
-      };
-
       const data = {};
-
       if (modelHasField(modelName, "audience")) data.audience = audience;
       if (modelHasField(modelName, "audienceCount")) data.audienceCount = parsed.rows.length;
-
-      if (modelHasField(modelName, "metadata")) {
-        // se audience existir no schema, ainda salvamos no metadata também (útil pra debug/migração)
-        data.metadata = metadataWithAudience;
-      }
+      if (modelHasField(modelName, "metadata")) data.metadata = nextMd;
 
       const item = await model.update({ where: { id }, data });
 
-      return res.json({
-        ok: true,
-        item,
-        audienceCount: parsed.rows.length,
-        imported: parsed.rows.length,
-        storedIn: modelHasField(modelName, "audience") ? "audience(+metadata)" : "metadata.smsAudience"
-      });
+      return res.json({ ok: true, item, audienceCount: parsed.rows.length, imported: parsed.rows.length });
     } catch (err) {
       logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/audience failed");
       return res.status(500).json({ ok: false, error: "internal_error" });
@@ -509,9 +568,10 @@ router.get("/:id/report", requireAuth, async (req, res) => {
     if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
 
     const prog = getProgress(campaign);
-
-    const aud = getAudienceFromCampaign(campaign);
-    const totalAudience = Number(aud.total) || (Array.isArray(aud.rows) ? aud.rows.length : 0);
+    const totalAudience =
+      Number(campaign?.audience?.total) ||
+      (Array.isArray(campaign?.audience?.rows) ? campaign.audience.rows.length : 0) ||
+      Number(campaign?.audienceCount || 0);
 
     const stats = safeObj(campaign?.stats);
     const smsReport = safeObj(stats?.smsReport);
@@ -534,7 +594,6 @@ router.get("/:id/report", requireAuth, async (req, res) => {
       success: prog.success,
       failed: prog.failed,
       cursor: prog.cursor,
-      audienceSource: aud.source,
       results
     });
   } catch (err) {
@@ -613,13 +672,14 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
     }
 
-    const aud = getAudienceFromCampaign(campaign);
-    if (!aud.rows?.length) {
-      return res.status(400).json({
-        ok: false,
-        error: "audience_required",
-        details: { audienceSource: aud.source }
-      });
+    // ✅ FIX: considera audienceCount quando audience.rows não existe no schema/retorno
+    const hasAudience =
+      (Array.isArray(campaign?.audience?.rows) && campaign.audience.rows.length > 0) ||
+      Number(campaign?.audienceCount || 0) > 0 ||
+      Number(campaign?.audience?.total || 0) > 0;
+
+    if (!hasAudience) {
+      return res.status(400).json({ ok: false, error: "audience_required" });
     }
 
     const messageTemplate = resolveMessageTemplate(campaign);
@@ -647,16 +707,31 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     let current = await getSmsCampaign(model, tenantId, id);
     if (!current) return res.status(404).json({ ok: false, error: "not_found" });
 
-    const aud2 = getAudienceFromCampaign(current);
-    const rows = aud2.rows || [];
+    // ✅ FIX: se não veio audience.rows, tenta recarregar do campo audience (se existir)
+    const rows = Array.isArray(current?.audience?.rows) ? current.audience.rows : [];
+
     if (!rows.length) {
-      return res.status(400).json({ ok: false, error: "audience_required", details: { audienceSource: aud2.source } });
+      // se chegou aqui, significa que audienceCount > 0 mas não temos os rows no retorno/schema
+      // melhor falhar com erro explícito pra não “queimar” status
+      await model.update({
+        where: { id },
+        data: { status: STATUS.FAILED }
+      });
+
+      return res.status(409).json({
+        ok: false,
+        error: "audience_rows_not_available",
+        note: "audienceCount existe, mas audience.rows não está disponível no modelo/retorno. Verifique schema Prisma/campo audience."
+      });
     }
 
     let prog = getProgress(current);
 
-    const limitRead = readLimit(req);
-    const maxToSend = limitRead > 0 ? limitRead : Number.MAX_SAFE_INTEGER;
+    // ✅ FIX: aceita limit no BODY (front manda no body), mas mantém query como fallback
+    const bodyLimit = Number(req.body?.limit || 0);
+    const queryLimit = Number(req.query?.limit || 0);
+    const maxToSend =
+      bodyLimit > 0 ? bodyLimit : queryLimit > 0 ? queryLimit : Number.MAX_SAFE_INTEGER;
 
     let localSent = 0;
     let localSuccess = 0;
@@ -763,11 +838,8 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     current = await getSmsCampaign(model, tenantId, id);
     if (!current) return res.status(404).json({ ok: false, error: "not_found" });
 
-    const aud3 = getAudienceFromCampaign(current);
-    const rows3 = aud3.rows || [];
-
     // ✅ cursor final correto
-    const finalCursor = Math.min(rows3.length, endCursor + 1);
+    const finalCursor = Math.min(rows.length, endCursor + 1);
 
     prog = await persistProgress(model, modelName, id, current, {
       cursor: finalCursor,
@@ -776,7 +848,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       failed: prog.failed + localFailed
     });
 
-    const done = prog.cursor >= rows3.length;
+    const done = prog.cursor >= rows.length;
 
     // ✅ salva relatório no campo stats.smsReport (se existir)
     if (modelHasField(modelName, "stats")) {
@@ -816,14 +888,12 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       ok: true,
       finished: done,
       cursor: prog.cursor,
-      totalAudience: rows3.length,
+      totalAudience: rows.length,
       sent: prog.sent,
       success: prog.success,
       failed: prog.failed,
       startedCursor: startCursor,
-      finalCursor,
-      limitUsed: maxToSend === Number.MAX_SAFE_INTEGER ? null : maxToSend,
-      audienceSource: aud3.source
+      finalCursor
     });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/start failed");
@@ -979,36 +1049,6 @@ router.patch("/:id/cancel", requireAuth, requireRole("admin", "manager"), async 
     return res.json({ ok: true, item });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id/cancel failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
-});
-
-// =========================
-// ✅ DELETE (prod) — remove campanha SMS do tenant
-// =========================
-router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
-  const model = resolveModel();
-  if (!assertPrisma(res, model)) return;
-
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
-
-    const id = String(req.params.id || "");
-
-    const found = await getSmsCampaign(model, tenantId, id);
-    if (!found) return res.status(404).json({ ok: false, error: "not_found" });
-
-    // ✅ delete seguro por tenant + channel
-    await model.deleteMany({
-      where: { id, tenantId, channel: "sms" }
-    });
-
-    return res.json({ ok: true, deleted: true, id });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter DELETE /:id failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });

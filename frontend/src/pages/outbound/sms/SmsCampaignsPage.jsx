@@ -36,8 +36,9 @@ function statusPillClass(s) {
 
 function canEditCampaign(c) {
   const st = String(c?.status || "").toLowerCase();
-  return ["draft", "paused", "failed"].includes(st);
+  return ["draft", "paused", "failed", ""].includes(st);
 }
+
 
 function canDeleteCampaign(c) {
   return String(c?.status || "").toLowerCase() === "draft";
