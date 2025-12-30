@@ -1,6 +1,6 @@
 // frontend/src/pages/outbound/sms/SmsCampaignsPage.jsx
 import { useEffect, useRef, useState, useMemo } from "react";
-import { fetchSmsCampaigns, fetchSmsCampaignReport } from "../../../api";
+import { fetchSmsCampaigns, fetchSmsCampaignReport, deleteSmsCampaign } from "../../../api";
 import SmsCampaignCreateWizard from "./SmsCampaignCreateWizard.jsx";
 import "../../../styles/campaigns.css";
 
@@ -49,6 +49,10 @@ function statusPillClass(s) {
 function canEditCampaign(c) {
   const st = String(c?.status || "").toLowerCase();
   return ["draft", "paused", "failed"].includes(st);
+}
+
+function canDeleteCampaign(c) {
+  return String(c?.status || "").toLowerCase() === "draft";
 }
 
 function getAudienceCount(c) {
@@ -119,12 +123,7 @@ function buildCsvTemplate({ message, delimiter = ";" }) {
     }
   }
 
-  const lines = [
-    headers.join(delimiter),
-    row1.join(delimiter),
-    row2.join(delimiter)
-  ];
-
+  const lines = [headers.join(delimiter), row1.join(delimiter), row2.join(delimiter)];
   return { csvText: lines.join("\n"), headers, vars };
 }
 
@@ -143,7 +142,12 @@ function downloadTextFile({ content, filename, mime = "text/csv;charset=utf-8" }
 // Ícones leves (sem dependência externa)
 function Icon({ name, size = 18, title }) {
   const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none" };
-  const stroke = { stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" };
+  const stroke = {
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  };
 
   const paths = {
     plus: (
@@ -170,7 +174,10 @@ function Icon({ name, size = 18, title }) {
     edit: (
       <>
         <path {...stroke} d="M12 20h9" />
-        <path {...stroke} d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5z" />
+        <path
+          {...stroke}
+          d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5z"
+        />
       </>
     ),
     download: (
@@ -197,6 +204,15 @@ function Icon({ name, size = 18, title }) {
         <path {...stroke} d="M7 8h10" />
         <path {...stroke} d="M7 12h10" />
         <path {...stroke} d="M7 16h6" />
+      </>
+    ),
+    trash: (
+      <>
+        <path {...stroke} d="M3 6h18" />
+        <path {...stroke} d="M8 6V4h8v2" />
+        <path {...stroke} d="M6 6l1 16h10l1-16" />
+        <path {...stroke} d="M10 11v6" />
+        <path {...stroke} d="M14 11v6" />
       </>
     )
   };
@@ -268,6 +284,36 @@ export default function SmsCampaignsPage({ onExit }) {
 
     await loadReport();
     pollRef.current = setInterval(loadReport, 2000);
+  }
+
+  async function handleDeleteFromList(c) {
+    if (!c?.id) return;
+    if (!canDeleteCampaign(c)) {
+      setDownloadError("");
+      setReportError("");
+      setReport(null);
+      setSelected(null);
+      alert("Só é possível excluir campanhas em rascunho.");
+      return;
+    }
+
+    const ok = window.confirm(`Excluir a campanha "${c?.name || "Campanha"}"?\nEssa ação não pode ser desfeita.`);
+    if (!ok) return;
+
+    try {
+      await deleteSmsCampaign(c.id);
+
+      // limpa seleção caso fosse a selecionada
+      if (selected?.id === c.id) {
+        stopPolling();
+        setSelected(null);
+        setReport(null);
+      }
+
+      await load();
+    } catch (e) {
+      alert(e?.message || "Erro ao excluir campanha.");
+    }
   }
 
   useEffect(() => {
@@ -347,23 +393,19 @@ export default function SmsCampaignsPage({ onExit }) {
   }
 
   function downloadTemplateFromCampaign(c) {
-    const msg =
-      String(c?.metadata?.message || c?.message || "").trim() ||
-      "Olá {{1}}!";
+    const msg = String(c?.metadata?.message || c?.message || "").trim() || "Olá {{1}}!";
 
-    const { csvText, headers, vars } = buildCsvTemplate({ message: msg, delimiter: ";" });
+    const { csvText, vars } = buildCsvTemplate({ message: msg, delimiter: ";" });
 
-    const fname = `modelo_audiencia_sms_${filenameSafe(c?.name || "campanha")}_${String(c?.id || "").slice(0, 8)}.csv`;
+    const fname = `modelo_audiencia_sms_${filenameSafe(c?.name || "campanha")}_${String(c?.id || "").slice(
+      0,
+      8
+    )}.csv`;
     downloadTextFile({ content: csvText, filename: fname });
 
-    const humanVars = vars.length ? vars.join(", ") : "nenhuma";
-    // feedback simples via alert visual (reaproveita o downloadError área)
-    setDownloadError("");
-    setReportError("");
-    // opcional: você pode trocar pra toast; aqui usamos downloadError? melhor não.
-    // então só usamos console/info sutil:
+    // feedback leve
     // eslint-disable-next-line no-console
-    console.info("Modelo baixado:", { headers, vars: humanVars });
+    console.info("Modelo baixado (vars):", vars);
   }
 
   function startCreate() {
@@ -586,7 +628,7 @@ export default function SmsCampaignsPage({ onExit }) {
                                 e.stopPropagation();
                                 startEdit(c);
                               }}
-                              title="Editar campanha (rascunho)"
+                              title="Editar campanha"
                             >
                               <span style={{ display: "inline-flex", marginRight: 6 }}>
                                 <Icon name="edit" size={16} />
@@ -601,7 +643,7 @@ export default function SmsCampaignsPage({ onExit }) {
                                 e.stopPropagation();
                                 downloadTemplateFromCampaign(c);
                               }}
-                              title="Baixar planilha exemplo (CSV) baseada na mensagem da campanha"
+                              title="Baixar planilha exemplo (CSV) baseada na mensagem"
                             >
                               <span style={{ display: "inline-flex", marginRight: 6 }}>
                                 <Icon name="template" size={16} />
@@ -609,6 +651,24 @@ export default function SmsCampaignsPage({ onExit }) {
                               Modelo CSV
                             </button>
                           </>
+                        ) : null}
+
+                        {/* ✅ Botão Excluir (voltou) */}
+                        {canDeleteCampaign(c) ? (
+                          <button
+                            className="btn small secondary"
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteFromList(c);
+                            }}
+                            title="Excluir campanha (rascunho)"
+                          >
+                            <span style={{ display: "inline-flex", marginRight: 6 }}>
+                              <Icon name="trash" size={16} />
+                            </span>
+                            Excluir
+                          </button>
                         ) : null}
 
                         <button

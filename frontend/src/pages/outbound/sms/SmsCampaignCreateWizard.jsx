@@ -1,5 +1,5 @@
 // frontend/src/pages/outbound/sms/SmsCampaignCreateWizard.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createSmsCampaign,
   updateSmsCampaign,
@@ -18,6 +18,9 @@ const STEPS = [
   { key: "start", label: "3. Envio" }
 ];
 
+// =========================
+// Helpers: Template CSV
+// =========================
 function filenameSafe(s) {
   return String(s || "")
     .trim()
@@ -26,12 +29,20 @@ function filenameSafe(s) {
     .slice(0, 80);
 }
 
+/**
+ * Extrai variáveis do template:
+ * - {{1}} => var_1
+ * - {{2}} => var_2
+ * - {{var_1}} => var_1
+ * - {{nome}} => nome
+ * - ignora placeholders vazios
+ */
 function extractTemplateVars(message) {
   const text = String(message || "");
   const re = /{{\s*([^}]+?)\s*}}/g;
   const out = new Set();
-  let m;
 
+  let m;
   while ((m = re.exec(text)) !== null) {
     const raw = String(m[1] || "").trim();
     if (!raw) continue;
@@ -41,6 +52,7 @@ function extractTemplateVars(message) {
     else out.add(raw);
   }
 
+  // ordena: var_1, var_2... primeiro; depois alfabético
   const arr = Array.from(out);
   const varOnes = arr
     .filter((k) => /^var_\d+$/i.test(k))
@@ -56,6 +68,7 @@ function buildCsvTemplate({ message, delimiter = ";" }) {
   const vars = extractTemplateVars(message);
   const headers = ["numero", ...vars];
 
+  // monta 2 linhas exemplo
   const row1 = ["5511999999999"];
   const row2 = ["5511988887777"];
 
@@ -86,6 +99,9 @@ function downloadTextFile({ content, filename, mime = "text/csv;charset=utf-8" }
   window.URL.revokeObjectURL(url);
 }
 
+// =========================
+// Helpers: Status / Permissões UI
+// =========================
 function statusLabel(s) {
   const v = String(s || "").toLowerCase();
   if (v === "draft") return "Rascunho";
@@ -137,19 +153,25 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
   const step = useMemo(() => STEPS[stepIndex], [stepIndex]);
 
-  // ✅ FIX: antes de criar, sempre editável
+  // ref do textarea para inserir variável no cursor
+  const messageRef = useRef(null);
+
+  // ✅ antes de criar: sempre editável; após criar: depende do status
   const editable = useMemo(() => {
     if (!campaign?.id) return true;
     return canEditCampaign(campaign);
   }, [campaign]);
 
+  // Se estiver editando: começa em "Dados" ou "Audiência" conforme já tenha audiência
   useEffect(() => {
     if (mode !== "edit" || !initialCampaign) return;
+
     const hasAudience =
       Number(initialCampaign?.audienceCount || 0) > 0 ||
       Number(initialCampaign?.audience?.total || 0) > 0 ||
       Array.isArray(initialCampaign?.audience?.rows);
-    setStepIndex(hasAudience ? 2 : 0);
+
+    setStepIndex(hasAudience ? 1 : 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -170,8 +192,52 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     setError("");
     setInfo("");
     const { csvText, headers, vars } = buildCsvTemplate({ message, delimiter: ";" });
-    downloadTextFile({ content: csvText, filename: `modelo_audiencia_sms_${filenameSafe(name)}.csv` });
-    setInfo(`✅ Modelo baixado. Colunas: ${headers.join(" ; ")} • Variáveis: ${vars.length ? vars.join(", ") : "nenhuma"}`);
+    downloadTextFile({
+      content: csvText,
+      filename: `modelo_audiencia_sms_${filenameSafe(name)}.csv`
+    });
+    setInfo(
+      `✅ Modelo baixado. Colunas: ${headers.join(" ; ")} • Variáveis: ${
+        vars.length ? vars.join(", ") : "nenhuma"
+      }`
+    );
+  }
+
+  // ✅ Inserir variável no cursor (UX)
+  function insertVariable(varName) {
+    if (!editable) return;
+
+    const el = messageRef.current;
+    if (!el) {
+      setMessage((m) => `${String(m || "")}{{${varName}}}`);
+      return;
+    }
+
+    const insert = `{{${varName}}}`;
+    const start = el.selectionStart ?? String(message || "").length;
+    const end = el.selectionEnd ?? String(message || "").length;
+
+    const nextText = String(message || "").slice(0, start) + insert + String(message || "").slice(end);
+    setMessage(nextText);
+
+    requestAnimationFrame(() => {
+      try {
+        el.focus();
+        const caret = start + insert.length;
+        el.selectionStart = caret;
+        el.selectionEnd = caret;
+      } catch {}
+    });
+  }
+
+  function handleInsertNextVar() {
+    const varOnes = detectedVars
+      .filter((k) => /^var_\d+$/i.test(k))
+      .map((k) => Number(String(k).split("_")[1]))
+      .filter((n) => Number.isFinite(n));
+
+    const nextN = (varOnes.length ? Math.max(...varOnes) : 0) + 1;
+    insertVariable(`var_${nextN}`);
   }
 
   async function handleCreateOrSave() {
@@ -181,6 +247,11 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
     try {
       if (mode === "edit" && campaign?.id) {
+        if (!canEditCampaign(campaign)) {
+          setError("Esta campanha não pode ser editada no estado atual.");
+          return;
+        }
+
         const r = await updateSmsCampaign(campaign.id, { name, message });
         const item = r?.item || r?.campaign || r;
         setCampaign(item);
@@ -191,6 +262,8 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
         setCampaign(item);
         setInfo("✅ Campanha criada.");
       }
+
+      // ao salvar/criar, segue para próximo passo
       next();
     } catch (e) {
       setError(e?.message || "Erro ao salvar campanha.");
@@ -201,15 +274,20 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
   async function handleDelete() {
     if (!campaign?.id) return;
+
+    if (!canDeleteCampaign(campaign)) {
+      setError("Só é possível excluir campanhas em rascunho.");
+      return;
+    }
+
+    const ok = window.confirm(`Excluir a campanha "${campaign?.name || "Campanha"}"?\nEssa ação não pode ser desfeita.`);
+    if (!ok) return;
+
     setBusy(true);
     setError("");
     setInfo("");
 
     try {
-      if (!canDeleteCampaign(campaign)) {
-        setError("Só é possível excluir campanhas em rascunho.");
-        return;
-      }
       await deleteSmsCampaign(campaign.id);
       setInfo("✅ Campanha excluída.");
       onExit?.();
@@ -233,11 +311,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
       if (r?.item) setCampaign(r.item);
 
       const count =
-        r?.audienceCount ??
-        r?.imported ??
-        r?.item?.audience?.total ??
-        r?.item?.audienceCount ??
-        0;
+        r?.audienceCount ?? r?.imported ?? r?.item?.audience?.total ?? r?.item?.audienceCount ?? 0;
 
       setInfo(`✅ Audiência importada: ${count} número(s).`);
       next();
@@ -248,9 +322,14 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     }
   }
 
-  // ✅ start em lote: evita timeout e “travado”
+  // ✅ start em lote (evita timeout)
   async function handleStartBatch() {
     if (!campaign?.id) return;
+
+    if (!canStartCampaign(campaign)) {
+      setError("Campanha não está em estado válido para iniciar/retomar.");
+      return;
+    }
 
     setBusy(true);
     setError("");
@@ -258,14 +337,20 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
     try {
       const r = await startSmsCampaign(campaign.id, { limit: 200 }); // lote padrão
-      // atualiza status local “otimista”
-      setCampaign((c) => (c ? { ...c, status: r?.finished ? "finished" : "running" } : c));
+
+      // tenta capturar status retornado; fallback para otimista
+      const nextStatus =
+        String(r?.status || "").toLowerCase() || (r?.finished ? "finished" : "running");
+
+      setCampaign((c) =>
+        c ? { ...c, status: nextStatus, ...(r?.item ? r.item : {}) } : c
+      );
 
       if (r?.finished) {
         setInfo(`✅ Finalizado. Enviados: ${r?.sent ?? 0} | Falhas: ${r?.failed ?? 0}`);
       } else {
         setInfo(
-          `🚀 Processando em lotes… Enviados: ${r?.sent ?? 0} | Falhas: ${r?.failed ?? 0} | Clique em “Iniciar/Retomar” novamente para continuar.`
+          `🚀 Processando em lotes… Enviados: ${r?.sent ?? 0} | Falhas: ${r?.failed ?? 0} • Clique em “Iniciar / Retomar” novamente para continuar.`
         );
       }
     } catch (e) {
@@ -277,7 +362,12 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
   async function handlePause() {
     if (!campaign?.id) return;
-    setBusy(true); setError(""); setInfo("");
+    if (!canPauseCampaign(campaign)) return;
+
+    setBusy(true);
+    setError("");
+    setInfo("");
+
     try {
       const r = await pauseSmsCampaign(campaign.id);
       const item = r?.item || r?.campaign || null;
@@ -292,12 +382,18 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
   async function handleResume() {
     if (!campaign?.id) return;
-    setBusy(true); setError(""); setInfo("");
+    if (!canResumeCampaign(campaign)) return;
+
+    setBusy(true);
+    setError("");
+    setInfo("");
+
     try {
       const r = await resumeSmsCampaign(campaign.id);
       const item = r?.item || r?.campaign || null;
+      // backend costuma voltar pra "draft" (pronto pra chamar /start)
       setCampaign(item || { ...campaign, status: "draft" });
-      setInfo("▶️ Pronto para continuar. Clique em “Iniciar/Retomar”.");
+      setInfo("▶️ Pronto para continuar. Clique em “Iniciar / Retomar”.");
     } catch (e) {
       setError(e?.message || "Erro ao retomar.");
     } finally {
@@ -307,7 +403,12 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
   async function handleCancel() {
     if (!campaign?.id) return;
-    setBusy(true); setError(""); setInfo("");
+    if (!canCancelCampaign(campaign)) return;
+
+    setBusy(true);
+    setError("");
+    setInfo("");
+
     try {
       const r = await cancelSmsCampaign(campaign.id);
       const item = r?.item || r?.campaign || null;
@@ -324,7 +425,12 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     <div className="campaign-wizard">
       <div className="wizard-steps">
         {STEPS.map((s, idx) => (
-          <div key={s.key} className={`wizard-step ${idx === stepIndex ? "active" : ""} ${idx < stepIndex ? "done" : ""}`}>
+          <div
+            key={s.key}
+            className={`wizard-step ${idx === stepIndex ? "active" : ""} ${
+              idx < stepIndex ? "done" : ""
+            }`}
+          >
             {s.label}
           </div>
         ))}
@@ -335,7 +441,14 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
       {step.key === "create" && (
         <div className="wizard-card" style={{ maxWidth: 920 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              alignItems: "flex-start"
+            }}
+          >
             <div>
               <h3 style={{ marginBottom: 6 }}>{mode === "edit" ? "Editar campanha" : "Criar campanha"}</h3>
               <p className="muted" style={{ marginTop: 0 }}>
@@ -348,7 +461,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                 Baixar planilha exemplo
               </button>
 
-              {mode === "edit" && campaign?.id && canDeleteCampaign(campaign) ? (
+              {campaign?.id && canDeleteCampaign(campaign) ? (
                 <button className="btn secondary" type="button" onClick={handleDelete} disabled={busy}>
                   Excluir rascunho
                 </button>
@@ -365,46 +478,134 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 14 }}>
+            {/* FORM */}
             <div>
               <label className="field">
                 <span>Nome</span>
-                <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy || !editable} />
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={busy || !editable}
+                  placeholder="Ex: Black Friday • SMS"
+                />
               </label>
 
               <label className="field">
                 <span>Mensagem</span>
                 <textarea
+                  ref={messageRef}
                   rows={7}
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   disabled={busy || !editable}
                   style={{ resize: "vertical" }}
+                  placeholder="Digite a mensagem do SMS..."
                 />
-                <div className="muted" style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
-                  <span>{charCount} caracteres • {smsParts} SMS</span>
+
+                {/* Inserir variável (UX) */}
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                  <button
+                    className="btn small secondary"
+                    type="button"
+                    onClick={() => insertVariable("var_1")}
+                    disabled={busy || !editable}
+                    title="Inserir {{var_1}} no cursor"
+                  >
+                    + var_1
+                  </button>
+
+                  <button
+                    className="btn small secondary"
+                    type="button"
+                    onClick={handleInsertNextVar}
+                    disabled={busy || !editable}
+                    title="Cria a próxima var sequencial (var_2, var_3...)"
+                  >
+                    + nova variável
+                  </button>
+
+                  {detectedVars
+                    .filter((v) => !/^var_\d+$/i.test(v))
+                    .slice(0, 6)
+                    .map((v) => (
+                      <button
+                        key={v}
+                        className="btn small secondary"
+                        type="button"
+                        onClick={() => insertVariable(v)}
+                        disabled={busy || !editable}
+                        title={`Inserir {{${v}}}`}
+                      >
+                        + {v}
+                      </button>
+                    ))}
+                </div>
+
+                <div
+                  className="muted"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    marginTop: 6
+                  }}
+                >
+                  <span>
+                    {charCount} caracteres • {smsParts} SMS
+                  </span>
                   <span>Limite estimado: {charsLimit}</span>
                 </div>
               </label>
 
-              <div className="muted" style={{ marginTop: 10, padding: 10, border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, background: "rgba(255,255,255,.03)" }}>
-                Variáveis detectadas: <b>{detectedVars.length ? detectedVars.join(", ") : "nenhuma"}</b>
+              <div
+                className="muted"
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  border: "1px solid rgba(255,255,255,.08)",
+                  borderRadius: 10,
+                  background: "rgba(255,255,255,.03)"
+                }}
+              >
+                Variáveis detectadas:{" "}
+                <b>{detectedVars.length ? detectedVars.join(", ") : "nenhuma"}</b>
               </div>
 
               {campaign?.id ? (
                 <div className="muted" style={{ marginTop: 10 }}>
-                  Status: <b>{statusLabel(campaign.status)}</b> • ID: <b>{String(campaign.id).slice(0, 12)}</b>
+                  Status: <b>{statusLabel(campaign.status)}</b> • ID:{" "}
+                  <b>{String(campaign.id).slice(0, 12)}</b>
                 </div>
               ) : null}
             </div>
 
-            <div style={{ border: "1px solid rgba(255,255,255,.10)", borderRadius: 14, padding: 12, background: "rgba(0,0,0,.25)" }}>
+            {/* PREVIEW “PHONE” */}
+            <div
+              style={{
+                border: "1px solid rgba(255,255,255,.10)",
+                borderRadius: 14,
+                padding: 12,
+                background: "rgba(0,0,0,.25)"
+              }}
+            >
               <div className="muted" style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
                 <span>Prévia</span>
                 <span>{smsParts} parte(s)</span>
               </div>
-              <div style={{ borderRadius: 14, padding: 12, background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.06)", minHeight: 180, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
+
+              <div
+                style={{
+                  borderRadius: 14,
+                  padding: 12,
+                  background: "rgba(255,255,255,.04)",
+                  border: "1px solid rgba(255,255,255,.06)",
+                  minHeight: 180,
+                  whiteSpace: "pre-wrap",
+                  lineHeight: 1.35
+                }}
+              >
                 {message || "Sua mensagem aparecerá aqui..."}
               </div>
+
               <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
                 * Contagem estimada. Pode variar conforme acentos/Unicode.
               </div>
@@ -427,7 +628,9 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
               <p className="muted" style={{ marginTop: 6 }}>
                 Coluna obrigatória: <b>numero</b>. As demais colunas devem bater com as variáveis do texto.
               </p>
-              <div className="muted">Variáveis detectadas: <b>{detectedVars.length ? detectedVars.join(", ") : "nenhuma"}</b></div>
+              <div className="muted">
+                Variáveis detectadas: <b>{detectedVars.length ? detectedVars.join(", ") : "nenhuma"}</b>
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -443,11 +646,26 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
             </div>
           </div>
 
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: "1px solid rgba(255,255,255,.10)", background: "rgba(255,255,255,.03)" }}>
-            <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] || null)} disabled={busy} />
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,.10)",
+              background: "rgba(255,255,255,.03)"
+            }}
+          >
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              disabled={busy}
+            />
 
             <div style={{ marginTop: 12 }}>
-              <p className="muted" style={{ marginBottom: 6 }}>Exemplo (gerado a partir do seu texto):</p>
+              <p className="muted" style={{ marginBottom: 6 }}>
+                Exemplo (gerado a partir do seu texto):
+              </p>
               <pre className="code">{buildCsvTemplate({ message, delimiter: ";" }).csvText}</pre>
             </div>
           </div>
@@ -469,18 +687,32 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
             <div>
               <h3>Envio</h3>
               <p className="muted" style={{ marginTop: 6 }}>
-                Processa em lotes para evitar timeout. Clique em “Iniciar/Retomar” até finalizar.
+                Processa em lotes para evitar timeout. Clique em “Iniciar / Retomar” até finalizar.
               </p>
-              <div className="muted">Status atual: <b>{statusLabel(campaign?.status)}</b></div>
+              <div className="muted">
+                Status atual: <b>{statusLabel(campaign?.status)}</b>
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <button className="btn secondary" type="button" onClick={back} disabled={busy}>Voltar</button>
-              <button className="btn ghost" type="button" onClick={onExit} disabled={busy}>Finalizar</button>
+              <button className="btn secondary" type="button" onClick={back} disabled={busy}>
+                Voltar
+              </button>
+              <button className="btn ghost" type="button" onClick={onExit} disabled={busy}>
+                Finalizar
+              </button>
             </div>
           </div>
 
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: "1px solid rgba(255,255,255,.10)", background: "rgba(255,255,255,.03)" }}>
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,.10)",
+              background: "rgba(255,255,255,.03)"
+            }}
+          >
             <div className="muted" style={{ marginBottom: 8 }}>
               Campanha: <b>{campaign?.name || name}</b>
             </div>
@@ -499,6 +731,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
               type="button"
               onClick={handleStartBatch}
               disabled={busy || !campaign?.id || !canStartCampaign(campaign)}
+              title="Inicia ou continua o envio em lotes"
             >
               {busy ? "Processando..." : "Iniciar / Retomar"}
             </button>
