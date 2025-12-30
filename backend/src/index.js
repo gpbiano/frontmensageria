@@ -88,6 +88,9 @@ const { default: whatsappRouter } = await import("./routes/channels/whatsappRout
 const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
 const { default: instagramWebhookRouter } = await import("./routes/webhooks/instagramWebhookRouter.js");
 
+// ✅ NEW: Reports (Analytics unificado)
+const { default: reportsRouter } = await import("./routes/reports.js");
+
 // ===============================
 // APP
 // ===============================
@@ -330,6 +333,9 @@ app.use("/settings/groups", groupsRouter);
 app.use("/settings/channels", channelsRouter);
 
 app.use("/conversations", conversationsRouter);
+
+// ✅ Reports (Analytics unificado)
+app.use("/reports", reportsRouter);
 
 app.use("/outbound/assets", assetsRouter);
 app.use("/outbound/numbers", numbersRouter);

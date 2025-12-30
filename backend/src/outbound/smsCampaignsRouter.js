@@ -36,6 +36,14 @@ function getModelName() {
   return "OutboundCampaign";
 }
 
+function resolveLogModel() {
+  return prisma?.outboundLog || prisma?.OutboundLog || null;
+}
+
+function getLogModelName() {
+  return "OutboundLog";
+}
+
 function modelHasField(modelName, field) {
   try {
     const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
@@ -178,11 +186,27 @@ function canCancel(s) {
 }
 
 // =========================
+// Metadata helpers (timestamps + progress)
+// =========================
+function safeObj(x) {
+  return x && typeof x === "object" ? x : {};
+}
+
+function setMetaTs(campaign, patch) {
+  const md = safeObj(campaign?.metadata);
+  const ts = safeObj(md?.timestamps);
+  return {
+    ...md,
+    timestamps: { ...ts, ...patch }
+  };
+}
+
+// =========================
 // Progress helpers (metadata.smsProgress)
 // =========================
 function getProgress(campaign) {
-  const md = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
-  const p = md?.smsProgress && typeof md.smsProgress === "object" ? md.smsProgress : {};
+  const md = safeObj(campaign?.metadata);
+  const p = safeObj(md?.smsProgress);
   const cursor = Number.isFinite(Number(p.cursor)) ? Number(p.cursor) : 0;
 
   return {
@@ -195,7 +219,7 @@ function getProgress(campaign) {
 }
 
 async function persistProgress(model, modelName, id, campaign, patch) {
-  const baseMd = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
+  const baseMd = safeObj(campaign?.metadata);
   const baseProg = getProgress(campaign);
 
   const nextProg = {
@@ -225,11 +249,37 @@ function renderMessage(template, vars) {
 }
 
 function resolveMessageTemplate(campaign) {
-  const md = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
-  return (
-    String(md?.message || "").trim() ||
-    String(md?.smsMessage || "").trim()
-  );
+  const md = safeObj(campaign?.metadata);
+  return String(md?.message || "").trim() || String(md?.smsMessage || "").trim();
+}
+
+// =========================
+// OutboundLog helpers (analytics)
+// =========================
+async function writeLog({ tenantId, campaignId, phone, status, error, provider, providerMsgId, cost, metadata }) {
+  const logModel = resolveLogModel();
+  const logModelName = getLogModelName();
+  if (!logModel) return; // ✅ se não existe, não quebra
+  if (!modelHasField(logModelName, "tenantId")) return; // paranoia
+
+  try {
+    await logModel.create({
+      data: {
+        tenantId,
+        campaignId,
+        channel: "sms",
+        phone: String(phone || ""),
+        status: String(status || "processed"),
+        error: error ? String(error).slice(0, 500) : null,
+        provider: provider ? String(provider).slice(0, 50) : null,
+        providerMsgId: providerMsgId ? String(providerMsgId).slice(0, 120) : null,
+        cost: typeof cost === "number" ? cost : null,
+        metadata: metadata && typeof metadata === "object" ? metadata : undefined
+      }
+    });
+  } catch (e) {
+    logger.warn({ err: e?.message || e }, "⚠️ OutboundLog create failed (ignored)");
+  }
 }
 
 // =========================
@@ -277,8 +327,7 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     if (!name) return res.status(400).json({ ok: false, error: "name_required" });
     if (!message) return res.status(400).json({ ok: false, error: "message_required" });
 
-    const baseMetadata =
-      req.body?.metadata && typeof req.body.metadata === "object" ? req.body.metadata : {};
+    const baseMetadata = safeObj(req.body?.metadata);
 
     const data = {
       tenantId,
@@ -287,13 +336,15 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
       status: STATUS.DRAFT
     };
 
-    // ✅ IMPORTANTE: seu schema NÃO tem campo message.
-    // Guardamos sempre em metadata.message.
+    // ✅ Schema não tem campo "message": guardamos em metadata.message
     if (modelHasField(modelName, "metadata")) {
       data.metadata = {
         ...baseMetadata,
         message,
-        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() }
+        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() },
+        timestamps: {
+          createdAt: new Date().toISOString()
+        }
       };
     }
 
@@ -352,7 +403,7 @@ router.post(
         importedAt: new Date().toISOString()
       };
 
-      const baseMd = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
+      const baseMd = safeObj(campaign?.metadata);
       const nextMd = {
         ...baseMd,
         smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() }
@@ -360,6 +411,7 @@ router.post(
 
       const data = {};
       if (modelHasField(modelName, "audience")) data.audience = audience;
+      if (modelHasField(modelName, "audienceCount")) data.audienceCount = parsed.rows.length;
       if (modelHasField(modelName, "metadata")) data.metadata = nextMd;
 
       const item = await model.update({ where: { id }, data });
@@ -381,8 +433,6 @@ router.get("/:id/report", requireAuth, async (req, res) => {
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  const modelName = getModelName();
-
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
@@ -396,8 +446,8 @@ router.get("/:id/report", requireAuth, async (req, res) => {
       Number(campaign?.audience?.total) ||
       (Array.isArray(campaign?.audience?.rows) ? campaign.audience.rows.length : 0);
 
-    const stats = campaign?.stats && typeof campaign.stats === "object" ? campaign.stats : {};
-    const smsReport = stats?.smsReport && typeof stats.smsReport === "object" ? stats.smsReport : {};
+    const stats = safeObj(campaign?.stats);
+    const smsReport = safeObj(stats?.smsReport);
     const samples = Array.isArray(smsReport?.samples) ? smsReport.samples : [];
 
     const results = samples.map((s) => ({
@@ -442,8 +492,8 @@ router.get("/:id/report.csv", requireAuth, async (req, res) => {
     const campaign = await getSmsCampaign(model, tenantId, id);
     if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
 
-    const stats = campaign?.stats && typeof campaign.stats === "object" ? campaign.stats : {};
-    const smsReport = stats?.smsReport && typeof stats.smsReport === "object" ? stats.smsReport : {};
+    const stats = safeObj(campaign?.stats);
+    const smsReport = safeObj(stats?.smsReport);
     const samples = Array.isArray(smsReport?.samples) ? smsReport.samples : [];
 
     const lines = [];
@@ -504,14 +554,19 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     const env = assertSmsProviderEnv();
     if (!env.ok) return res.status(500).json({ ok: false, error: env.error });
 
+    // ✅ atualiza status + timestamps (em metadata)
+    const nextMd = setMetaTs(campaign, {
+      startedAt: new Date().toISOString(),
+      pausedAt: null,
+      canceledAt: null,
+      finishedAt: null
+    });
+
     await model.update({
       where: { id },
       data: {
         status: STATUS.RUNNING,
-        startedAt: campaign.startedAt || new Date(),
-        pausedAt: null,
-        canceledAt: null,
-        finishedAt: null
+        ...(modelHasField(modelName, "metadata") ? { metadata: nextMd } : {})
       }
     });
 
@@ -531,7 +586,12 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     const samples = [];
     const SAMPLE_LIMIT = 50;
 
+    const startCursor = prog.cursor;
+    let endCursor = prog.cursor;
+
     for (let i = prog.cursor; i < rows.length && localSent < maxToSend; i++) {
+      endCursor = i;
+
       if (localSent % STATUS_CHECK_EVERY === 0) {
         const st = await getSmsCampaign(model, tenantId, id);
         const statusNow = String(st?.status || "");
@@ -576,6 +636,20 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
         body = String(e?.message || e);
       }
 
+      // ✅ grava log (para analytics)
+      await writeLog({
+        tenantId,
+        campaignId: id,
+        phone: row.phone,
+        status: ok ? "processed" : "failed",
+        error: ok ? null : `http_${statusCode}`,
+        provider: "iagente",
+        metadata: {
+          httpStatus: statusCode,
+          response: String(body || "").slice(0, 500)
+        }
+      });
+
       localSent++;
       if (ok) localSuccess++;
       else localFailed++;
@@ -610,8 +684,11 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     current = await getSmsCampaign(model, tenantId, id);
     if (!current) return res.status(404).json({ ok: false, error: "not_found" });
 
+    // ✅ cursor final correto
+    const finalCursor = Math.min(rows.length, endCursor + 1);
+
     prog = await persistProgress(model, modelName, id, current, {
-      cursor: Math.min(rows.length, prog.cursor + localSent),
+      cursor: finalCursor,
       sent: prog.sent + localSent,
       success: prog.success + localSuccess,
       failed: prog.failed + localFailed
@@ -621,11 +698,11 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
 
     // ✅ salva relatório no campo stats.smsReport (se existir)
     if (modelHasField(modelName, "stats")) {
-      const baseStats = current?.stats && typeof current.stats === "object" ? current.stats : {};
+      const baseStats = safeObj(current?.stats);
       await model.update({
         where: { id },
         data: {
-          ...(done ? { status: STATUS.FINISHED, finishedAt: new Date() } : {}),
+          ...(done ? { status: STATUS.FINISHED } : {}),
           stats: {
             ...baseStats,
             smsReport: {
@@ -635,13 +712,21 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
               finishedAt: done ? new Date().toISOString() : null,
               samples
             }
-          }
+          },
+          ...(modelHasField(modelName, "metadata") && done
+            ? { metadata: setMetaTs(current, { finishedAt: new Date().toISOString() }) }
+            : {})
         }
       });
     } else if (done) {
       await model.update({
         where: { id },
-        data: { status: STATUS.FINISHED, finishedAt: new Date() }
+        data: {
+          status: STATUS.FINISHED,
+          ...(modelHasField(modelName, "metadata")
+            ? { metadata: setMetaTs(current, { finishedAt: new Date().toISOString() }) }
+            : {})
+        }
       });
     }
 
@@ -652,11 +737,14 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       totalAudience: rows.length,
       sent: prog.sent,
       success: prog.success,
-      failed: prog.failed
+      failed: prog.failed,
+      startedCursor: startCursor,
+      finalCursor
     });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/start failed");
 
+    // best-effort: marca failed sem usar campos inexistentes
     try {
       const model2 = resolveModel();
       const tenantId2 = getTenantId(req);
@@ -664,9 +752,12 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       if (model2 && tenantId2 && id2) {
         const current = await getSmsCampaign(model2, tenantId2, id2);
         if (current) {
+          const patchMd = modelHasField(getModelName(), "metadata")
+            ? { metadata: setMetaTs(current, { finishedAt: new Date().toISOString(), failedAt: new Date().toISOString() }) }
+            : {};
           await model2.update({
             where: { id: id2 },
-            data: { status: STATUS.FAILED, finishedAt: new Date() }
+            data: { status: STATUS.FAILED, ...patchMd }
           });
         }
       }
@@ -685,6 +776,8 @@ router.patch("/:id/pause", requireAuth, requireRole("admin", "manager"), async (
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
+  const modelName = getModelName();
+
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
@@ -697,9 +790,17 @@ router.patch("/:id/pause", requireAuth, requireRole("admin", "manager"), async (
       return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
     }
 
+    const data = {
+      status: STATUS.PAUSED
+    };
+
+    if (modelHasField(modelName, "metadata")) {
+      data.metadata = setMetaTs(campaign, { pausedAt: new Date().toISOString() });
+    }
+
     const item = await model.update({
       where: { id },
-      data: { status: STATUS.PAUSED, pausedAt: new Date() }
+      data
     });
 
     return res.json({ ok: true, item });
@@ -718,6 +819,8 @@ router.patch("/:id/resume", requireAuth, requireRole("admin", "manager"), async 
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
+  const modelName = getModelName();
+
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
@@ -730,9 +833,17 @@ router.patch("/:id/resume", requireAuth, requireRole("admin", "manager"), async 
       return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
     }
 
+    const data = {
+      status: STATUS.DRAFT
+    };
+
+    if (modelHasField(modelName, "metadata")) {
+      data.metadata = setMetaTs(campaign, { resumedAt: new Date().toISOString(), pausedAt: null });
+    }
+
     const item = await model.update({
       where: { id },
-      data: { status: STATUS.DRAFT, pausedAt: null }
+      data
     });
 
     return res.json({ ok: true, item, note: "call POST /:id/start to continue from cursor" });
@@ -751,6 +862,8 @@ router.patch("/:id/cancel", requireAuth, requireRole("admin", "manager"), async 
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
+  const modelName = getModelName();
+
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
@@ -763,9 +876,15 @@ router.patch("/:id/cancel", requireAuth, requireRole("admin", "manager"), async 
       return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
     }
 
+    const data = { status: STATUS.CANCELED };
+
+    if (modelHasField(modelName, "metadata")) {
+      data.metadata = setMetaTs(campaign, { canceledAt: new Date().toISOString() });
+    }
+
     const item = await model.update({
       where: { id },
-      data: { status: STATUS.CANCELED, canceledAt: new Date() }
+      data
     });
 
     return res.json({ ok: true, item });
