@@ -10,6 +10,9 @@ import { requireAuth, requireRole } from "../middleware/requireAuth.js";
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 const router = express.Router();
 
+/* =========================
+ * Helpers
+ * ========================= */
 function resolveModel(names) {
   for (const n of names) if (prisma?.[n]) return prisma[n];
   return null;
@@ -32,7 +35,9 @@ function assertPrisma(res, model, candidates) {
     return false;
   }
   if (!model) {
-    res.status(503).json({ ok: false, error: "prisma_model_missing", details: { expectedAnyOf: candidates } });
+    res
+      .status(503)
+      .json({ ok: false, error: "prisma_model_missing", details: { expectedAnyOf: candidates } });
     return false;
   }
   return true;
@@ -40,9 +45,23 @@ function assertPrisma(res, model, candidates) {
 
 const MODEL_CANDIDATES = ["outboundCampaign", "OutboundCampaign", "campaign", "Campaign"];
 
+// no teu schema atual, usamos OutboundCampaign para SMS também
+const MODEL_NAME = "OutboundCampaign";
+const CHANNEL = "sms";
+
+function baseWhere({ tenantId }) {
+  const where = {};
+  if (tenantId && modelHasField(MODEL_NAME, "tenantId")) where.tenantId = tenantId;
+  // ✅ channel é obrigatório no schema -> força sempre
+  where.channel = CHANNEL;
+  return where;
+}
+
+// ======================================================
+// GET /outbound/sms-campaigns
+// ======================================================
 router.get("/", requireAuth, async (req, res) => {
   const model = resolveModel(MODEL_CANDIDATES);
-  const modelName = model ? model._model || model.name || "unknown" : null;
 
   try {
     if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
@@ -50,13 +69,9 @@ router.get("/", requireAuth, async (req, res) => {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
 
-    const where = {};
-    if (modelHasField(modelName, "tenantId")) where.tenantId = tenantId;
-    if (modelHasField(modelName, "channel")) where.channel = "sms";
-
     const items = await model.findMany({
-      where,
-      orderBy: modelHasField(modelName, "createdAt") ? { createdAt: "desc" } : undefined
+      where: baseWhere({ tenantId }),
+      orderBy: modelHasField(MODEL_NAME, "createdAt") ? { createdAt: "desc" } : undefined
     });
 
     return res.json({ ok: true, items });
@@ -66,9 +81,11 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
+// ======================================================
+// POST /outbound/sms-campaigns
+// ======================================================
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   const model = resolveModel(MODEL_CANDIDATES);
-  const modelName = model ? model._model || model.name || "unknown" : null;
 
   try {
     if (!assertPrisma(res, model, MODEL_CANDIDATES)) return;
@@ -84,17 +101,22 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     if (!message.trim()) return res.status(400).json({ ok: false, error: "message_required" });
 
     const data = {};
-    if (modelHasField(modelName, "tenantId")) data.tenantId = tenantId;
-    if (modelHasField(modelName, "channel")) data.channel = "sms";
-    if (modelHasField(modelName, "name")) data.name = name;
-    if (modelHasField(modelName, "status")) data.status = "draft";
-    if (modelHasField(modelName, "metadata")) data.metadata = { ...metadata, message };
+
+    if (modelHasField(MODEL_NAME, "tenantId")) data.tenantId = tenantId;
+
+    // ✅ SEMPRE setar (obrigatório no schema)
+    data.channel = CHANNEL;
+
+    if (modelHasField(MODEL_NAME, "name")) data.name = name;
+    if (modelHasField(MODEL_NAME, "status")) data.status = "draft";
+
+    // guardamos mensagem em metadata (já que OutboundCampaign não tem "message")
+    if (modelHasField(MODEL_NAME, "metadata")) data.metadata = { ...metadata, message };
 
     const item = await model.create({ data });
-
     return res.status(201).json({ ok: true, item });
   } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST / failed");
+    logger.error({ err, body: req.body }, "❌ smsCampaignsRouter POST / failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
