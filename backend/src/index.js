@@ -78,18 +78,25 @@ const { default: conversationsRouter } = await import("./routes/conversations.js
 
 const { default: outboundRouter } = await import("./outbound/outboundRouter.js");
 const { default: numbersRouter } = await import("./outbound/numbersRouter.js");
+
+// ⚠️ WhatsApp templates (já existente – NÃO mexe)
 const { default: templatesRouter } = await import("./outbound/templatesRouter.js");
+
+// ✅ SMS templates (NOVO – separado)
+const { default: smsTemplatesRouter } = await import("./outbound/smsTemplatesRouter.js");
+
 const { default: assetsRouter } = await import("./outbound/assetsRouter.js");
 const { default: campaignsRouter } = await import("./outbound/campaignsRouter.js");
 const { default: optoutRouter } = await import("./outbound/optoutRouter.js");
 const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRouter.js");
 
+// Reports / Analytics
+const { default: reportsRouter } = await import("./routes/reports.js");
+
+// Channels
 const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
 const { default: instagramWebhookRouter } = await import("./routes/webhooks/instagramWebhookRouter.js");
-
-// ✅ NEW: Reports (Analytics unificado)
-const { default: reportsRouter } = await import("./routes/reports.js");
 
 // ===============================
 // APP
@@ -221,22 +228,18 @@ app.use(
 );
 
 // ===============================
-// ✅ BODY PARSERS (CRÍTICO)
-// - Precisam vir ANTES do /login (authRouter)
-// - Mas NÃO podem “tocar” o Instagram webhook (usa RAW)
+// BODY PARSERS
 // ===============================
 const jsonParser = express.json({
   limit: "5mb",
   type: ["application/json", "application/*+json"],
   verify: (req, _res, buf) => {
-    // útil p/ assinatura (WA) e debug
     req.rawBody = buf;
   }
 });
 
 const urlParser = express.urlencoded({ extended: true });
 
-// pula parsers no Instagram (porque ele usa RAW 1:1 com assinatura)
 function skipInstagram(req) {
   return req.originalUrl?.startsWith("/webhook/instagram");
 }
@@ -252,7 +255,7 @@ app.use((req, res, next) => {
 });
 
 // ===============================
-// 🌍 ROTAS PÚBLICAS
+// ROTAS PÚBLICAS
 // ===============================
 app.get("/", (_req, res) => res.json({ status: "ok" }));
 
@@ -278,37 +281,34 @@ app.get("/health", async (_req, res) => {
   });
 });
 
-// ✅ Auth (precisa do JSON parser já ativo)
+// Auth
 app.use("/", authRouter);
 app.use("/auth", passwordRouter);
 
-// ✅ Webchat público
+// Webchat público
 app.use("/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 
 // ===============================
-// ✅ WEBHOOKS PÚBLICOS
+// WEBHOOKS
 // ===============================
-
-// Whats/Messenger usam JSON normal (já parseado acima)
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 
-// ✅ CRÍTICO: Instagram com RAW (sem JSON antes)
 app.use(
   "/webhook/instagram",
   express.raw({
     type: "*/*",
     limit: "5mb",
     verify: (req, _res, buf) => {
-      req.rawBody = buf; // Buffer exato
+      req.rawBody = buf;
     }
   }),
   instagramWebhookRouter
 );
 
 // ===============================
-// 🔒 MIDDLEWARE GLOBAL (PROTEGIDO)
+// 🔒 PROTECTED MIDDLEWARE
 // ===============================
 app.use(requireAuth);
 app.use(enforceTokenTenant);
@@ -322,7 +322,7 @@ app.use(
 app.use(requirePrisma);
 
 // ===============================
-// 🔒 ROTAS PROTEGIDAS
+// 🔒 PROTECTED ROUTES
 // ===============================
 app.use("/api", chatbotRouter);
 app.use("/api/human", humanRouter);
@@ -334,12 +334,19 @@ app.use("/settings/channels", channelsRouter);
 
 app.use("/conversations", conversationsRouter);
 
-// ✅ Reports (Analytics unificado)
+// 📊 Analytics unificado
 app.use("/reports", reportsRouter);
 
+// Outbound
 app.use("/outbound/assets", assetsRouter);
 app.use("/outbound/numbers", numbersRouter);
+
+// ⚠️ WhatsApp templates (mantido)
 app.use("/outbound/templates", templatesRouter);
+
+// ✅ SMS templates (novo)
+app.use("/outbound/sms-templates", smsTemplatesRouter);
+
 app.use("/outbound/campaigns", campaignsRouter);
 app.use("/outbound/optout", optoutRouter);
 app.use("/outbound/sms-campaigns", smsCampaignsRouter);
