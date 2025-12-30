@@ -2,11 +2,10 @@
 // ✅ PRISMA-FIRST (SEM data.json)
 // Base: /outbound/sms-campaigns
 //
-// Este router usa o model OutboundCampaign com channel="sms" para campanhas de SMS.
 // Fluxo:
-// 1) POST   /outbound/sms-campaigns           -> cria campanha (draft)
-// 2) POST   /outbound/sms-campaigns/:id/audience (CSV) -> importa audiência (audience Json)
-// 3) (futuro) POST /outbound/sms-campaigns/:id/start   -> dispara via IAGENTE
+// 1) POST   /outbound/sms-campaigns                 -> cria campanha (draft)
+// 2) POST   /outbound/sms-campaigns/:id/audience    -> importa audiência (CSV via multipart OU JSON csv/csvText)
+// 3) (futuro) POST /outbound/sms-campaigns/:id/start -> dispara via IAGENTE
 
 import express from "express";
 import multer from "multer";
@@ -24,11 +23,7 @@ const upload = multer({
 
 /* =========================
  * Feature Flag (Add-on SMS)
- * =========================
- * - Se quiser controlar por tenant no futuro, aqui é o ponto.
- * - Por enquanto, gate global por ENV:
- *    SMS_ENABLED=true
- */
+ * ========================= */
 function isSmsEnabled() {
   const v = String(process.env.SMS_ENABLED || "").trim().toLowerCase();
   // default: enabled (para não quebrar ambiente existente)
@@ -49,7 +44,6 @@ function modelHasField(modelName, field) {
     const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
     return !!m?.fields?.some((f) => f.name === field);
   } catch {
-    // se não conseguir ler dmmf, assume true (safe fallback)
     return true;
   }
 }
@@ -79,7 +73,6 @@ function assertPrisma(res, model, candidates) {
  * CSV parsing (SMS audience)
  * - aceita separador , ou ;
  * - header opcional: numero (ou phone/telefone), var_1, var_2...
- * - linhas vazias/invalidas viram errors
  * ========================= */
 function normalizePhone(raw) {
   const s = String(raw || "")
@@ -88,9 +81,7 @@ function normalizePhone(raw) {
 
   const digits = s.startsWith("+") ? s.slice(1) : s;
 
-  // muito curto -> inválido
   if (digits.length < 10) return null;
-
   return digits;
 }
 
@@ -113,7 +104,6 @@ function parseCsvPhones(csvText) {
   const out = { rows: [], errors: [] };
   if (!lines.length) return out;
 
-  // header?
   const firstCols = lines[0].split(delim).map((c) => c.trim());
   const firstLower = firstCols.map((c) => c.toLowerCase());
 
@@ -129,7 +119,6 @@ function parseCsvPhones(csvText) {
 
   if (hasHeader) {
     startIdx = 1;
-
     phoneIdx =
       firstLower.indexOf("numero") !== -1
         ? firstLower.indexOf("numero")
@@ -142,7 +131,7 @@ function parseCsvPhones(csvText) {
   } else {
     phoneIdx = 0;
     varIdxs = firstCols.map((_, i) => i).filter((i) => i !== 0);
-    varHeaders = []; // sem header
+    varHeaders = [];
   }
 
   for (let i = startIdx; i < lines.length; i++) {
@@ -160,8 +149,6 @@ function parseCsvPhones(csvText) {
     const vars = {};
     for (const idx of varIdxs) {
       const headerName = hasHeader ? String(varHeaders[idx] || "").trim() : "";
-
-      // ✅ se não tem header, usamos var_1, var_2... (baseado na ordem, não no índice bruto)
       const fallbackKey = `var_${varIdxs.indexOf(idx) + 1}`;
       const key = headerName || fallbackKey;
 
@@ -177,7 +164,7 @@ function parseCsvPhones(csvText) {
 /* =========================
  * Model resolution
  * ========================= */
-// OBS: reaproveita OutboundCampaign para SMS também (channel="sms")
+// Reaproveita OutboundCampaign para SMS (channel="sms")
 const MODEL_CANDIDATES = ["outboundCampaign", "OutboundCampaign", "campaign", "Campaign"];
 const PRISMA_MODEL_NAME = "OutboundCampaign";
 
@@ -214,10 +201,6 @@ router.get("/", requireAuth, async (req, res) => {
 /* ======================================================
  * POST /outbound/sms-campaigns (create)
  * body: { name, message, metadata? }
- *
- * ✅ FIX DEFINITIVO:
- * - channel e name são REQUIRED no schema -> setamos SEMPRE
- * - tenantId também é REQUIRED no teu schema -> setamos SEMPRE
  * ====================================================== */
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   const model = resolveModel(MODEL_CANDIDATES);
@@ -237,12 +220,8 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
     if (!name) return res.status(400).json({ ok: false, error: "name_required" });
     if (!message.trim()) return res.status(400).json({ ok: false, error: "message_required" });
 
-    // ✅ Campos obrigatórios: SEMPRE SETAR
-    const data = {
-      tenantId,
-      channel: "sms",
-      name
-    };
+    // ✅ Campos REQUIRED: SEMPRE setar
+    const data = { tenantId, channel: "sms", name };
 
     if (modelHasField(modelName, "status")) data.status = "draft";
     if (modelHasField(modelName, "metadata")) data.metadata = { ...metadata, message };
@@ -259,13 +238,9 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
 /* ======================================================
  * POST /outbound/sms-campaigns/:id/audience (CSV)
  * Aceita:
- * - multipart/form-data (file)
- * - text/csv (raw)
- * - application/json { csv }
- *
- * ⚠️ IMPORTANTE:
- * - pra multipart, o client precisa enviar:
- *   field name: "file"
+ * - multipart/form-data (file)  -> field: "file"
+ * - application/json { csv } ou { csvText }
+ * - text/csv (raw) (best effort)
  * ====================================================== */
 router.post(
   "/:id/audience",
@@ -299,20 +274,27 @@ router.post(
 
       let csvText = "";
 
-      // ✅ multipart/form-data
+      // ✅ 1) multipart/form-data: file
       if (req.file?.buffer) {
         csvText = req.file.buffer.toString("utf-8");
       }
-      // ✅ raw text/csv (se algum middleware de body estiver entregando como string)
+      // ✅ 2) JSON { csv } ou { csvText }
+      else if (req.body && typeof req.body === "object") {
+        if (typeof req.body.csv === "string") csvText = req.body.csv;
+        else if (typeof req.body.csvText === "string") csvText = req.body.csvText; // ✅ FIX: compat com frontend
+      }
+      // ✅ 3) raw string (best effort)
       else if (typeof req.body === "string" && req.body.trim()) {
         csvText = req.body;
       }
-      // ✅ JSON { csv }
-      else if (typeof req.body?.csv === "string") {
-        csvText = req.body.csv;
-      }
 
-      if (!csvText.trim()) return res.status(400).json({ ok: false, error: "csv_required" });
+      if (!csvText.trim()) {
+        return res.status(400).json({
+          ok: false,
+          error: "csv_required",
+          details: "Envie multipart 'file' OU JSON { csv }/{ csvText }"
+        });
+      }
 
       const parsed = parseCsvPhones(csvText);
 
@@ -334,7 +316,6 @@ router.post(
       const data = {};
       if (modelHasField(modelName, "audience")) data.audience = audience;
 
-      // ✅ opcional: manter status como "draft" (não muda aqui)
       const item = await model.update({ where: { id }, data });
 
       return res.json({
