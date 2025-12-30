@@ -1521,25 +1521,17 @@ export async function deleteSmsCampaign(id: string) {
   );
 }
 
-export async function uploadSmsCampaignAudience(campaignId: string, file: File) {
-  if (!campaignId) throw new Error("campaignId_required");
-  if (!file) throw new Error("Arquivo CSV não informado");
+export async function startSmsCampaign(id: string, payload?: { limit?: number }) {
+  if (!id) throw new Error("campaign_id_required");
 
-  const fd = new FormData();
-  fd.append("file", file);
+  // ✅ manda limit no BODY (seu wizard usa {limit:200})
+  const body = payload && typeof payload === "object" ? payload : {};
 
-  // ✅ usa o helper oficial do projeto:
-  // - injeta Authorization
-  // - injeta X-Tenant-Id
-  // - NÃO seta Content-Type (browser define boundary)
-  // - mantém credentials/include
-  return requestForm(
-    `/outbound/sms-campaigns/${encodeURIComponent(String(campaignId))}/audience`,
-    fd,
-    { method: "POST" }
-  );
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start`, {
+    method: "POST",
+    body
+  });
 }
-
 
 export async function pauseSmsCampaign(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/pause`, { method: "PATCH" });
