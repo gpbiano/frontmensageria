@@ -662,35 +662,52 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
     }
 
-    // ✅ schema: audience Json + audienceCount Int
-    const rows = Array.isArray(campaign?.audience?.rows) ? campaign.audience.rows : [];
-    const totalAudience =
-      Number(campaign?.audienceCount || 0) ||
-      Number(campaign?.audience?.total || 0) ||
-      rows.length;
+    // ✅ audiência robusta: aceita {rows: []} OU array direto
+    const rawAudience = campaign.audience;
+    const rows =
+      Array.isArray(rawAudience) ? rawAudience
+      : Array.isArray(rawAudience?.rows) ? rawAudience.rows
+      : [];
 
-    if (!totalAudience || totalAudience <= 0) {
-      return res.status(400).json({ ok: false, error: "audience_required" });
-    }
     if (!rows.length) {
-      // se audienceCount existe mas rows não foram salvos, não tem como enviar
-      return res.status(409).json({
+      return res.status(400).json({
         ok: false,
-        error: "audience_rows_missing",
-        note: "audienceCount > 0, mas audience.rows está vazio. Reimporte a audiência."
+        error: "audience_required",
+        details: {
+          audienceCount: Number(campaign?.audienceCount || 0),
+          hasAudience: !!campaign.audience,
+          hasRows: !!campaign.audience?.rows,
+          rowsLen: Array.isArray(campaign.audience?.rows) ? campaign.audience.rows.length : 0
+        }
       });
     }
 
     const messageTemplate = resolveMessageTemplate(campaign);
-    if (!messageTemplate) return res.status(400).json({ ok: false, error: "message_required" });
+    if (!messageTemplate) {
+      return res.status(400).json({
+        ok: false,
+        error: "message_required",
+        details: {
+          hasMetadata: !!campaign.metadata,
+          metadataKeys: campaign?.metadata ? Object.keys(campaign.metadata) : []
+        }
+      });
+    }
 
     const env = assertSmsProviderEnv();
     if (!env.ok) return res.status(500).json({ ok: false, error: env.error });
 
-    // ✅ atualiza status + timestamps em metadata + colunas startedAt/finishedAt (no schema)
-    const startedIso = new Date().toISOString();
+    // ✅ aceita limit via BODY OU querystring
+    const reqLimit =
+      Number(req.body?.limit || 0) > 0 ? Number(req.body.limit)
+      : Number(req.query?.limit || 0) > 0 ? Number(req.query.limit)
+      : 0;
+
+    const maxToSend = reqLimit > 0 ? reqLimit : Number.MAX_SAFE_INTEGER;
+
+    // ✅ atualiza status + timestamps (em metadata)
     const nextMd = setMetaTs(campaign, {
-      startedAt: startedIso,
+      startedAt: new Date().toISOString(),
       pausedAt: null,
       canceledAt: null,
       finishedAt: null
@@ -700,21 +717,25 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       where: { id },
       data: {
         status: STATUS.RUNNING,
-        ...(modelHasField(modelName, "metadata") ? { metadata: nextMd } : {}),
-        ...(modelHasField(modelName, "startedAt") ? { startedAt: new Date(startedIso) } : {})
+        ...(modelHasField(modelName, "metadata") ? { metadata: nextMd } : {})
       }
     });
 
     let current = await getSmsCampaign(model, tenantId, id);
     if (!current) return res.status(404).json({ ok: false, error: "not_found" });
 
-    let prog = getProgress(current);
+    // recalcula rows da versão atualizada
+    const rawAudience2 = current.audience;
+    const rows2 =
+      Array.isArray(rawAudience2) ? rawAudience2
+      : Array.isArray(rawAudience2?.rows) ? rawAudience2.rows
+      : [];
 
-    // ✅ limit no BODY (front manda {limit:200}); fallback query
-    const bodyLimit = Number(req.body?.limit || 0);
-    const queryLimit = Number(req.query?.limit || 0);
-    const maxToSend =
-      bodyLimit > 0 ? bodyLimit : queryLimit > 0 ? queryLimit : Number.MAX_SAFE_INTEGER;
+    if (!rows2.length) {
+      return res.status(400).json({ ok: false, error: "audience_required_after_update" });
+    }
+
+    let prog = getProgress(current);
 
     let localSent = 0;
     let localSuccess = 0;
@@ -726,7 +747,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     const startCursor = prog.cursor;
     let endCursor = prog.cursor;
 
-    for (let i = prog.cursor; i < rows.length && localSent < maxToSend; i++) {
+    for (let i = prog.cursor; i < rows2.length && localSent < maxToSend; i++) {
       endCursor = i;
 
       if (localSent % STATUS_CHECK_EVERY === 0) {
@@ -744,18 +765,23 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
             paused: statusNow === STATUS.PAUSED,
             canceled: statusNow === STATUS.CANCELED,
             cursor: i,
-            sent: prog.sent + localSent
+            sent: prog.sent + localSent,
+            success: prog.success + localSuccess,
+            failed: prog.failed + localFailed
           });
         }
       }
 
-      const row = rows[i];
-      const text = renderMessage(messageTemplate, row.vars || {});
+      const row = rows2[i] || {};
+      const phone = row.phone || row.numero || row.number || row.phoneE164 || "";
+      const vars = row.vars || row.variables || row.meta || {};
+
+      const text = renderMessage(messageTemplate, vars);
       const url = buildProviderUrl({
         base: env.base,
         user: env.user,
         pass: env.pass,
-        phone: row.phone,
+        phone,
         message: text
       });
 
@@ -776,9 +802,9 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       await writeLog({
         tenantId,
         campaignId: id,
-        phone: row.phone,
+        phone,
         status: ok ? "processed" : "failed",
-        error: ok ? null : `http_${statusCode}`,
+        error: ok ? null : `http_${statusCode || 0}`,
         provider: "iagente",
         metadata: {
           httpStatus: statusCode,
@@ -793,7 +819,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       if (samples.length < SAMPLE_LIMIT) {
         samples.push({
           i,
-          phone: row.phone,
+          phone,
           ok,
           status: statusCode,
           body: String(body || "").slice(0, 500)
@@ -820,7 +846,8 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
     current = await getSmsCampaign(model, tenantId, id);
     if (!current) return res.status(404).json({ ok: false, error: "not_found" });
 
-    const finalCursor = Math.min(rows.length, endCursor + 1);
+    // cursor final correto
+    const finalCursor = Math.min(rows2.length, endCursor + 1);
 
     prog = await persistProgress(model, modelName, id, current, {
       cursor: finalCursor,
@@ -829,66 +856,85 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       failed: prog.failed + localFailed
     });
 
-    const done = prog.cursor >= rows.length;
+    const done = prog.cursor >= rows2.length;
 
-    const finishedIso = done ? new Date().toISOString() : null;
-
-    // ✅ stats.smsReport (no schema: stats Json?)
-    const baseStats = safeObj(current?.stats);
-    const nextStats = {
-      ...baseStats,
-      smsReport: {
-        totalAudience: rows.length,
-        sent: prog.sent,
-        success: prog.success,
-        failed: prog.failed,
-        finishedAt: finishedIso,
-        samples
-      }
-    };
-
-    await model.update({
-      where: { id },
-      data: {
-        ...(done ? { status: STATUS.FINISHED } : {}),
-        ...(modelHasField(modelName, "stats") ? { stats: nextStats } : {}),
-        ...(modelHasField(modelName, "metadata") && done
-          ? { metadata: setMetaTs(current, { finishedAt: finishedIso }) }
-          : {}),
-        ...(modelHasField(modelName, "finishedAt") && done ? { finishedAt: new Date(finishedIso) } : {})
-      }
-    });
+    // salva relatório no stats.smsReport (se existir)
+    if (modelHasField(modelName, "stats")) {
+      const baseStats = safeObj(current?.stats);
+      await model.update({
+        where: { id },
+        data: {
+          ...(done ? { status: STATUS.FINISHED } : {}),
+          stats: {
+            ...baseStats,
+            smsReport: {
+              total: prog.sent,
+              success: prog.success,
+              failed: prog.failed,
+              finishedAt: done ? new Date().toISOString() : null,
+              samples
+            }
+          },
+          ...(modelHasField(modelName, "metadata") && done
+            ? { metadata: setMetaTs(current, { finishedAt: new Date().toISOString() }) }
+            : {})
+        }
+      });
+    } else if (done) {
+      await model.update({
+        where: { id },
+        data: {
+          status: STATUS.FINISHED,
+          ...(modelHasField(modelName, "metadata")
+            ? { metadata: setMetaTs(current, { finishedAt: new Date().toISOString() }) }
+            : {})
+        }
+      });
+    }
 
     return res.json({
       ok: true,
       finished: done,
       cursor: prog.cursor,
-      totalAudience: rows.length,
+      totalAudience: rows2.length,
       sent: prog.sent,
       success: prog.success,
       failed: prog.failed,
       startedCursor: startCursor,
-      finalCursor
+      finalCursor,
+      limit: maxToSend
     });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/start failed");
 
-    // best-effort: marca failed
+    // best-effort: marca failed sem usar campos inexistentes
     try {
       const model2 = resolveModel();
       const tenantId2 = getTenantId(req);
       const id2 = String(req.params.id || "");
       if (model2 && tenantId2 && id2) {
-        await model2.update({
-          where: { id: id2 },
-          data: { status: STATUS.FAILED }
-        });
+        const current = await getSmsCampaign(model2, tenantId2, id2);
+        if (current) {
+          const patchMd = modelHasField(getModelName(), "metadata")
+            ? {
+                metadata: setMetaTs(current, {
+                  finishedAt: new Date().toISOString(),
+                  failedAt: new Date().toISOString()
+                })
+              }
+            : {};
+          await model2.update({
+            where: { id: id2 },
+            data: { status: STATUS.FAILED, ...patchMd }
+          });
+        }
       }
     } catch {}
 
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
+
 
 // =========================
 // PAUSE
