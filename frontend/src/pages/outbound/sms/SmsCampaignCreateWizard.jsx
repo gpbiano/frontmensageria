@@ -12,6 +12,18 @@ import {
 } from "../../../api";
 import "../../../styles/campaigns.css";
 
+const API_BASE =
+  import.meta.env.VITE_API_BASE ||
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://localhost:3010";
+
+const AUTH_KEY = "gpLabsAuthToken";
+
+function getToken() {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(AUTH_KEY);
+}
+
 const STEPS = [
   { key: "create", label: "1. Dados" },
   { key: "audience", label: "2. Audiência" },
@@ -135,15 +147,49 @@ function canCancelCampaign(c) {
   return ["draft", "running", "paused"].includes(st);
 }
 
+// =========================
+// SMS Templates (NOVO)
+// =========================
+async function fetchSmsTemplates({ q = "", status = "" } = {}) {
+  const token = getToken();
+  const url = new URL(`${API_BASE}/outbound/sms-templates`);
+  if (q) url.searchParams.set("q", q);
+  if (status) url.searchParams.set("status", status);
+
+  const r = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    }
+  });
+
+  if (!r.ok) {
+    const txt = await r.text().catch(() => "");
+    throw new Error(txt || `Erro ao buscar modelos (HTTP ${r.status})`);
+  }
+
+  const data = await r.json().catch(() => ({}));
+  return data?.items || [];
+}
+
 export default function SmsCampaignCreateWizard({ mode = "create", initialCampaign = null, onExit }) {
   const [stepIndex, setStepIndex] = useState(0);
 
   const [campaign, setCampaign] = useState(initialCampaign);
   const [name, setName] = useState(initialCampaign?.name || "Campanha SMS");
+
   const [message, setMessage] = useState(
     initialCampaign?.message ||
       initialCampaign?.metadata?.message ||
       "Olá! 🙂\nQuer conhecer nossos serviços?"
+  );
+
+  // ✅ Templates SMS
+  const [templates, setTemplates] = useState([]);
+  const [templatesBusy, setTemplatesBusy] = useState(false);
+  const [templateId, setTemplateId] = useState(
+    initialCampaign?.templateId || initialCampaign?.metadata?.templateId || ""
   );
 
   const [file, setFile] = useState(null);
@@ -173,6 +219,31 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
     setStepIndex(hasAudience ? 1 : 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ✅ Carrega modelos SMS (quando abrir o wizard)
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      setTemplatesBusy(true);
+      try {
+        const items = await fetchSmsTemplates();
+        if (!alive) return;
+        setTemplates(Array.isArray(items) ? items : []);
+      } catch (e) {
+        // não trava o wizard se não tiver router ainda / perms
+        if (!alive) return;
+        setTemplates([]);
+      } finally {
+        if (alive) setTemplatesBusy(false);
+      }
+    }
+
+    load();
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const detectedVars = useMemo(() => extractTemplateVars(message), [message]);
@@ -240,24 +311,51 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     insertVariable(`var_${nextN}`);
   }
 
+  function handleSelectTemplate(id) {
+    setError("");
+    setInfo("");
+    setTemplateId(id);
+
+    if (!id) return;
+
+    const tpl = templates.find((t) => String(t.id) === String(id));
+    if (!tpl) return;
+
+    // router devolve .text pronto
+    const text = String(tpl.text || tpl.contentText || tpl?.metadata?.message || "").trim();
+    if (!text) return;
+
+    // só aplica automaticamente se estiver editável
+    if (!editable) return;
+
+    setMessage(text);
+    setInfo(`✅ Modelo aplicado: ${tpl.name}`);
+  }
+
   async function handleCreateOrSave() {
     setBusy(true);
     setError("");
     setInfo("");
 
     try {
+      // guarda templateId no metadata (sem depender de campo no schema)
+      const metadata = {
+        ...(campaign?.metadata || {}),
+        ...(templateId ? { templateId } : {})
+      };
+
       if (mode === "edit" && campaign?.id) {
         if (!canEditCampaign(campaign)) {
           setError("Esta campanha não pode ser editada no estado atual.");
           return;
         }
 
-        const r = await updateSmsCampaign(campaign.id, { name, message });
+        const r = await updateSmsCampaign(campaign.id, { name, message, metadata });
         const item = r?.item || r?.campaign || r;
         setCampaign(item);
         setInfo("✅ Alterações salvas.");
       } else {
-        const r = await createSmsCampaign({ name, message });
+        const r = await createSmsCampaign({ name, message, metadata });
         const item = r?.item || r;
         setCampaign(item);
         setInfo("✅ Campanha criada.");
@@ -280,7 +378,9 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
       return;
     }
 
-    const ok = window.confirm(`Excluir a campanha "${campaign?.name || "Campanha"}"?\nEssa ação não pode ser desfeita.`);
+    const ok = window.confirm(
+      `Excluir a campanha "${campaign?.name || "Campanha"}"?\nEssa ação não pode ser desfeita.`
+    );
     if (!ok) return;
 
     setBusy(true);
@@ -338,13 +438,10 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     try {
       const r = await startSmsCampaign(campaign.id, { limit: 200 }); // lote padrão
 
-      // tenta capturar status retornado; fallback para otimista
       const nextStatus =
         String(r?.status || "").toLowerCase() || (r?.finished ? "finished" : "running");
 
-      setCampaign((c) =>
-        c ? { ...c, status: nextStatus, ...(r?.item ? r.item : {}) } : c
-      );
+      setCampaign((c) => (c ? { ...c, status: nextStatus, ...(r?.item ? r.item : {}) } : c));
 
       if (r?.finished) {
         setInfo(`✅ Finalizado. Enviados: ${r?.sent ?? 0} | Falhas: ${r?.failed ?? 0}`);
@@ -391,7 +488,6 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     try {
       const r = await resumeSmsCampaign(campaign.id);
       const item = r?.item || r?.campaign || null;
-      // backend costuma voltar pra "draft" (pronto pra chamar /start)
       setCampaign(item || { ...campaign, status: "draft" });
       setInfo("▶️ Pronto para continuar. Clique em “Iniciar / Retomar”.");
     } catch (e) {
@@ -427,9 +523,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
         {STEPS.map((s, idx) => (
           <div
             key={s.key}
-            className={`wizard-step ${idx === stepIndex ? "active" : ""} ${
-              idx < stepIndex ? "done" : ""
-            }`}
+            className={`wizard-step ${idx === stepIndex ? "active" : ""} ${idx < stepIndex ? "done" : ""}`}
           >
             {s.label}
           </div>
@@ -441,18 +535,11 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
       {step.key === "create" && (
         <div className="wizard-card" style={{ maxWidth: 920 }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 12,
-              alignItems: "flex-start"
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
             <div>
               <h3 style={{ marginBottom: 6 }}>{mode === "edit" ? "Editar campanha" : "Criar campanha"}</h3>
               <p className="muted" style={{ marginTop: 0 }}>
-                Defina nome e mensagem. Se usar variáveis, baixe o modelo de planilha.
+                Defina nome e mensagem. Você pode usar um <b>modelo de SMS</b> para padronizar.
               </p>
             </div>
 
@@ -488,6 +575,30 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                   disabled={busy || !editable}
                   placeholder="Ex: Black Friday • SMS"
                 />
+              </label>
+
+              {/* ✅ MODELO SMS */}
+              <label className="field">
+                <span>Modelo de SMS (opcional)</span>
+                <select
+                  value={templateId || ""}
+                  onChange={(e) => handleSelectTemplate(e.target.value)}
+                  disabled={busy || !editable || templatesBusy}
+                >
+                  <option value="">— Selecionar modelo —</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} {t.status ? `(${t.status})` : ""}
+                    </option>
+                  ))}
+                </select>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  {templatesBusy
+                    ? "Carregando modelos..."
+                    : templates.length
+                      ? "Ao selecionar um modelo, a mensagem será preenchida automaticamente."
+                      : "Nenhum modelo encontrado (ou você não tem permissão)."}
+                </div>
               </label>
 
               <label className="field">
@@ -541,14 +652,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                     ))}
                 </div>
 
-                <div
-                  className="muted"
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    marginTop: 6
-                  }}
-                >
+                <div className="muted" style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
                   <span>
                     {charCount} caracteres • {smsParts} SMS
                   </span>
@@ -566,14 +670,12 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                   background: "rgba(255,255,255,.03)"
                 }}
               >
-                Variáveis detectadas:{" "}
-                <b>{detectedVars.length ? detectedVars.join(", ") : "nenhuma"}</b>
+                Variáveis detectadas: <b>{detectedVars.length ? detectedVars.join(", ") : "nenhuma"}</b>
               </div>
 
               {campaign?.id ? (
                 <div className="muted" style={{ marginTop: 10 }}>
-                  Status: <b>{statusLabel(campaign.status)}</b> • ID:{" "}
-                  <b>{String(campaign.id).slice(0, 12)}</b>
+                  Status: <b>{statusLabel(campaign.status)}</b> • ID: <b>{String(campaign.id).slice(0, 12)}</b>
                 </div>
               ) : null}
             </div>

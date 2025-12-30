@@ -1,20 +1,8 @@
 // frontend/src/pages/outbound/sms/SmsCampaignsPage.jsx
 import { useEffect, useRef, useState, useMemo } from "react";
-import { fetchSmsCampaigns, fetchSmsCampaignReport, deleteSmsCampaign } from "../../../api";
+import { fetchSmsCampaigns, deleteSmsCampaign } from "../../../api";
 import SmsCampaignCreateWizard from "./SmsCampaignCreateWizard.jsx";
 import "../../../styles/campaigns.css";
-
-const API_BASE =
-  import.meta.env.VITE_API_BASE ||
-  import.meta.env.VITE_API_BASE_URL ||
-  "http://localhost:3010";
-
-const AUTH_KEY = "gpLabsAuthToken";
-
-function getToken() {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(AUTH_KEY);
-}
 
 function filenameSafe(s) {
   return String(s || "")
@@ -46,11 +34,6 @@ function statusPillClass(s) {
   return `pill ${v || "unknown"}`;
 }
 
-function canEditCampaign(c) {
-  const st = String(c?.status || "").toLowerCase();
-  return ["draft", "paused", "failed"].includes(st);
-}
-
 function canDeleteCampaign(c) {
   return String(c?.status || "").toLowerCase() === "draft";
 }
@@ -76,19 +59,16 @@ function extractTemplateVars(message) {
     const raw = String(m[1] || "").trim();
     if (!raw) continue;
 
-    // {{1}} -> var_1
     if (/^\d+$/.test(raw)) {
       out.add(`var_${raw}`);
       continue;
     }
 
-    // {{var_1}} -> var_1
     if (/^var_\d+$/i.test(raw)) {
       out.add(raw.toLowerCase());
       continue;
     }
 
-    // {{nome}} -> nome
     out.add(raw);
   }
 
@@ -162,15 +142,6 @@ function Icon({ name, size = 18, title }) {
         <path {...stroke} d="M21 3v7h-7" />
       </>
     ),
-    report: (
-      <>
-        <path {...stroke} d="M4 19V5" />
-        <path {...stroke} d="M4 19h16" />
-        <path {...stroke} d="M8 15V9" />
-        <path {...stroke} d="M12 15V6" />
-        <path {...stroke} d="M16 15v-4" />
-      </>
-    ),
     edit: (
       <>
         <path {...stroke} d="M12 20h9" />
@@ -178,24 +149,6 @@ function Icon({ name, size = 18, title }) {
           {...stroke}
           d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5z"
         />
-      </>
-    ),
-    download: (
-      <>
-        <path {...stroke} d="M12 3v12" />
-        <path {...stroke} d="M7 10l5 5 5-5" />
-        <path {...stroke} d="M5 21h14" />
-      </>
-    ),
-    search: (
-      <>
-        <circle {...stroke} cx="11" cy="11" r="7" />
-        <path {...stroke} d="M20 20l-3.5-3.5" />
-      </>
-    ),
-    chevronRight: (
-      <>
-        <path {...stroke} d="M9 18l6-6-6-6" />
       </>
     ),
     template: (
@@ -213,6 +166,17 @@ function Icon({ name, size = 18, title }) {
         <path {...stroke} d="M6 6l1 16h10l1-16" />
         <path {...stroke} d="M10 11v6" />
         <path {...stroke} d="M14 11v6" />
+      </>
+    ),
+    search: (
+      <>
+        <circle {...stroke} cx="11" cy="11" r="7" />
+        <path {...stroke} d="M20 20l-3.5-3.5" />
+      </>
+    ),
+    chevronRight: (
+      <>
+        <path {...stroke} d="M9 18l6-6-6-6" />
       </>
     )
   };
@@ -232,16 +196,7 @@ export default function SmsCampaignsPage({ onExit }) {
   const [creating, setCreating] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState(null);
 
-  const [selected, setSelected] = useState(null);
-  const [report, setReport] = useState(null);
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportError, setReportError] = useState("");
-
-  const [downloading, setDownloading] = useState(false);
-  const [downloadError, setDownloadError] = useState("");
-
   const [query, setQuery] = useState("");
-  const pollRef = useRef(null);
 
   async function load() {
     setLoading(true);
@@ -253,63 +208,21 @@ export default function SmsCampaignsPage({ onExit }) {
     }
   }
 
-  function stopPolling() {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }
-
-  async function openReport(camp) {
-    setSelected(camp);
-    setReport(null);
-    setReportError("");
-    setDownloadError("");
-    stopPolling();
-
-    async function loadReport() {
-      setReportLoading(true);
-      setReportError("");
-      try {
-        const r = await fetchSmsCampaignReport(camp.id);
-        setReport(r);
-        if (r?.status && String(r.status).toLowerCase() !== "running") stopPolling();
-      } catch (e) {
-        setReportError(e?.message || "Erro ao carregar relatório.");
-        stopPolling();
-      } finally {
-        setReportLoading(false);
-      }
-    }
-
-    await loadReport();
-    pollRef.current = setInterval(loadReport, 2000);
-  }
-
   async function handleDeleteFromList(c) {
     if (!c?.id) return;
+
     if (!canDeleteCampaign(c)) {
-      setDownloadError("");
-      setReportError("");
-      setReport(null);
-      setSelected(null);
       alert("Só é possível excluir campanhas em rascunho.");
       return;
     }
 
-    const ok = window.confirm(`Excluir a campanha "${c?.name || "Campanha"}"?\nEssa ação não pode ser desfeita.`);
+    const ok = window.confirm(
+      `Excluir a campanha "${c?.name || "Campanha"}"?\nEssa ação não pode ser desfeita.`
+    );
     if (!ok) return;
 
     try {
       await deleteSmsCampaign(c.id);
-
-      // limpa seleção caso fosse a selecionada
-      if (selected?.id === c.id) {
-        stopPolling();
-        setSelected(null);
-        setReport(null);
-      }
-
       await load();
     } catch (e) {
       alert(e?.message || "Erro ao excluir campanha.");
@@ -318,7 +231,6 @@ export default function SmsCampaignsPage({ onExit }) {
 
   useEffect(() => {
     load();
-    return () => stopPolling();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -341,85 +253,24 @@ export default function SmsCampaignsPage({ onExit }) {
     return { total, drafts, running, finished };
   }, [items]);
 
-  const csvUrl = useMemo(() => {
-    if (!selected?.id) return null;
-    return `${API_BASE}/outbound/sms-campaigns/${selected.id}/report.csv`;
-  }, [selected?.id]);
-
-  async function baixarExcel() {
-    if (!csvUrl || !selected?.id) return;
-
-    setDownloading(true);
-    setDownloadError("");
-
-    try {
-      const token = getToken();
-      if (!token) {
-        setDownloadError("Você não está autenticado. Faça login novamente.");
-        return;
-      }
-
-      const res = await fetch(csvUrl, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      if (!res.ok) {
-        let msg = `Falha ao baixar (HTTP ${res.status}).`;
-        try {
-          const t = await res.text();
-          if (t) msg = t;
-        } catch {}
-        setDownloadError(String(msg));
-        return;
-      }
-
-      const blob = await res.blob();
-      const name = `sms-relatorio_${filenameSafe(selected?.name)}_${selected.id}.csv`;
-
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = name;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (e) {
-      setDownloadError(e?.message || "Erro ao baixar o arquivo.");
-    } finally {
-      setDownloading(false);
-    }
-  }
-
   function downloadTemplateFromCampaign(c) {
     const msg = String(c?.metadata?.message || c?.message || "").trim() || "Olá {{1}}!";
-
-    const { csvText, vars } = buildCsvTemplate({ message: msg, delimiter: ";" });
+    const { csvText } = buildCsvTemplate({ message: msg, delimiter: ";" });
 
     const fname = `modelo_audiencia_sms_${filenameSafe(c?.name || "campanha")}_${String(c?.id || "").slice(
       0,
       8
     )}.csv`;
-    downloadTextFile({ content: csvText, filename: fname });
 
-    // feedback leve
-    // eslint-disable-next-line no-console
-    console.info("Modelo baixado (vars):", vars);
+    downloadTextFile({ content: csvText, filename: fname });
   }
 
   function startCreate() {
-    stopPolling();
-    setSelected(null);
-    setReport(null);
     setEditingCampaign(null);
     setCreating(true);
   }
 
   function startEdit(c) {
-    stopPolling();
-    setSelected(null);
-    setReport(null);
     setEditingCampaign(c);
     setCreating(true);
   }
@@ -437,8 +288,8 @@ export default function SmsCampaignsPage({ onExit }) {
             <h2>Campanhas de SMS</h2>
             <p className="muted">
               {mode === "edit"
-                ? "Edite o rascunho, ajuste mensagem e audiência e inicie o envio."
-                : "Crie, importe audiência e dispare."}
+                ? "Edite mensagem, audiência e controle o envio por lotes."
+                : "Crie, importe audiência e dispare por lotes."}
             </p>
           </div>
 
@@ -462,7 +313,6 @@ export default function SmsCampaignsPage({ onExit }) {
           onExit={() => {
             setCreating(false);
             setEditingCampaign(null);
-            stopPolling();
             load();
           }}
         />
@@ -471,7 +321,7 @@ export default function SmsCampaignsPage({ onExit }) {
   }
 
   // =========================
-  // Page
+  // Page (sem Report / Analytics)
   // =========================
   return (
     <div className="campaigns-page">
@@ -497,7 +347,7 @@ export default function SmsCampaignsPage({ onExit }) {
           </div>
 
           <p className="muted" style={{ margin: 0 }}>
-            Envio de SMS integrado. Crie rascunhos, suba audiência e inicie o disparo.
+            Esta página é apenas para <b>envios</b>. Relatórios/analytics ficam em <b>Reports</b>.
           </p>
         </div>
 
@@ -554,270 +404,116 @@ export default function SmsCampaignsPage({ onExit }) {
         </div>
       </div>
 
-      <div className="campaigns-grid">
-        {/* LISTA */}
-        <div className="campaigns-card">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <h3 style={{ margin: 0 }}>Campanhas</h3>
-            <span className="muted" style={{ fontSize: 13 }}>
-              {filtered.length} de {items.length}
-            </span>
-          </div>
-
-          <div style={{ marginTop: 12 }}>
-            {loading ? (
-              <p className="muted">Carregando…</p>
-            ) : !filtered.length ? (
-              <div className="alert" style={{ marginTop: 10 }}>
-                Nenhuma campanha encontrada.
-              </div>
-            ) : (
-              <div className="campaigns-table">
-                <div className="campaigns-row head">
-                  <div>Nome</div>
-                  <div>Status</div>
-                  <div>Audiência</div>
-                  <div>Criada</div>
-                  <div style={{ textAlign: "right" }}>Ações</div>
-                </div>
-
-                {filtered.map((c) => {
-                  const isActive = selected?.id === c.id;
-
-                  return (
-                    <div
-                      className={`campaigns-row ${isActive ? "active" : ""}`}
-                      key={c.id}
-                      onClick={() => openReport(c)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") openReport(c);
-                      }}
-                      style={{
-                        cursor: "pointer",
-                        background: isActive ? "rgba(46, 204, 113, 0.06)" : undefined,
-                        borderRadius: 10
-                      }}
-                      title="Clique para abrir relatório"
-                    >
-                      <div className="truncate" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span className="truncate" style={{ fontWeight: 600 }}>
-                          {c.name}
-                        </span>
-                        <span className="muted" style={{ fontSize: 12 }}>
-                          #{String(c.id).slice(0, 8)}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className={statusPillClass(c.status)}>{statusLabel(c.status)}</span>
-                      </div>
-
-                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{getAudienceCount(c)}</div>
-
-                      <div className="muted">{formatDateTime(c.createdAt)}</div>
-
-                      <div style={{ textAlign: "right", display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                        {canEditCampaign(c) ? (
-                          <>
-                            <button
-                              className="btn small secondary"
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                startEdit(c);
-                              }}
-                              title="Editar campanha"
-                            >
-                              <span style={{ display: "inline-flex", marginRight: 6 }}>
-                                <Icon name="edit" size={16} />
-                              </span>
-                              Editar
-                            </button>
-
-                            <button
-                              className="btn small secondary"
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                downloadTemplateFromCampaign(c);
-                              }}
-                              title="Baixar planilha exemplo (CSV) baseada na mensagem"
-                            >
-                              <span style={{ display: "inline-flex", marginRight: 6 }}>
-                                <Icon name="template" size={16} />
-                              </span>
-                              Modelo CSV
-                            </button>
-                          </>
-                        ) : null}
-
-                        {/* ✅ Botão Excluir (voltou) */}
-                        {canDeleteCampaign(c) ? (
-                          <button
-                            className="btn small secondary"
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteFromList(c);
-                            }}
-                            title="Excluir campanha (rascunho)"
-                          >
-                            <span style={{ display: "inline-flex", marginRight: 6 }}>
-                              <Icon name="trash" size={16} />
-                            </span>
-                            Excluir
-                          </button>
-                        ) : null}
-
-                        <button
-                          className="btn small"
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openReport(c);
-                          }}
-                          title="Ver relatório"
-                        >
-                          <span style={{ display: "inline-flex", marginRight: 6 }}>
-                            <Icon name="report" size={16} />
-                          </span>
-                          Relatório
-                        </button>
-
-                        <span className="muted" style={{ display: "inline-flex", alignItems: "center" }}>
-                          <Icon name="chevronRight" size={18} />
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+      <div className="campaigns-card">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <h3 style={{ margin: 0 }}>Campanhas</h3>
+          <span className="muted" style={{ fontSize: 13 }}>
+            {filtered.length} de {items.length}
+          </span>
         </div>
 
-        {/* RELATÓRIO */}
-        <div className="campaigns-card">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <h3 style={{ margin: 0 }}>Relatório</h3>
-              <span className="muted" style={{ fontSize: 13 }}>
-                {selected ? `Campanha: ${selected?.name}` : "Selecione uma campanha na lista"}
-              </span>
+        <div style={{ marginTop: 12 }}>
+          {loading ? (
+            <p className="muted">Carregando…</p>
+          ) : !filtered.length ? (
+            <div className="alert" style={{ marginTop: 10 }}>
+              Nenhuma campanha encontrada.
             </div>
-
-            <button
-              className="btn small"
-              type="button"
-              onClick={baixarExcel}
-              disabled={!selected || downloading}
-              title={!selected ? "Selecione uma campanha para baixar." : "Baixar CSV (Excel)"}
-            >
-              <span style={{ display: "inline-flex", marginRight: 6 }}>
-                <Icon name="download" size={16} />
-              </span>
-              {downloading ? "Baixando..." : "Baixar CSV"}
-            </button>
-          </div>
-
-          {downloadError ? (
-            <div className="alert error" style={{ marginTop: 10 }}>
-              {downloadError}
-            </div>
-          ) : null}
-
-          {!selected ? (
-            <div className="alert" style={{ marginTop: 12 }}>
-              Clique em uma campanha para ver os resultados.
-            </div>
-          ) : reportLoading && !report ? (
-            <p className="muted" style={{ marginTop: 12 }}>
-              Carregando relatório...
-            </p>
-          ) : reportError ? (
-            <div className="alert error" style={{ marginTop: 12 }}>
-              {reportError}
-            </div>
-          ) : !report ? (
-            <p className="muted" style={{ marginTop: 12 }}>
-              Carregando relatório...
-            </p>
           ) : (
-            <>
-              <div className="stats" style={{ marginTop: 12 }}>
-                <div className="stat">
-                  <div className="label">Total</div>
-                  <div className="value">{report.total ?? 0}</div>
-                </div>
-                <div className="stat">
-                  <div className="label">Enviados</div>
-                  <div className="value">{report.sent ?? 0}</div>
-                </div>
-                <div className="stat">
-                  <div className="label">Falhas</div>
-                  <div className="value">{report.failed ?? 0}</div>
-                </div>
-                <div className="stat">
-                  <div className="label">Status</div>
-                  <div className="value">
-                    <span className={statusPillClass(report.status)}>{statusLabel(report.status)}</span>
+            <div className="campaigns-table">
+              <div className="campaigns-row head">
+                <div>Nome</div>
+                <div>Status</div>
+                <div>Audiência</div>
+                <div>Criada</div>
+                <div style={{ textAlign: "right" }}>Ações</div>
+              </div>
+
+              {filtered.map((c) => (
+                <div
+                  className="campaigns-row"
+                  key={c.id}
+                  onClick={() => startEdit(c)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") startEdit(c);
+                  }}
+                  style={{ cursor: "pointer", borderRadius: 10 }}
+                  title="Clique para abrir e gerenciar o envio"
+                >
+                  <div className="truncate" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span className="truncate" style={{ fontWeight: 600 }}>
+                      {c.name}
+                    </span>
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      #{String(c.id).slice(0, 8)}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className={statusPillClass(c.status)}>{statusLabel(c.status)}</span>
+                  </div>
+
+                  <div style={{ fontVariantNumeric: "tabular-nums" }}>{getAudienceCount(c)}</div>
+
+                  <div className="muted">{formatDateTime(c.createdAt)}</div>
+
+                  <div style={{ textAlign: "right", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                    <button
+                      className="btn small secondary"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEdit(c);
+                      }}
+                      title="Abrir para editar / enviar"
+                    >
+                      <span style={{ display: "inline-flex", marginRight: 6 }}>
+                        <Icon name="edit" size={16} />
+                      </span>
+                      Abrir
+                    </button>
+
+                    <button
+                      className="btn small secondary"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        downloadTemplateFromCampaign(c);
+                      }}
+                      title="Baixar planilha exemplo (CSV) baseada na mensagem"
+                    >
+                      <span style={{ display: "inline-flex", marginRight: 6 }}>
+                        <Icon name="template" size={16} />
+                      </span>
+                      Modelo CSV
+                    </button>
+
+                    {canDeleteCampaign(c) ? (
+                      <button
+                        className="btn small secondary"
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteFromList(c);
+                        }}
+                        title="Excluir campanha (rascunho)"
+                      >
+                        <span style={{ display: "inline-flex", marginRight: 6 }}>
+                          <Icon name="trash" size={16} />
+                        </span>
+                        Excluir
+                      </button>
+                    ) : null}
+
+                    <span className="muted" style={{ display: "inline-flex", alignItems: "center" }}>
+                      <Icon name="chevronRight" size={18} />
+                    </span>
                   </div>
                 </div>
-              </div>
-
-              {reportLoading && (
-                <p className="muted" style={{ marginTop: 10 }}>
-                  Atualizando relatório...
-                </p>
-              )}
-
-              <div className="campaigns-table" style={{ marginTop: 14 }}>
-                <div className="campaigns-row head">
-                  <div>Telefone</div>
-                  <div>Status</div>
-                  <div>Retorno</div>
-                </div>
-
-                {(report.results || []).slice(0, 200).map((r, idx) => {
-                  const details = r.providerRaw || r.error || "-";
-                  const phone = r.phone || r.to || r.numero || "-";
-                  const st = r.status || (r.ok ? "success" : "failed");
-
-                  return (
-                    <div className="campaigns-row" key={`${phone}_${idx}`}>
-                      <div className="truncate" style={{ fontVariantNumeric: "tabular-nums" }}>
-                        {phone}
-                      </div>
-
-                      <div>
-                        <span className={statusPillClass(st)}>{String(st)}</span>
-                      </div>
-
-                      <div
-                        className="muted"
-                        title={String(details)}
-                        style={{
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          lineHeight: "1.4",
-                          maxWidth: 560
-                        }}
-                      >
-                        {String(details)}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {Array.isArray(report.results) && report.results.length > 200 && (
-                <p className="muted" style={{ marginTop: 10 }}>
-                  Mostrando os primeiros 200 resultados.
-                </p>
-              )}
-            </>
+              ))}
+            </div>
           )}
         </div>
       </div>
