@@ -733,10 +733,6 @@ export async function startInstagramBusinessLogin(): Promise<{
 /**
  * ✅ Backend:
  * - POST /settings/channels/instagram/callback { code, state }
- *
- * ⚠️ IMPORTANTE:
- * Este endpoint NÃO precisa retornar userAccessToken.
- * Ele retorna pages + connectState (estado assinado) para finalizar a conexão com a página escolhida.
  */
 export async function finishInstagramBusinessLogin(payload: {
   code: string;
@@ -782,14 +778,12 @@ export async function disconnectInstagramChannel(): Promise<{
 
 /**
  * ✅ Compat (caso algum lugar do front antigo ainda importe estes nomes)
- * Isso evita erro de build tipo "X is not exported by src/api.ts".
  */
 export const startInstagramOAuth = startInstagramBusinessLogin;
 export const finishInstagramOAuth = finishInstagramBusinessLogin;
 
 /**
  * Opcional/compat: alguns fronts antigos listavam páginas via endpoint separado.
- * Se o backend NÃO tiver esse endpoint, não chame essa função.
  */
 export async function listInstagramPages(
   userAccessToken: string
@@ -1187,11 +1181,6 @@ export async function createTemplate(payload: {
   language: string;
   components: any[];
 }): Promise<Template> {
-  // ⚠️ Se seu backend ainda não tiver POST /outbound/templates, vai dar 404.
-  // Quando existir, aceitamos os formatos:
-  // - { ok:true, item: {...} }
-  // - { ok:true, template: {...} }
-  // - template direto
   const res = await request<any>("/outbound/templates", {
     method: "POST",
     body: payload
@@ -1410,6 +1399,53 @@ export async function downloadOptOutExport(params?: {
 }
 
 // ============================
+// SMS TEMPLATES (NOVO - FRONT)
+// ============================
+
+export type SmsTemplateStatus = "active" | "inactive" | "archived" | string;
+
+export type SmsTemplateItem = {
+  id: string;
+  name: string;
+  status?: SmsTemplateStatus;
+  text?: string;
+  message?: string;
+  content?: string;
+  body?: string;
+  metadata?: any;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export async function fetchSmsTemplates(params?: { q?: string; status?: string }) {
+  const qs = buildQuery({
+    q: params?.q || "",
+    status: params?.status || ""
+  });
+  const res = await request<any>(`/outbound/sms-templates${qs}`, { method: "GET" });
+  return unwrapList<SmsTemplateItem>(res);
+}
+
+export async function createSmsTemplate(payload: {
+  name: string;
+  text?: string;
+  message?: string;
+  status?: SmsTemplateStatus;
+  metadata?: any;
+}) {
+  // manda text + message por compat (back pode estar usando um ou outro)
+  const body = {
+    name: payload.name,
+    status: payload.status || "active",
+    text: payload.text ?? payload.message ?? "",
+    message: payload.message ?? payload.text ?? "",
+    metadata: payload.metadata || {}
+  };
+
+  return request(`/outbound/sms-templates`, { method: "POST", body });
+}
+
+// ============================
 // SMS CAMPAIGNS
 // ============================
 
@@ -1420,6 +1456,32 @@ export type SmsCampaignStatus =
   | "canceled"
   | "finished"
   | "failed";
+
+async function requestWithFallback<T = any>(
+  primary: () => Promise<T>,
+  fallbacks: Array<() => Promise<T>>
+): Promise<T> {
+  try {
+    return await primary();
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    const is404 = /(\b404\b)|not found/i.test(msg);
+    if (!is404) throw e;
+
+    let lastErr = e;
+    for (const fn of fallbacks) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        lastErr = err;
+        const m = String(err?.message || "");
+        const still404 = /(\b404\b)|not found/i.test(m);
+        if (!still404) throw err;
+      }
+    }
+    throw lastErr;
+  }
+}
 
 export async function fetchSmsCampaigns() {
   return request(`/outbound/sms-campaigns`, { method: "GET" });
@@ -1433,14 +1495,30 @@ export async function updateSmsCampaign(
   id: string,
   payload: { name?: string; message?: string; metadata?: any }
 ) {
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: payload
-  });
+  const path = `/outbound/sms-campaigns/${encodeURIComponent(id)}`;
+
+  // ✅ backend pode não ter PATCH (seu log mostrou 404). Faz fallback.
+  return requestWithFallback(
+    () => request(path, { method: "PATCH", body: payload }),
+    [
+      () => request(path, { method: "POST", body: payload }),
+      () => request(path, { method: "PUT", body: payload })
+    ]
+  );
 }
 
 export async function deleteSmsCampaign(id: string) {
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const path = `/outbound/sms-campaigns/${encodeURIComponent(id)}`;
+
+  // ✅ backend pode não ter DELETE (seu log mostrou 404). Faz fallback.
+  // ordem: DELETE → POST /delete → PATCH /cancel (último recurso)
+  return requestWithFallback(
+    () => request(path, { method: "DELETE" }),
+    [
+      () => request(`${path}/delete`, { method: "POST" }),
+      () => request(`${path}/cancel`, { method: "PATCH" })
+    ]
+  );
 }
 
 export async function uploadSmsCampaignAudience(id: string, file: File) {
@@ -1453,9 +1531,13 @@ export async function uploadSmsCampaignAudience(id: string, file: File) {
 }
 
 export async function startSmsCampaign(id: string, opts?: { limit?: number }) {
-  const qs = opts?.limit ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start${qs}`, {
-    method: "POST"
+  // ✅ SEU LOG mostrou 400 com body vazio.
+  // Envia limit no BODY (compat com back que valida req.body.limit)
+  const limit = opts?.limit ? Number(opts.limit) : undefined;
+
+  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start`, {
+    method: "POST",
+    body: limit ? { limit } : {}
   });
 }
 
@@ -1473,89 +1555,6 @@ export async function cancelSmsCampaign(id: string) {
 
 export async function fetchSmsCampaignReport(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/report`, { method: "GET" });
-}
-
-// ============================
-// SMS TEMPLATES (Modelos de SMS)  ✅ NOVO
-// ============================
-
-export type SmsTemplateStatus = "active" | "draft" | "disabled";
-
-export interface SmsTemplateRecord {
-  id: string;
-  name: string;
-  text: string;
-  status?: SmsTemplateStatus;
-  metadata?: any;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-/**
- * Lista modelos de SMS
- * Backend esperado:
- * - GET /outbound/sms-templates?q=&status=
- * Retornos aceitos:
- * - { items: [...] }
- * - { data: [...] }
- * - array direto
- */
-export async function fetchSmsTemplates(params?: { q?: string; status?: SmsTemplateStatus | string }) {
-  const qs = buildQuery({
-    q: params?.q || "",
-    status: params?.status || ""
-  });
-
-  const res = await request<any>(`/outbound/sms-templates${qs}`, { method: "GET" });
-  return unwrapList<SmsTemplateRecord>(res);
-}
-
-/**
- * Cria modelo de SMS
- * Backend esperado:
- * - POST /outbound/sms-templates { name, text, status?, metadata? }
- * Retornos aceitos:
- * - { item: {...} }
- * - { template: {...} }
- * - objeto direto
- */
-export async function createSmsTemplate(payload: {
-  name: string;
-  text: string;
-  status?: SmsTemplateStatus;
-  metadata?: any;
-}) {
-  const res = await request<any>(`/outbound/sms-templates`, { method: "POST", body: payload });
-
-  if (res?.item) return res.item as SmsTemplateRecord;
-  if (res?.template) return res.template as SmsTemplateRecord;
-  return res as SmsTemplateRecord;
-}
-
-/**
- * Atualiza modelo de SMS (opcional)
- * - PATCH /outbound/sms-templates/:id
- */
-export async function updateSmsTemplate(
-  id: string,
-  payload: { name?: string; text?: string; status?: SmsTemplateStatus; metadata?: any }
-) {
-  const res = await request<any>(`/outbound/sms-templates/${encodeURIComponent(String(id))}`, {
-    method: "PATCH",
-    body: payload
-  });
-
-  if (res?.item) return res.item as SmsTemplateRecord;
-  if (res?.template) return res.template as SmsTemplateRecord;
-  return res as SmsTemplateRecord;
-}
-
-/**
- * Remove modelo de SMS (opcional)
- * - DELETE /outbound/sms-templates/:id
- */
-export async function deleteSmsTemplate(id: string) {
-  return request(`/outbound/sms-templates/${encodeURIComponent(String(id))}`, { method: "DELETE" });
 }
 
 // ======================================================

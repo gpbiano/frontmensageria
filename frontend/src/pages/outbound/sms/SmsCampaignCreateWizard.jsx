@@ -10,7 +10,7 @@ import {
   resumeSmsCampaign,
   cancelSmsCampaign,
 
-  // ✅ SMS Templates (vem do api.ts)
+  // ✅ templates via api.ts (com headers certos)
   fetchSmsTemplates,
   createSmsTemplate
 } from "../../../api";
@@ -139,29 +139,17 @@ function canCancelCampaign(c) {
   return ["draft", "running", "paused"].includes(st);
 }
 
-// =========================
-// Template text resolver (FIX)
-// =========================
 function getTemplateText(tpl) {
-  const t = tpl || {};
-  const fromMetadata =
-    t?.metadata?.text ||
-    t?.metadata?.message ||
-    t?.metadata?.contentText ||
-    t?.metadata?.body ||
-    "";
-
-  const raw =
-    t?.text ||
-    t?.message || // ✅ fallback comum do backend
-    t?.contentText ||
-    t?.content ||
-    t?.body ||
-    t?.payload?.text ||
-    fromMetadata ||
-    "";
-
-  return String(raw || "").trim();
+  // ✅ compat com vários formatos do backend
+  return String(
+    tpl?.text ||
+      tpl?.message ||
+      tpl?.content ||
+      tpl?.body ||
+      tpl?.contentText ||
+      tpl?.metadata?.message ||
+      ""
+  ).trim();
 }
 
 export default function SmsCampaignCreateWizard({ mode = "create", initialCampaign = null, onExit }) {
@@ -185,9 +173,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
   // ✅ “Deseja salvar como modelo?”
   const [saveAsTemplate, setSaveAsTemplate] = useState(false);
-  const [saveTemplateName, setSaveTemplateName] = useState(
-    initialCampaign?.metadata?.smsTemplateName || initialCampaign?.name || "Modelo SMS"
-  );
+  const [saveTemplateName, setSaveTemplateName] = useState("");
 
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -196,16 +182,13 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
   const step = useMemo(() => STEPS[stepIndex], [stepIndex]);
 
-  // ref do textarea para inserir variável no cursor
   const messageRef = useRef(null);
 
-  // ✅ antes de criar: sempre editável; após criar: depende do status
   const editable = useMemo(() => {
     if (!campaign?.id) return true;
     return canEditCampaign(campaign);
   }, [campaign]);
 
-  // Se estiver editando: começa em "Dados" ou "Audiência" conforme já tenha audiência
   useEffect(() => {
     if (mode !== "edit" || !initialCampaign) return;
 
@@ -218,14 +201,14 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Carrega modelos SMS (quando abrir o wizard)
+  // ✅ Carrega modelos SMS (via api.ts, com headers + tenant)
   useEffect(() => {
     let alive = true;
 
     async function load() {
       setTemplatesBusy(true);
       try {
-        const items = await fetchSmsTemplates(); // ✅ vem do api.ts (com X-Tenant-Id)
+        const items = await fetchSmsTemplates();
         if (!alive) return;
         setTemplates(Array.isArray(items) ? items : []);
       } catch {
@@ -270,7 +253,6 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     );
   }
 
-  // ✅ Inserir variável no cursor (UX)
   function insertVariable(varName) {
     if (!editable) return;
 
@@ -307,7 +289,6 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     insertVariable(`var_${nextN}`);
   }
 
-  // ✅ FIX: ao selecionar modelo, preencher mensagem com o texto do template
   function handleSelectTemplate(id) {
     setError("");
     setInfo("");
@@ -315,26 +296,16 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
 
     if (!id) return;
 
-    const tpl = templates.find((t) => String(t?.id) === String(id));
-    if (!tpl) {
-      setInfo("⚠️ Modelo não encontrado na lista (tente recarregar).");
-      return;
-    }
+    const tpl = templates.find((t) => String(t.id) === String(id));
+    if (!tpl) return;
 
     const text = getTemplateText(tpl);
-    if (!text) {
-      setInfo("⚠️ Este modelo não possui texto (campo text/message vazio).");
-      return;
-    }
+    if (!text) return;
 
-    // só aplica automaticamente se estiver editável
-    if (!editable) {
-      setInfo("ℹ️ Modelo selecionado, mas a campanha está em modo leitura.");
-      return;
-    }
+    if (!editable) return;
 
     setMessage(text);
-    setInfo(`✅ Modelo aplicado: ${tpl.name || "Modelo"}`);
+    setInfo(`✅ Modelo aplicado: ${tpl.name}`);
   }
 
   async function handleCreateOrSave() {
@@ -343,14 +314,12 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     setInfo("");
 
     try {
-      // guarda templateId e intenção de salvar como modelo no metadata
       const metadata = {
         ...(campaign?.metadata || {}),
-        ...(templateId ? { templateId } : {}),
-        ...(saveAsTemplate ? { saveAsTemplate: true, smsTemplateName: saveTemplateName } : {})
+        ...(templateId ? { templateId } : {})
       };
 
-      let savedCampaign = null;
+      let item;
 
       if (mode === "edit" && campaign?.id) {
         if (!canEditCampaign(campaign)) {
@@ -359,48 +328,42 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
         }
 
         const r = await updateSmsCampaign(campaign.id, { name, message, metadata });
-        const item = r?.item || r?.campaign || r;
-        savedCampaign = item;
+        item = r?.item || r?.campaign || r;
         setCampaign(item);
         setInfo("✅ Alterações salvas.");
       } else {
         const r = await createSmsCampaign({ name, message, metadata });
-        const item = r?.item || r;
-        savedCampaign = item;
+        item = r?.item || r;
         setCampaign(item);
         setInfo("✅ Campanha criada.");
       }
 
-      // ✅ Se marcou “Deseja salvar como modelo?”, cria o template (sem travar o fluxo)
-      if (saveAsTemplate && editable) {
+      // ✅ salvar como modelo (se marcado)
+      if (saveAsTemplate) {
+        const modelName = String(saveTemplateName || name || "Modelo SMS").trim();
+        if (!modelName) {
+          setError("Informe o nome do modelo para salvar.");
+          return;
+        }
+
         try {
-          const tplName = String(saveTemplateName || name || "Modelo SMS").trim();
-          const tplText = String(message || "").trim();
-          if (tplName && tplText) {
-            await createSmsTemplate({
-              name: tplName,
-              text: tplText,
-              status: "active",
-              metadata: { source: "sms-campaign", campaignId: savedCampaign?.id || null }
-            });
-
-            // recarrega templates e tenta apontar seleção pro novo (opcional)
-            try {
-              const fresh = await fetchSmsTemplates();
-              setTemplates(Array.isArray(fresh) ? fresh : []);
-            } catch {}
-
-            setInfo((prev) => `${prev ? prev + "\n" : ""}✅ Modelo salvo: ${tplName}`);
-          } else {
-            setInfo((prev) => `${prev ? prev + "\n" : ""}⚠️ Não foi possível salvar modelo (nome/texto vazio).`);
-          }
+          await createSmsTemplate({
+            name: modelName,
+            text: message,
+            message,
+            status: "active",
+            metadata: { source: "sms-campaign-wizard" }
+          });
+          setInfo((prev) => (prev ? `${prev}\n✅ Modelo salvo: ${modelName}` : `✅ Modelo salvo: ${modelName}`));
+          setSaveAsTemplate(false);
+          setSaveTemplateName("");
         } catch (e) {
-          // não bloqueia a campanha
-          setInfo((prev) => `${prev ? prev + "\n" : ""}⚠️ Campanha salva, mas falhou ao salvar modelo.`);
+          // não bloqueia fluxo de campanha se falhar modelo
+          // eslint-disable-next-line no-console
+          console.warn("Falha ao salvar modelo:", e);
         }
       }
 
-      // ao salvar/criar, segue para próximo passo
       next();
     } catch (e) {
       setError(e?.message || "Erro ao salvar campanha.");
@@ -461,7 +424,6 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     }
   }
 
-  // ✅ start em lote (evita timeout)
   async function handleStartBatch() {
     if (!campaign?.id) return;
 
@@ -475,7 +437,8 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
     setInfo("");
 
     try {
-      const r = await startSmsCampaign(campaign.id, { limit: 200 }); // lote padrão
+      // ✅ agora manda limit no BODY (resolve seu 400)
+      const r = await startSmsCampaign(campaign.id, { limit: 200 });
 
       const nextStatus =
         String(r?.status || "").toLowerCase() || (r?.finished ? "finished" : "running");
@@ -640,13 +603,13 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                 </div>
               </label>
 
-              {/* ✅ Pergunta: salvar como modelo */}
+              {/* ✅ SALVAR COMO MODELO */}
               <div
                 style={{
                   marginTop: 10,
                   padding: 10,
-                  border: "1px solid rgba(255,255,255,.08)",
                   borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,.08)",
                   background: "rgba(255,255,255,.03)",
                   display: "flex",
                   alignItems: "center",
@@ -658,19 +621,19 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
                   <input
                     type="checkbox"
                     checked={saveAsTemplate}
-                    onChange={(e) => setSaveAsTemplate(!!e.target.checked)}
-                    disabled={busy || !editable}
+                    onChange={(e) => setSaveAsTemplate(e.target.checked)}
+                    disabled={busy}
                   />
-                  <b>Deseja salvar como modelo?</b>
+                  <span style={{ fontWeight: 600 }}>Deseja salvar como modelo?</span>
                 </label>
 
                 {saveAsTemplate ? (
                   <input
                     value={saveTemplateName}
                     onChange={(e) => setSaveTemplateName(e.target.value)}
-                    disabled={busy || !editable}
-                    placeholder="Nome do modelo"
-                    style={{ width: 240 }}
+                    placeholder="Nome do modelo (ex: Campanha_chegou)"
+                    style={{ minWidth: 280 }}
+                    disabled={busy}
                   />
                 ) : null}
               </div>
@@ -754,7 +717,7 @@ export default function SmsCampaignCreateWizard({ mode = "create", initialCampai
               ) : null}
             </div>
 
-            {/* PREVIEW “PHONE” */}
+            {/* PREVIEW */}
             <div
               style={{
                 border: "1px solid rgba(255,255,255,.10)",

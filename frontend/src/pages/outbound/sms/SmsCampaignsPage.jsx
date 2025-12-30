@@ -64,19 +64,16 @@ function extractTemplateVars(message) {
     const raw = String(m[1] || "").trim();
     if (!raw) continue;
 
-    // {{1}} -> var_1
     if (/^\d+$/.test(raw)) {
       out.add(`var_${raw}`);
       continue;
     }
 
-    // {{var_1}} -> var_1
     if (/^var_\d+$/i.test(raw)) {
       out.add(raw.toLowerCase());
       continue;
     }
 
-    // {{nome}} -> nome
     out.add(raw);
   }
 
@@ -112,7 +109,7 @@ function buildCsvTemplate({ message, delimiter = ";" }) {
   }
 
   const lines = [headers.join(delimiter), row1.join(delimiter), row2.join(delimiter)];
-  return { csvText: lines.join("\n"), headers, vars };
+  return { csvText: lines.join("\n") };
 }
 
 function downloadTextFile({ content, filename, mime = "text/csv;charset=utf-8" }) {
@@ -179,12 +176,6 @@ function Icon({ name, size = 18, title }) {
     chevronDown: (
       <>
         <path {...stroke} d="M6 9l6 6 6-6" />
-      </>
-    ),
-    search: (
-      <>
-        <circle {...stroke} cx="11" cy="11" r="7" />
-        <path {...stroke} d="M20 20l-3.5-3.5" />
       </>
     )
   };
@@ -295,9 +286,6 @@ export default function SmsCampaignsPage({ onExit }) {
     }
   }
 
-  // =========================
-  // Wizard (create/edit)
-  // =========================
   if (creating) {
     const mode = editingCampaign ? "edit" : "create";
 
@@ -340,9 +328,6 @@ export default function SmsCampaignsPage({ onExit }) {
     );
   }
 
-  // =========================
-  // Page (envios apenas) — SEM "Relatórios" aqui
-  // =========================
   return (
     <div className="campaigns-page" ref={actionsWrapRef}>
       <div className="campaigns-header">
@@ -386,7 +371,10 @@ export default function SmsCampaignsPage({ onExit }) {
             }}
           >
             <span className="muted" style={{ display: "inline-flex" }}>
-              <Icon name="search" size={16} />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+                <path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
             </span>
             <input
               value={query}
@@ -424,156 +412,148 @@ export default function SmsCampaignsPage({ onExit }) {
         </div>
       </div>
 
-      {/* ✅ força 1 coluna (remove o “card” da direita e evita sobra de espaço) */}
-      <div className="campaigns-grid" style={{ gridTemplateColumns: "1fr" }}>
-        <div className="campaigns-card">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <h3 style={{ margin: 0 }}>Campanhas</h3>
-            <span className="muted" style={{ fontSize: 13 }}>
-              {filtered.length} de {items.length}
-            </span>
-          </div>
+      {/* ✅ sem card de “Relatórios” */}
+      <div className="campaigns-card">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <h3 style={{ margin: 0 }}>Campanhas</h3>
+          <span className="muted" style={{ fontSize: 13 }}>
+            {filtered.length} de {items.length}
+          </span>
+        </div>
 
-          <div style={{ marginTop: 12 }}>
-            {loading ? (
-              <p className="muted">Carregando…</p>
-            ) : !filtered.length ? (
-              <div className="alert" style={{ marginTop: 10 }}>
-                Nenhuma campanha encontrada.
+        <div style={{ marginTop: 12 }}>
+          {loading ? (
+            <p className="muted">Carregando…</p>
+          ) : !filtered.length ? (
+            <div className="alert" style={{ marginTop: 10 }}>
+              Nenhuma campanha encontrada.
+            </div>
+          ) : (
+            <div className="campaigns-table">
+              <div className="campaigns-row head">
+                <div>Nome</div>
+                <div>Status</div>
+                <div>Audiência</div>
+                <div>Criada</div>
+                <div style={{ textAlign: "right" }}>Ações</div>
               </div>
-            ) : (
-              <div className="campaigns-table">
-                <div className="campaigns-row head">
-                  <div>Nome</div>
-                  <div>Status</div>
-                  <div>Audiência</div>
-                  <div>Criada</div>
-                  <div style={{ textAlign: "right" }}>Ações</div>
-                </div>
 
-                {filtered.map((c) => {
-                  const open = actionsOpenId === c.id;
+              {filtered.map((c) => {
+                const open = actionsOpenId === c.id;
 
-                  return (
-                    <div className="campaigns-row" key={c.id} style={{ borderRadius: 10 }}>
-                      <div className="truncate" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span className="truncate" style={{ fontWeight: 600 }}>
-                          {c.name}
-                        </span>
-                        <span className="muted" style={{ fontSize: 12 }}>
-                          #{String(c.id).slice(0, 8)}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className={statusPillClass(c.status)}>{statusLabel(c.status)}</span>
-                      </div>
-
-                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{getAudienceCount(c)}</div>
-
-                      <div className="muted">{formatDateTime(c.createdAt)}</div>
-
-                      {/* ✅ AÇÕES: dropdown (sem sobreposição quebrada) */}
-                      <div style={{ textAlign: "right", position: "relative" }}>
-                        <button
-                          className="btn small secondary"
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActionsOpenId((prev) => (prev === c.id ? null : c.id));
-                          }}
-                          style={{ whiteSpace: "nowrap" }}
-                          title="Abrir ações"
-                        >
-                          Ações{" "}
-                          <span style={{ display: "inline-flex", marginLeft: 6, opacity: 0.9 }}>
-                            <Icon name="chevronDown" size={16} />
-                          </span>
-                        </button>
-
-                        {open ? (
-                          <div
-                            className="glp-surface"
-                            style={{
-                              position: "absolute",
-                              right: 0,
-                              top: "calc(100% + 8px)",
-                              minWidth: 220,
-                              padding: 10,
-                              borderRadius: 12,
-                              zIndex: 40,
-                              boxShadow: "0 10px 30px rgba(0,0,0,0.25)"
-                            }}
-                          >
-                            <button
-                              className="btn small secondary"
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActionsOpenId(null);
-                                startEdit(c);
-                              }}
-                              style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
-                              title={canEditCampaign(c) ? "Abrir / Editar" : "Abrir (somente leitura)"}
-                            >
-                              <span style={{ display: "inline-flex", marginRight: 8 }}>
-                                <Icon name="edit" size={16} />
-                              </span>
-                              {canEditCampaign(c) ? "Abrir / Editar" : "Abrir (somente leitura)"}
-                            </button>
-
-                            <button
-                              className="btn small secondary"
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActionsOpenId(null);
-                                downloadTemplateFromCampaign(c);
-                              }}
-                              style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
-                              title="Baixar planilha exemplo (CSV) baseada na mensagem"
-                            >
-                              <span style={{ display: "inline-flex", marginRight: 8 }}>
-                                <Icon name="template" size={16} />
-                              </span>
-                              Modelo CSV
-                            </button>
-
-                            {canDeleteCampaign(c) ? (
-                              <button
-                                className="btn small secondary"
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActionsOpenId(null);
-                                  handleDeleteFromList(c);
-                                }}
-                                style={{ width: "100%", justifyContent: "flex-start" }}
-                                title="Excluir campanha (rascunho)"
-                              >
-                                <span style={{ display: "inline-flex", marginRight: 8 }}>
-                                  <Icon name="trash" size={16} />
-                                </span>
-                                Excluir
-                              </button>
-                            ) : (
-                              <div style={{ fontSize: 12, opacity: 0.75 }}>Excluir disponível só em rascunho.</div>
-                            )}
-                          </div>
-                        ) : null}
-                      </div>
+                return (
+                  <div className="campaigns-row" key={c.id} style={{ borderRadius: 10 }}>
+                    <div className="truncate" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span className="truncate" style={{ fontWeight: 600 }}>
+                        {c.name}
+                      </span>
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        #{String(c.id).slice(0, 8)}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
 
-          {/* ✅ aviso simples (sem card de relatório) */}
-          <div className="alert" style={{ marginTop: 14 }}>
-            ✅ Esta tela é apenas para criação e disparo de SMS. Relatórios/analytics ficam em{" "}
-            <b>Reportes → Analytics</b>.
-          </div>
+                    <div>
+                      <span className={statusPillClass(c.status)}>{statusLabel(c.status)}</span>
+                    </div>
+
+                    <div style={{ fontVariantNumeric: "tabular-nums" }}>{getAudienceCount(c)}</div>
+
+                    <div className="muted">{formatDateTime(c.createdAt)}</div>
+
+                    <div style={{ textAlign: "right", position: "relative" }}>
+                      <button
+                        className="btn small secondary"
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActionsOpenId((prev) => (prev === c.id ? null : c.id));
+                        }}
+                        style={{ whiteSpace: "nowrap" }}
+                        title="Abrir ações"
+                      >
+                        Ações{" "}
+                        <span style={{ display: "inline-flex", marginLeft: 6, opacity: 0.9 }}>
+                          <Icon name="chevronDown" size={16} />
+                        </span>
+                      </button>
+
+                      {open ? (
+                        <div
+                          className="glp-surface"
+                          style={{
+                            position: "absolute",
+                            right: 0,
+                            top: "calc(100% + 8px)",
+                            minWidth: 220,
+                            padding: 10,
+                            borderRadius: 12,
+                            zIndex: 40,
+                            boxShadow: "0 10px 30px rgba(0,0,0,0.25)"
+                          }}
+                        >
+                          <button
+                            className="btn small secondary"
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActionsOpenId(null);
+                              startEdit(c);
+                            }}
+                            style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
+                          >
+                            <span style={{ display: "inline-flex", marginRight: 8 }}>
+                              <Icon name="edit" size={16} />
+                            </span>
+                            {canEditCampaign(c) ? "Abrir / Editar" : "Abrir (somente leitura)"}
+                          </button>
+
+                          <button
+                            className="btn small secondary"
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActionsOpenId(null);
+                              downloadTemplateFromCampaign(c);
+                            }}
+                            style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
+                            title="Baixar planilha exemplo (CSV) baseada na mensagem"
+                          >
+                            <span style={{ display: "inline-flex", marginRight: 8 }}>
+                              <Icon name="template" size={16} />
+                            </span>
+                            Modelo CSV
+                          </button>
+
+                          {canDeleteCampaign(c) ? (
+                            <button
+                              className="btn small secondary"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActionsOpenId(null);
+                                handleDeleteFromList(c);
+                              }}
+                              style={{ width: "100%", justifyContent: "flex-start" }}
+                              title="Excluir campanha (rascunho)"
+                            >
+                              <span style={{ display: "inline-flex", marginRight: 8 }}>
+                                <Icon name="trash" size={16} />
+                              </span>
+                              Excluir
+                            </button>
+                          ) : (
+                            <div style={{ fontSize: 12, opacity: 0.75 }}>
+                              Excluir disponível só em rascunho.
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
