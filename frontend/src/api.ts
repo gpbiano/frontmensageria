@@ -1521,24 +1521,34 @@ export async function deleteSmsCampaign(id: string) {
   );
 }
 
-export async function uploadSmsCampaignAudience(id: string, file: File) {
-  const csvText = await file.text();
+export async function uploadSmsCampaignAudience(campaignId, file) {
+  if (!file) throw new Error("Arquivo CSV não informado");
 
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/audience`, {
-    method: "POST",
-    body: { csvText }
-  });
-}
+  const fd = new FormData();
+  fd.append("file", file);
 
-export async function startSmsCampaign(id: string, opts?: { limit?: number }) {
-  // ✅ SEU LOG mostrou 400 com body vazio.
-  // Envia limit no BODY (compat com back que valida req.body.limit)
-  const limit = opts?.limit ? Number(opts.limit) : undefined;
+  const r = await fetch(
+    `${API_BASE}/outbound/sms-campaigns/${campaignId}/audience`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${getToken()}`
+        // ❌ NÃO colocar Content-Type aqui
+      },
+      body: fd
+    }
+  );
 
-  return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/start`, {
-    method: "POST",
-    body: limit ? { limit } : {}
-  });
+  if (!r.ok) {
+    let msg = "Erro ao importar audiência";
+    try {
+      const j = await r.json();
+      msg = j?.error || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  return r.json();
 }
 
 export async function pauseSmsCampaign(id: string) {
