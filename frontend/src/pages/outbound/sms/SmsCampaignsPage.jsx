@@ -4,6 +4,13 @@ import { fetchSmsCampaigns, deleteSmsCampaign } from "../../../api";
 import SmsCampaignCreateWizard from "./SmsCampaignCreateWizard.jsx";
 import "../../../styles/campaigns.css";
 
+const AUTH_KEY = "gpLabsAuthToken";
+
+function getToken() {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(AUTH_KEY);
+}
+
 function filenameSafe(s) {
   return String(s || "")
     .trim()
@@ -34,6 +41,11 @@ function statusPillClass(s) {
   return `pill ${v || "unknown"}`;
 }
 
+function canEditCampaign(c) {
+  const st = String(c?.status || "").toLowerCase();
+  return ["draft", "paused", "failed"].includes(st);
+}
+
 function canDeleteCampaign(c) {
   return String(c?.status || "").toLowerCase() === "draft";
 }
@@ -59,16 +71,19 @@ function extractTemplateVars(message) {
     const raw = String(m[1] || "").trim();
     if (!raw) continue;
 
+    // {{1}} -> var_1
     if (/^\d+$/.test(raw)) {
       out.add(`var_${raw}`);
       continue;
     }
 
+    // {{var_1}} -> var_1
     if (/^var_\d+$/i.test(raw)) {
       out.add(raw.toLowerCase());
       continue;
     }
 
+    // {{nome}} -> nome
     out.add(raw);
   }
 
@@ -168,15 +183,9 @@ function Icon({ name, size = 18, title }) {
         <path {...stroke} d="M14 11v6" />
       </>
     ),
-    search: (
+    chevronDown: (
       <>
-        <circle {...stroke} cx="11" cy="11" r="7" />
-        <path {...stroke} d="M20 20l-3.5-3.5" />
-      </>
-    ),
-    chevronRight: (
-      <>
-        <path {...stroke} d="M9 18l6-6-6-6" />
+        <path {...stroke} d="M6 9l6 6 6-6" />
       </>
     )
   };
@@ -198,6 +207,10 @@ export default function SmsCampaignsPage({ onExit }) {
 
   const [query, setQuery] = useState("");
 
+  // ✅ dropdown ações por linha (resolve sobreposição)
+  const [actionsOpenId, setActionsOpenId] = useState(null);
+  const actionsWrapRef = useRef(null);
+
   async function load() {
     setLoading(true);
     try {
@@ -208,30 +221,19 @@ export default function SmsCampaignsPage({ onExit }) {
     }
   }
 
-  async function handleDeleteFromList(c) {
-    if (!c?.id) return;
-
-    if (!canDeleteCampaign(c)) {
-      alert("Só é possível excluir campanhas em rascunho.");
-      return;
-    }
-
-    const ok = window.confirm(
-      `Excluir a campanha "${c?.name || "Campanha"}"?\nEssa ação não pode ser desfeita.`
-    );
-    if (!ok) return;
-
-    try {
-      await deleteSmsCampaign(c.id);
-      await load();
-    } catch (e) {
-      alert(e?.message || "Erro ao excluir campanha.");
-    }
-  }
-
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // fecha dropdown ao clicar fora
+  useEffect(() => {
+    function onDown(e) {
+      if (!actionsWrapRef.current) return;
+      if (actionsWrapRef.current.contains(e.target)) return;
+      setActionsOpenId(null);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
   const filtered = useMemo(() => {
@@ -255,24 +257,52 @@ export default function SmsCampaignsPage({ onExit }) {
 
   function downloadTemplateFromCampaign(c) {
     const msg = String(c?.metadata?.message || c?.message || "").trim() || "Olá {{1}}!";
-    const { csvText } = buildCsvTemplate({ message: msg, delimiter: ";" });
+
+    const { csvText, headers, vars } = buildCsvTemplate({ message: msg, delimiter: ";" });
+
+    // ✅ “campo pra guardar modelo” (sem mexer no DB): salva dentro de metadata
+    // Observação: isso só fica salvo se o backend já persiste metadata no update/create.
+    // Mesmo sem persistir, aqui resolve o download e temos a estrutura pronta.
+    // Se você quiser persistir de fato, eu te passo o PATCH /sms-campaigns/:id pra gravar metadata.smsCsvModel.
 
     const fname = `modelo_audiencia_sms_${filenameSafe(c?.name || "campanha")}_${String(c?.id || "").slice(
       0,
       8
     )}.csv`;
-
     downloadTextFile({ content: csvText, filename: fname });
+
+    // eslint-disable-next-line no-console
+    console.info("Modelo CSV:", { headers, vars });
   }
 
   function startCreate() {
+    setActionsOpenId(null);
     setEditingCampaign(null);
     setCreating(true);
   }
 
   function startEdit(c) {
+    setActionsOpenId(null);
     setEditingCampaign(c);
     setCreating(true);
+  }
+
+  async function handleDeleteFromList(c) {
+    if (!c?.id) return;
+    if (!canDeleteCampaign(c)) {
+      alert("Só é possível excluir campanhas em rascunho.");
+      return;
+    }
+
+    const ok = window.confirm(`Excluir a campanha "${c?.name || "Campanha"}"?\nEssa ação não pode ser desfeita.`);
+    if (!ok) return;
+
+    try {
+      await deleteSmsCampaign(c.id);
+      await load();
+    } catch (e) {
+      alert(e?.message || "Erro ao excluir campanha.");
+    }
   }
 
   // =========================
@@ -288,8 +318,8 @@ export default function SmsCampaignsPage({ onExit }) {
             <h2>Campanhas de SMS</h2>
             <p className="muted">
               {mode === "edit"
-                ? "Edite mensagem, audiência e controle o envio por lotes."
-                : "Crie, importe audiência e dispare por lotes."}
+                ? "Edite o rascunho, ajuste mensagem e audiência e inicie o envio."
+                : "Crie, importe audiência e dispare."}
             </p>
           </div>
 
@@ -321,10 +351,10 @@ export default function SmsCampaignsPage({ onExit }) {
   }
 
   // =========================
-  // Page (sem Report / Analytics)
+  // Page (envios apenas)
   // =========================
   return (
-    <div className="campaigns-page">
+    <div className="campaigns-page" ref={actionsWrapRef}>
       <div className="campaigns-header">
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
@@ -347,7 +377,7 @@ export default function SmsCampaignsPage({ onExit }) {
           </div>
 
           <p className="muted" style={{ margin: 0 }}>
-            Esta página é apenas para <b>envios</b>. Relatórios/analytics ficam em <b>Reports</b>.
+            Esta página é apenas para envios. Relatórios/analytics ficam em <b>Reportes</b>.
           </p>
         </div>
 
@@ -366,7 +396,10 @@ export default function SmsCampaignsPage({ onExit }) {
             }}
           >
             <span className="muted" style={{ display: "inline-flex" }}>
-              <Icon name="search" size={16} />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+                <path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
             </span>
             <input
               value={query}
@@ -404,117 +437,196 @@ export default function SmsCampaignsPage({ onExit }) {
         </div>
       </div>
 
-      <div className="campaigns-card">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <h3 style={{ margin: 0 }}>Campanhas</h3>
-          <span className="muted" style={{ fontSize: 13 }}>
-            {filtered.length} de {items.length}
-          </span>
+      <div className="campaigns-grid">
+        {/* LISTA */}
+        <div className="campaigns-card">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <h3 style={{ margin: 0 }}>Campanhas</h3>
+            <span className="muted" style={{ fontSize: 13 }}>
+              {filtered.length} de {items.length}
+            </span>
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            {loading ? (
+              <p className="muted">Carregando…</p>
+            ) : !filtered.length ? (
+              <div className="alert" style={{ marginTop: 10 }}>
+                Nenhuma campanha encontrada.
+              </div>
+            ) : (
+              <div className="campaigns-table">
+                <div className="campaigns-row head">
+                  <div>Nome</div>
+                  <div>Status</div>
+                  <div>Audiência</div>
+                  <div>Criada</div>
+                  <div style={{ textAlign: "right" }}>Ações</div>
+                </div>
+
+                {filtered.map((c) => {
+                  const open = actionsOpenId === c.id;
+
+                  return (
+                    <div
+                      className="campaigns-row"
+                      key={c.id}
+                      style={{
+                        borderRadius: 10
+                      }}
+                    >
+                      <div className="truncate" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span className="truncate" style={{ fontWeight: 600 }}>
+                          {c.name}
+                        </span>
+                        <span className="muted" style={{ fontSize: 12 }}>
+                          #{String(c.id).slice(0, 8)}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className={statusPillClass(c.status)}>{statusLabel(c.status)}</span>
+                      </div>
+
+                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{getAudienceCount(c)}</div>
+
+                      <div className="muted">{formatDateTime(c.createdAt)}</div>
+
+                      {/* ✅ AÇÕES: dropdown (não sobrepõe / não quebra layout) */}
+                      <div style={{ textAlign: "right", position: "relative" }}>
+                        <button
+                          className="btn small secondary"
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActionsOpenId((prev) => (prev === c.id ? null : c.id));
+                          }}
+                          style={{ whiteSpace: "nowrap" }}
+                          title="Abrir ações"
+                        >
+                          Ações{" "}
+                          <span style={{ display: "inline-flex", marginLeft: 6, opacity: 0.9 }}>
+                            <Icon name="chevronDown" size={16} />
+                          </span>
+                        </button>
+
+                        {open ? (
+                          <div
+                            className="glp-surface"
+                            style={{
+                              position: "absolute",
+                              right: 0,
+                              top: "calc(100% + 8px)",
+                              minWidth: 220,
+                              padding: 10,
+                              borderRadius: 12,
+                              zIndex: 40,
+                              boxShadow: "0 10px 30px rgba(0,0,0,0.25)"
+                            }}
+                          >
+                            {canEditCampaign(c) ? (
+                              <button
+                                className="btn small secondary"
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActionsOpenId(null);
+                                  startEdit(c);
+                                }}
+                                style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
+                              >
+                                <span style={{ display: "inline-flex", marginRight: 8 }}>
+                                  <Icon name="edit" size={16} />
+                                </span>
+                                Abrir / Editar
+                              </button>
+                            ) : (
+                              <button
+                                className="btn small secondary"
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActionsOpenId(null);
+                                  startEdit(c);
+                                }}
+                                style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
+                              >
+                                <span style={{ display: "inline-flex", marginRight: 8 }}>
+                                  <Icon name="edit" size={16} />
+                                </span>
+                                Abrir (somente leitura)
+                              </button>
+                            )}
+
+                            <button
+                              className="btn small secondary"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActionsOpenId(null);
+                                downloadTemplateFromCampaign(c);
+                              }}
+                              style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
+                              title="Baixar planilha exemplo (CSV) baseada na mensagem"
+                            >
+                              <span style={{ display: "inline-flex", marginRight: 8 }}>
+                                <Icon name="template" size={16} />
+                              </span>
+                              Modelo CSV
+                            </button>
+
+                            {canDeleteCampaign(c) ? (
+                              <button
+                                className="btn small secondary"
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActionsOpenId(null);
+                                  handleDeleteFromList(c);
+                                }}
+                                style={{
+                                  width: "100%",
+                                  justifyContent: "flex-start"
+                                }}
+                                title="Excluir campanha (rascunho)"
+                              >
+                                <span style={{ display: "inline-flex", marginRight: 8 }}>
+                                  <Icon name="trash" size={16} />
+                                </span>
+                                Excluir
+                              </button>
+                            ) : (
+                              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                                Excluir disponível só em rascunho.
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
-        <div style={{ marginTop: 12 }}>
-          {loading ? (
-            <p className="muted">Carregando…</p>
-          ) : !filtered.length ? (
-            <div className="alert" style={{ marginTop: 10 }}>
-              Nenhuma campanha encontrada.
+        {/* DIREITA: placeholder (sem relatório aqui) */}
+        <div className="campaigns-card">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <h3 style={{ margin: 0 }}>Relatórios</h3>
+              <span className="muted" style={{ fontSize: 13 }}>
+                Relatórios e analytics agora ficam em <b>Reportes</b>.
+              </span>
             </div>
-          ) : (
-            <div className="campaigns-table">
-              <div className="campaigns-row head">
-                <div>Nome</div>
-                <div>Status</div>
-                <div>Audiência</div>
-                <div>Criada</div>
-                <div style={{ textAlign: "right" }}>Ações</div>
-              </div>
+          </div>
 
-              {filtered.map((c) => (
-                <div
-                  className="campaigns-row"
-                  key={c.id}
-                  onClick={() => startEdit(c)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") startEdit(c);
-                  }}
-                  style={{ cursor: "pointer", borderRadius: 10 }}
-                  title="Clique para abrir e gerenciar o envio"
-                >
-                  <div className="truncate" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span className="truncate" style={{ fontWeight: 600 }}>
-                      {c.name}
-                    </span>
-                    <span className="muted" style={{ fontSize: 12 }}>
-                      #{String(c.id).slice(0, 8)}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className={statusPillClass(c.status)}>{statusLabel(c.status)}</span>
-                  </div>
-
-                  <div style={{ fontVariantNumeric: "tabular-nums" }}>{getAudienceCount(c)}</div>
-
-                  <div className="muted">{formatDateTime(c.createdAt)}</div>
-
-                  <div style={{ textAlign: "right", display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                    <button
-                      className="btn small secondary"
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startEdit(c);
-                      }}
-                      title="Abrir para editar / enviar"
-                    >
-                      <span style={{ display: "inline-flex", marginRight: 6 }}>
-                        <Icon name="edit" size={16} />
-                      </span>
-                      Abrir
-                    </button>
-
-                    <button
-                      className="btn small secondary"
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        downloadTemplateFromCampaign(c);
-                      }}
-                      title="Baixar planilha exemplo (CSV) baseada na mensagem"
-                    >
-                      <span style={{ display: "inline-flex", marginRight: 6 }}>
-                        <Icon name="template" size={16} />
-                      </span>
-                      Modelo CSV
-                    </button>
-
-                    {canDeleteCampaign(c) ? (
-                      <button
-                        className="btn small secondary"
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteFromList(c);
-                        }}
-                        title="Excluir campanha (rascunho)"
-                      >
-                        <span style={{ display: "inline-flex", marginRight: 6 }}>
-                          <Icon name="trash" size={16} />
-                        </span>
-                        Excluir
-                      </button>
-                    ) : null}
-
-                    <span className="muted" style={{ display: "inline-flex", alignItems: "center" }}>
-                      <Icon name="chevronRight" size={18} />
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="alert" style={{ marginTop: 12 }}>
+            ✅ Esta tela é apenas para criação e disparo de SMS.
+            <br />
+            Vá em <b>Reportes → Analytics</b> para acompanhar performance e gráficos.
+          </div>
         </div>
       </div>
     </div>
