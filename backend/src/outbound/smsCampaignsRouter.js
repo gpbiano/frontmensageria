@@ -1,5 +1,4 @@
 // backend/src/outbound/smsCampaignsRouter.js
-// ✅ PRISMA-FIRST
 // Base: /outbound/sms-campaigns
 
 import express from "express";
@@ -18,7 +17,7 @@ const router = express.Router();
 const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } });
 
 // =========================
-// Feature flag SMS (add-on)
+// Feature flag
 // =========================
 function isSmsEnabled() {
   const v = String(process.env.SMS_ENABLED || "true").toLowerCase();
@@ -32,129 +31,101 @@ function resolveModel() {
   return prisma?.outboundCampaign || prisma?.OutboundCampaign || null;
 }
 
-function getModelName(model) {
-  // Prisma client delegate não expõe facilmente; usamos fallback estável
-  return "OutboundCampaign";
-}
-
 function modelHasField(modelName, field) {
   try {
     const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
     return !!m?.fields?.some((f) => f.name === field);
   } catch {
-    // se não conseguir inspecionar, assume true para não quebrar em prod
     return true;
   }
 }
 
 function getTenantId(req) {
-  const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
-  return tid ? String(tid) : null;
+  return String(req.tenant?.id || req.tenantId || req.user?.tenantId || "");
 }
 
 function assertPrisma(res, model) {
-  if (!prisma || typeof prisma.$queryRaw !== "function") {
+  if (!prisma || !model) {
     res.status(503).json({ ok: false, error: "prisma_not_ready" });
-    return false;
-  }
-  if (!model) {
-    res.status(503).json({
-      ok: false,
-      error: "prisma_model_missing",
-      details: { expected: "outboundCampaign|OutboundCampaign" }
-    });
     return false;
   }
   return true;
 }
 
-async function getSmsCampaign(model, tenantId, id) {
+async function getCampaign(model, tenantId, id) {
   return model.findFirst({
-    where: { id: String(id), tenantId: String(tenantId), channel: "sms" }
+    where: { id: String(id), tenantId, channel: "sms" }
   });
 }
 
 // =========================
-// Provider helpers (env)
+// Provider env
 // =========================
-function assertSmsProviderEnv() {
-  const user = String(process.env.IAGENTE_SMS_USER || "").trim();
-  const pass = String(process.env.IAGENTE_SMS_PASS || "").trim();
-  const base = String(process.env.IAGENTE_SMS_BASE_URL || "").trim();
-  if (!user || !pass || !base) return { ok: false, error: "missing_sms_provider_env" };
+function assertProviderEnv() {
+  const user = process.env.IAGENTE_SMS_USER;
+  const pass = process.env.IAGENTE_SMS_PASS;
+  const base = process.env.IAGENTE_SMS_BASE_URL;
+  if (!user || !pass || !base) return { ok: false };
   return { ok: true, user, pass, base };
 }
 
 function buildProviderUrl({ base, user, pass, phone, message }) {
-  const url = new URL(base);
-  url.searchParams.set("usuario", user);
-  url.searchParams.set("senha", pass);
-  url.searchParams.set("celular", String(phone));
-  url.searchParams.set("mensagem", String(message));
-  return url.toString();
+  const u = new URL(base);
+  u.searchParams.set("usuario", user);
+  u.searchParams.set("senha", pass);
+  u.searchParams.set("celular", phone);
+  u.searchParams.set("mensagem", message);
+  return u.toString();
 }
 
 // =========================
 // CSV helpers
 // =========================
 function normalizePhone(raw) {
-  const d = String(raw || "").replace(/[^\d]/g, "");
+  const d = String(raw || "").replace(/\D/g, "");
   return d.length >= 10 ? d : null;
 }
 
-function detectDelimiter(t) {
-  const sample = String(t || "").split(/\r?\n/).slice(0, 5).join("\n");
-  return (sample.match(/;/g) || []).length > (sample.match(/,/g) || []).length ? ";" : ",";
+function detectDelimiter(text) {
+  const s = text.split(/\r?\n/).slice(0, 5).join("\n");
+  return (s.match(/;/g) || []).length > (s.match(/,/g) || []).length ? ";" : ",";
 }
 
 function parseCsv(text) {
-  const out = { rows: [], errors: [] };
-  if (!text) return out;
+  const rows = [];
+  const errors = [];
 
-  const cleaned = String(text || "").replace(/^\uFEFF/, "");
-  const delim = detectDelimiter(cleaned);
+  const clean = text.replace(/^\uFEFF/, "");
+  const delim = detectDelimiter(clean);
+  const lines = clean.split(/\r?\n/).filter(Boolean);
 
-  const lines = cleaned
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
+  if (!lines.length) return { rows, errors };
 
-  if (!lines.length) return out;
+  const header = lines[0].split(delim).map((h) => h.trim().toLowerCase());
+  const phoneIdx = header.findIndex((h) => ["numero", "phone", "telefone"].includes(h));
 
-  const header = lines[0].split(delim).map((h) => h.trim());
-  const headerLower = header.map((h) => h.toLowerCase());
-  const hasHeader = headerLower.some((h) => ["numero", "phone", "telefone"].includes(h));
-
-  const phoneIdx = hasHeader
-    ? headerLower.findIndex((h) => ["numero", "phone", "telefone"].includes(h))
-    : 0;
-
-  const varIdxs = header.map((_, i) => i).filter((i) => i !== phoneIdx);
-
-  for (let i = hasHeader ? 1 : 0; i < lines.length; i++) {
+  for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(delim).map((c) => c.trim());
     const phone = normalizePhone(cols[phoneIdx]);
 
     if (!phone) {
-      out.errors.push({ line: i + 1, error: "invalid_phone", value: cols[phoneIdx] || "" });
+      errors.push({ line: i + 1, error: "invalid_phone" });
       continue;
     }
 
     const vars = {};
-    for (const idx of varIdxs) {
-      const key = hasHeader ? header[idx] : `var_${idx}`;
-      if (!key) continue;
-      vars[key] = cols[idx] ?? "";
-    }
+    header.forEach((h, idx) => {
+      if (idx !== phoneIdx) vars[h] = cols[idx] || "";
+    });
 
-    out.rows.push({ phone, vars });
+    rows.push({ phone, vars });
   }
 
-  return out;
+  return { rows, errors };
 }
 
 // =========================
-// Status helpers
+// Status
 // =========================
 const STATUS = {
   DRAFT: "draft",
@@ -165,532 +136,174 @@ const STATUS = {
   FAILED: "failed"
 };
 
-function canStart(s) {
-  return [STATUS.DRAFT, STATUS.PAUSED].includes(String(s || ""));
-}
-function canPause(s) {
-  return [STATUS.RUNNING].includes(String(s || ""));
-}
-function canResume(s) {
-  return [STATUS.PAUSED].includes(String(s || ""));
-}
-function canCancel(s) {
-  return [STATUS.DRAFT, STATUS.RUNNING, STATUS.PAUSED].includes(String(s || ""));
-}
+const canStart = (s) => [STATUS.DRAFT, STATUS.PAUSED].includes(s);
+const canPause = (s) => s === STATUS.RUNNING;
+const canResume = (s) => s === STATUS.PAUSED;
+const canCancel = (s) => [STATUS.DRAFT, STATUS.RUNNING, STATUS.PAUSED].includes(s);
+const canDelete = (s) => s === STATUS.DRAFT;
 
 // =========================
-// Progress helpers (metadata.smsProgress)
-// =========================
-function getProgress(campaign) {
-  const md = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
-  const p = md?.smsProgress && typeof md.smsProgress === "object" ? md.smsProgress : {};
-  const cursor = Number.isFinite(Number(p.cursor)) ? Number(p.cursor) : 0;
-
-  return {
-    cursor: Math.max(0, cursor),
-    sent: Number.isFinite(Number(p.sent)) ? Number(p.sent) : 0,
-    success: Number.isFinite(Number(p.success)) ? Number(p.success) : 0,
-    failed: Number.isFinite(Number(p.failed)) ? Number(p.failed) : 0,
-    lastRunAt: p.lastRunAt || null
-  };
-}
-
-async function persistProgress(model, modelName, id, campaign, patch) {
-  const baseMd = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
-  const baseProg = getProgress(campaign);
-
-  const nextProg = {
-    ...baseProg,
-    ...patch,
-    lastRunAt: new Date().toISOString()
-  };
-
-  const nextMd = { ...baseMd, smsProgress: nextProg };
-
-  const data = {};
-  if (modelHasField(modelName, "metadata")) data.metadata = nextMd;
-
-  await model.update({ where: { id: String(id) }, data });
-  return nextProg;
-}
-
-function renderMessage(template, vars) {
-  let text = String(template || "");
-  for (const [k, v] of Object.entries(vars || {})) {
-    text = text.replaceAll(`{{${k}}}`, String(v ?? ""));
-  }
-  return text;
-}
-
-function resolveMessageTemplate(campaign) {
-  // ✅ fallback robusto pra evitar message_required indevido
-  const md = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
-  const direct =
-    String(campaign?.message || "").trim() ||
-    String(campaign?.text || "").trim() ||
-    String(md?.message || "").trim() ||
-    String(md?.smsMessage || "").trim();
-
-  return direct;
-}
-
-// =========================
-// GET campaigns
+// GET
 // =========================
 router.get("/", requireAuth, async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
+  if (!isSmsEnabled()) return res.status(403).json({ ok: false });
 
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+  const tenantId = getTenantId(req);
+  const items = await model.findMany({
+    where: { tenantId, channel: "sms" },
+    orderBy: { createdAt: "desc" }
+  });
 
-    const items = await model.findMany({
-      where: { tenantId, channel: "sms" },
-      orderBy: { createdAt: "desc" }
-    });
-
-    return res.json({ ok: true, items });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter GET / failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
+  res.json({ ok: true, items });
 });
 
 // =========================
-// CREATE campaign
+// CREATE
 // =========================
 router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  const modelName = getModelName(model);
+  const { name, message } = req.body;
+  if (!name || !message) return res.status(400).json({ ok: false });
 
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
-
-    const name = String(req.body?.name || "").trim();
-    const message = String(req.body?.message || "").trim();
-    if (!name) return res.status(400).json({ ok: false, error: "name_required" });
-    if (!message) return res.status(400).json({ ok: false, error: "message_required" });
-
-    const baseMetadata =
-      req.body?.metadata && typeof req.body.metadata === "object" ? req.body.metadata : {};
-
-    const data = {
-      tenantId,
+  const item = await model.create({
+    data: {
+      tenantId: getTenantId(req),
       channel: "sms",
       name,
-      status: STATUS.DRAFT
-    };
-
-    // ✅ salva message direto no model SE existir
-    if (modelHasField(modelName, "message")) data.message = message;
-
-    // ✅ e também em metadata.message (padrão do wizard)
-    if (modelHasField(modelName, "metadata")) {
-      data.metadata = {
-        ...baseMetadata,
+      message,
+      status: STATUS.DRAFT,
+      metadata: {
         message,
-        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() }
-      };
+        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0 }
+      }
     }
+  });
 
-    const item = await model.create({ data });
-    return res.status(201).json({ ok: true, item });
-  } catch (err) {
-    logger.error({ err: err?.message || err, body: req.body }, "❌ smsCampaignsRouter POST / failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
+  res.status(201).json({ ok: true, item });
 });
 
 // =========================
 // UPLOAD AUDIENCE
 // =========================
 router.post("/:id/audience", requireAuth, requireRole("admin", "manager"), upload.single("file"), async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  const modelName = getModelName(model);
+  const csv = req.file?.buffer?.toString("utf8");
+  if (!csv) return res.status(400).json({ ok: false, error: "csv_required" });
 
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+  const parsed = parseCsv(csv);
+  if (!parsed.rows.length) return res.status(400).json({ ok: false });
 
-    const id = String(req.params.id || "");
-    const campaign = await getSmsCampaign(model, tenantId, id);
-    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
-
-    if (String(campaign.status) === STATUS.RUNNING) {
-      return res.status(409).json({ ok: false, error: "cannot_update_audience_while_running" });
+  const item = await model.update({
+    where: { id: req.params.id },
+    data: {
+      audience: { rows: parsed.rows },
+      metadata: {
+        smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0 }
+      }
     }
+  });
 
-    let csvText = "";
-    if (req.file?.buffer) csvText = req.file.buffer.toString("utf8");
-    else if (typeof req.body?.csvText === "string") csvText = req.body.csvText;
-    else if (typeof req.body?.csv === "string") csvText = req.body.csv;
-
-    if (!csvText.trim()) return res.status(400).json({ ok: false, error: "csv_required" });
-
-    const parsed = parseCsv(csvText);
-    if (!parsed.rows.length) {
-      return res.status(400).json({ ok: false, error: "csv_empty_or_invalid", details: parsed.errors });
-    }
-
-    const audience = {
-      rows: parsed.rows,
-      total: parsed.rows.length,
-      errors: parsed.errors,
-      importedAt: new Date().toISOString()
-    };
-
-    const baseMd = campaign?.metadata && typeof campaign.metadata === "object" ? campaign.metadata : {};
-    const nextMd = {
-      ...baseMd,
-      smsProgress: { cursor: 0, sent: 0, success: 0, failed: 0, lastRunAt: new Date().toISOString() }
-    };
-
-    const data = {};
-    if (modelHasField(modelName, "audience")) data.audience = audience;
-    if (modelHasField(modelName, "metadata")) data.metadata = nextMd;
-
-    const item = await model.update({ where: { id }, data });
-
-    return res.json({ ok: true, item, imported: parsed.rows.length, errors: parsed.errors.length });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/audience failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
+  res.json({ ok: true, item, imported: parsed.rows.length });
 });
 
 // =========================
-// START (envio) + RESUME exato (cursor)
+// START / RESUME
 // =========================
 router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  const modelName = getModelName(model);
-
-  const PROGRESS_FLUSH_EVERY = Number(process.env.SMS_PROGRESS_FLUSH_EVERY || 10);
-  const STATUS_CHECK_EVERY = Number(process.env.SMS_STATUS_CHECK_EVERY || 10);
-
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
-
-    const id = String(req.params.id || "");
-    const campaign = await getSmsCampaign(model, tenantId, id);
-    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
-
-    if (String(campaign.status) === STATUS.RUNNING) {
-      return res.status(409).json({ ok: false, error: "already_running" });
-    }
-    if (!canStart(campaign.status)) {
-      return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
-    }
-    if (!campaign.audience?.rows?.length) {
-      return res.status(400).json({ ok: false, error: "audience_required" });
-    }
-
-    const messageTemplate = resolveMessageTemplate(campaign);
-    if (!messageTemplate) return res.status(400).json({ ok: false, error: "message_required" });
-
-    const env = assertSmsProviderEnv();
-    if (!env.ok) return res.status(500).json({ ok: false, error: env.error });
-
-    // seta RUNNING
-    await model.update({
-      where: { id },
-      data: {
-        status: STATUS.RUNNING,
-        startedAt: campaign.startedAt || new Date(),
-        pausedAt: null,
-        canceledAt: null,
-        finishedAt: null
-      }
-    });
-
-    let current = await getSmsCampaign(model, tenantId, id);
-    if (!current) return res.status(404).json({ ok: false, error: "not_found" });
-
-    const rows = current.audience.rows;
-    let prog = getProgress(current);
-
-    if (prog.cursor > rows.length) {
-      prog = await persistProgress(model, modelName, id, current, { cursor: rows.length });
-      current = await getSmsCampaign(model, tenantId, id);
-    }
-
-    const maxToSend =
-      Number(req.query?.limit || 0) > 0 ? Number(req.query.limit) : Number.MAX_SAFE_INTEGER;
-
-    let localSent = 0;
-    let localSuccess = 0;
-    let localFailed = 0;
-
-    const samples = [];
-    const SAMPLE_LIMIT = 50;
-
-    for (let i = prog.cursor; i < rows.length && localSent < maxToSend; i++) {
-      if (localSent % STATUS_CHECK_EVERY === 0) {
-        const st = await getSmsCampaign(model, tenantId, id);
-        const statusNow = String(st?.status || "");
-        if (statusNow === STATUS.PAUSED) {
-          await persistProgress(model, modelName, id, st, {
-            cursor: i,
-            sent: prog.sent + localSent,
-            success: prog.success + localSuccess,
-            failed: prog.failed + localFailed
-          });
-          return res.status(202).json({ ok: true, paused: true, cursor: i, sent: prog.sent + localSent });
-        }
-        if (statusNow === STATUS.CANCELED) {
-          await persistProgress(model, modelName, id, st, {
-            cursor: i,
-            sent: prog.sent + localSent,
-            success: prog.success + localSuccess,
-            failed: prog.failed + localFailed
-          });
-          return res.status(202).json({ ok: true, canceled: true, cursor: i, sent: prog.sent + localSent });
-        }
-      }
-
-      const row = rows[i];
-      const text = renderMessage(messageTemplate, row.vars || {});
-      const url = buildProviderUrl({
-        base: env.base,
-        user: env.user,
-        pass: env.pass,
-        phone: row.phone,
-        message: text
-      });
-
-      let ok = false;
-      let statusCode = 0;
-      let body = "";
-
-      try {
-        const r = await fetch(url);
-        statusCode = r.status;
-        body = await r.text();
-        ok = r.ok;
-      } catch (e) {
-        ok = false;
-        body = String(e?.message || e);
-      }
-
-      localSent++;
-      if (ok) localSuccess++;
-      else localFailed++;
-
-      if (samples.length < SAMPLE_LIMIT) {
-        samples.push({
-          i,
-          phone: row.phone,
-          ok,
-          status: statusCode,
-          body: String(body || "").slice(0, 500)
-        });
-      }
-
-      if (localSent % PROGRESS_FLUSH_EVERY === 0) {
-        const refreshed = await getSmsCampaign(model, tenantId, id);
-        if (!refreshed) break;
-
-        prog = await persistProgress(model, modelName, id, refreshed, {
-          cursor: i + 1,
-          sent: prog.sent + localSent,
-          success: prog.success + localSuccess,
-          failed: prog.failed + localFailed
-        });
-
-        localSent = 0;
-        localSuccess = 0;
-        localFailed = 0;
-      }
-    }
-
-    current = await getSmsCampaign(model, tenantId, id);
-    if (!current) return res.status(404).json({ ok: false, error: "not_found" });
-
-    prog = await persistProgress(model, modelName, id, current, {
-      cursor: Math.min(rows.length, prog.cursor + localSent),
-      sent: prog.sent + localSent,
-      success: prog.success + localSuccess,
-      failed: prog.failed + localFailed
-    });
-
-    const done = prog.cursor >= rows.length;
-
-    if (done) {
-      await model.update({
-        where: { id },
-        data: {
-          status: STATUS.FINISHED,
-          finishedAt: new Date(),
-          report: {
-            total: prog.sent,
-            success: prog.success,
-            failed: prog.failed,
-            finishedAt: new Date().toISOString(),
-            samples
-          }
-        }
-      });
-
-      return res.json({
-        ok: true,
-        finished: true,
-        cursor: prog.cursor,
-        totalAudience: rows.length,
-        sent: prog.sent,
-        success: prog.success,
-        failed: prog.failed
-      });
-    }
-
-    return res.json({
-      ok: true,
-      finished: false,
-      cursor: prog.cursor,
-      totalAudience: rows.length,
-      sent: prog.sent,
-      success: prog.success,
-      failed: prog.failed
-    });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/start failed");
-
-    try {
-      const model = resolveModel();
-      const tenantId = getTenantId(req);
-      const id = String(req.params.id || "");
-      if (model && tenantId && id) {
-        const current = await getSmsCampaign(model, tenantId, id);
-        if (current) {
-          await model.update({
-            where: { id },
-            data: {
-              status: STATUS.FAILED,
-              finishedAt: new Date(),
-              report: { error: String(err?.message || err), failedAt: new Date().toISOString() }
-            }
-          });
-        }
-      }
-    } catch {}
-
-    return res.status(500).json({ ok: false, error: "internal_error" });
+  const campaign = await getCampaign(model, getTenantId(req), req.params.id);
+  if (!campaign || !canStart(campaign.status)) {
+    return res.status(409).json({ ok: false });
   }
+
+  const env = assertProviderEnv();
+  if (!env.ok) return res.status(500).json({ ok: false });
+
+  await model.update({
+    where: { id: campaign.id },
+    data: { status: STATUS.RUNNING }
+  });
+
+  res.json({ ok: true, started: true });
 });
 
 // =========================
 // PAUSE
 // =========================
 router.patch("/:id/pause", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+  const c = await getCampaign(model, getTenantId(req), req.params.id);
+  if (!c || !canPause(c.status)) return res.status(409).json({ ok: false });
 
-    const id = String(req.params.id || "");
-    const campaign = await getSmsCampaign(model, tenantId, id);
-    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
+  const item = await model.update({
+    where: { id: c.id },
+    data: { status: STATUS.PAUSED }
+  });
 
-    if (!canPause(campaign.status)) {
-      return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
-    }
-
-    const item = await model.update({
-      where: { id },
-      data: { status: STATUS.PAUSED, pausedAt: new Date() }
-    });
-
-    return res.json({ ok: true, item });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id/pause failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
+  res.json({ ok: true, item });
 });
 
 // =========================
-// RESUME (só muda status; depois chame POST /start)
+// RESUME
 // =========================
 router.patch("/:id/resume", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+  const c = await getCampaign(model, getTenantId(req), req.params.id);
+  if (!c || !canResume(c.status)) return res.status(409).json({ ok: false });
 
-    const id = String(req.params.id || "");
-    const campaign = await getSmsCampaign(model, tenantId, id);
-    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
+  const item = await model.update({
+    where: { id: c.id },
+    data: { status: STATUS.DRAFT }
+  });
 
-    if (!canResume(campaign.status)) {
-      return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
-    }
-
-    const item = await model.update({
-      where: { id },
-      data: { status: STATUS.DRAFT, pausedAt: null }
-    });
-
-    return res.json({ ok: true, item, note: "call POST /:id/start to continue from cursor" });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id/resume failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
+  res.json({ ok: true, item });
 });
 
 // =========================
 // CANCEL
 // =========================
 router.patch("/:id/cancel", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
-
   const model = resolveModel();
   if (!assertPrisma(res, model)) return;
 
-  try {
-    const tenantId = getTenantId(req);
-    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+  const c = await getCampaign(model, getTenantId(req), req.params.id);
+  if (!c || !canCancel(c.status)) return res.status(409).json({ ok: false });
 
-    const id = String(req.params.id || "");
-    const campaign = await getSmsCampaign(model, tenantId, id);
-    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
+  const item = await model.update({
+    where: { id: c.id },
+    data: { status: STATUS.CANCELED }
+  });
 
-    if (!canCancel(campaign.status)) {
-      return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
-    }
+  res.json({ ok: true, item });
+});
 
-    const item = await model.update({
-      where: { id },
-      data: { status: STATUS.CANCELED, canceledAt: new Date() }
-    });
+// =========================
+// DELETE (ONLY DRAFT)
+// =========================
+router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  const model = resolveModel();
+  if (!assertPrisma(res, model)) return;
 
-    return res.json({ ok: true, item });
-  } catch (err) {
-    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id/cancel failed");
-    return res.status(500).json({ ok: false, error: "internal_error" });
+  const c = await getCampaign(model, getTenantId(req), req.params.id);
+  if (!c || !canDelete(c.status)) {
+    return res.status(409).json({ ok: false, error: "cannot_delete_status" });
   }
+
+  await model.delete({ where: { id: c.id } });
+  res.json({ ok: true });
 });
 
 export default router;
