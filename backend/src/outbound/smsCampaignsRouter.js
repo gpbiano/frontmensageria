@@ -357,6 +357,132 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
 });
 
 // =========================
+// UPDATE campaign (FIX PROD: wizard salva via PATCH /:id)
+// =========================
+router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
+
+  const model = resolveModel();
+  if (!assertPrisma(res, model)) return;
+
+  const modelName = getModelName();
+
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const id = String(req.params.id || "");
+    const campaign = await getSmsCampaign(model, tenantId, id);
+    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
+
+    const st = String(campaign.status || "");
+    if (![STATUS.DRAFT, STATUS.PAUSED, STATUS.FAILED].includes(st)) {
+      return res.status(409).json({ ok: false, error: "cannot_edit_in_this_status", status: campaign.status });
+    }
+
+    const name = req.body?.name !== undefined ? String(req.body?.name || "").trim() : undefined;
+
+    // aceita message OU metadata.message vindo do front
+    const bodyMessage =
+      req.body?.message !== undefined
+        ? String(req.body?.message || "").trim()
+        : req.body?.metadata?.message !== undefined
+          ? String(req.body?.metadata?.message || "").trim()
+          : undefined;
+
+    // metadata (merge)
+    const patchMdRaw = safeObj(req.body?.metadata);
+    const baseMd = safeObj(campaign?.metadata);
+
+    const data = {};
+
+    if (name !== undefined) {
+      if (!name) return res.status(400).json({ ok: false, error: "name_required" });
+      data.name = name;
+    }
+
+    if (modelHasField(modelName, "metadata")) {
+      const mergedMd = { ...baseMd, ...patchMdRaw };
+
+      // se veio message, grava em metadata.message (fonte de verdade)
+      if (bodyMessage !== undefined) {
+        if (!bodyMessage) return res.status(400).json({ ok: false, error: "message_required" });
+        mergedMd.message = bodyMessage;
+      }
+
+      // timestamp de update
+      mergedMd.timestamps = { ...(safeObj(mergedMd.timestamps) || {}), updatedAt: new Date().toISOString() };
+
+      data.metadata = mergedMd;
+    } else {
+      // se não tem metadata no schema, não tem onde salvar a mensagem
+      if (bodyMessage !== undefined) {
+        return res.status(409).json({ ok: false, error: "schema_has_no_metadata_field" });
+      }
+    }
+
+    if (!Object.keys(data).length) {
+      return res.json({ ok: true, item: campaign, note: "no_changes" });
+    }
+
+    const item = await model.update({ where: { id }, data });
+    return res.json({ ok: true, item });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter PATCH /:id failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// =========================
+// DELETE campaign (FIX PROD: lista tenta DELETE /:id)
+// =========================
+router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  if (!isSmsEnabled()) return res.status(403).json({ ok: false, error: "sms_not_enabled" });
+
+  const model = resolveModel();
+  if (!assertPrisma(res, model)) return;
+
+  const logModel = resolveLogModel();
+  const logModelName = getLogModelName();
+
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+
+    const id = String(req.params.id || "");
+    const campaign = await getSmsCampaign(model, tenantId, id);
+    if (!campaign) return res.status(404).json({ ok: false, error: "not_found" });
+
+    const st = String(campaign.status || "");
+    if (st !== STATUS.DRAFT) {
+      return res.status(409).json({
+        ok: false,
+        error: "only_draft_can_be_deleted",
+        status: campaign.status
+      });
+    }
+
+    // best-effort: limpa logs (se model existir)
+    try {
+      if (logModel && modelHasField(logModelName, "campaignId")) {
+        await logModel.deleteMany({
+          where: { tenantId: String(tenantId), campaignId: String(id), channel: "sms" }
+        });
+      }
+    } catch (e) {
+      logger.warn({ err: e?.message || e }, "⚠️ smsCampaignsRouter DELETE: log cleanup failed (ignored)");
+    }
+
+    await model.delete({ where: { id: String(id) } });
+
+    return res.json({ ok: true, deleted: true, id });
+  } catch (err) {
+    logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter DELETE /:id failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// =========================
 // UPLOAD AUDIENCE
 // =========================
 router.post(
@@ -753,7 +879,12 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
         const current = await getSmsCampaign(model2, tenantId2, id2);
         if (current) {
           const patchMd = modelHasField(getModelName(), "metadata")
-            ? { metadata: setMetaTs(current, { finishedAt: new Date().toISOString(), failedAt: new Date().toISOString() }) }
+            ? {
+                metadata: setMetaTs(current, {
+                  finishedAt: new Date().toISOString(),
+                  failedAt: new Date().toISOString()
+                })
+              }
             : {};
           await model2.update({
             where: { id: id2 },
