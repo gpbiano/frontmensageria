@@ -117,7 +117,7 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
   if (extra) {
     const h = new Headers(extra);
     h.forEach((v, k) => {
-      normalized[k] = v; // browser normalmente normaliza para lower-case
+      normalized[k] = v;
     });
   }
 
@@ -189,6 +189,22 @@ function buildQuery(params?: Record<string, any>) {
   return s ? `?${s}` : "";
 }
 
+/**
+ * ✅ Normaliza respostas que vêm como:
+ * - array direto
+ * - { items: [...] }
+ * - { data: [...] }
+ * - { templates: [...] } / { numbers: [...] }
+ */
+function unwrapList<T = any>(res: any): T[] {
+  if (Array.isArray(res)) return res as T[];
+  if (res && typeof res === "object") {
+    const cands = [res.items, res.data, res.templates, res.numbers, res.results];
+    for (const c of cands) if (Array.isArray(c)) return c as T[];
+  }
+  return [];
+}
+
 // ======================================================
 // HELPER FETCH (JSON / TEXT / NO CONTENT)
 // ======================================================
@@ -248,6 +264,7 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
     const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
 
+    // eslint-disable-next-line no-console
     console.error("🔒 API 401:", path, payload || text);
 
     clearAuth();
@@ -262,6 +279,7 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
   if (!res.ok) {
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
+    // eslint-disable-next-line no-console
     console.error("❌ API ERROR:", res.status, path, payload || text);
     throw buildApiError(res.status, path, payload, text);
   }
@@ -296,6 +314,7 @@ async function requestForm<T = any>(
     const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
 
+    // eslint-disable-next-line no-console
     console.error("🔒 API FORM 401:", path, payload || text);
 
     clearAuth();
@@ -310,6 +329,7 @@ async function requestForm<T = any>(
   if (!res.ok) {
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
+    // eslint-disable-next-line no-console
     console.error("❌ API FORM ERROR:", res.status, path, payload || text);
     throw buildApiError(res.status, path, payload, text);
   }
@@ -342,6 +362,7 @@ async function downloadBlob(path: string, filename: string) {
     const payload = await safeReadJson<any>(res);
     const text = payload ? "" : await safeReadText(res);
 
+    // eslint-disable-next-line no-console
     console.error("🔒 DOWNLOAD 401:", path, payload || text);
 
     clearAuth();
@@ -356,6 +377,7 @@ async function downloadBlob(path: string, filename: string) {
   if (!res.ok) {
     const payload = await safeReadJson(res);
     const text = payload ? "" : await safeReadText(res);
+    // eslint-disable-next-line no-console
     console.error("❌ DOWNLOAD ERROR:", res.status, path, payload || text);
     throw buildApiError(res.status, path, payload, text);
   }
@@ -797,7 +819,9 @@ export interface UserRecord {
   updatedAt?: string;
 }
 
-type UsersListResponse = { data: UserRecord[]; total: number } | { items: UserRecord[]; total: number };
+type UsersListResponse =
+  | { data: UserRecord[]; total: number }
+  | { items: UserRecord[]; total: number };
 
 export async function fetchUsers(): Promise<{ data: UserRecord[]; total: number }> {
   const res = await request<UsersListResponse>("/settings/users");
@@ -1133,11 +1157,13 @@ export async function downloadHistoryExcel(params?: {
 // ======================================================
 
 export async function fetchNumbers(): Promise<PhoneNumberRecord[]> {
-  const data = await request<any>("/outbound/numbers");
-  return Array.isArray(data) ? (data as PhoneNumberRecord[]) : [];
+  const res = await request<any>("/outbound/numbers");
+  // ✅ backend atual devolve { ok:true, items:[...] } (e às vezes numbers:[...])
+  return unwrapList<PhoneNumberRecord>(res);
 }
 
-export async function syncNumbers(): Promise<{ success: boolean }> {
+export async function syncNumbers(): Promise<{ ok?: boolean; success?: boolean; items?: PhoneNumberRecord[] }> {
+  // ✅ mantém compat com front antigo (success) e novo (ok)
   return request("/outbound/numbers/sync", { method: "POST" });
 }
 
@@ -1146,11 +1172,12 @@ export async function syncNumbers(): Promise<{ success: boolean }> {
 // ======================================================
 
 export async function fetchTemplates(): Promise<Template[]> {
-  const data = await request<any>("/outbound/templates");
-  return Array.isArray(data) ? (data as Template[]) : [];
+  const res = await request<any>("/outbound/templates");
+  // ✅ backend atual devolve { ok:true, items:[...] }
+  return unwrapList<Template>(res);
 }
 
-export async function syncTemplates(): Promise<{ success: boolean }> {
+export async function syncTemplates(): Promise<{ ok?: boolean; success?: boolean; items?: Template[] }> {
   return request("/outbound/templates/sync", { method: "POST" });
 }
 
@@ -1160,11 +1187,17 @@ export async function createTemplate(payload: {
   language: string;
   components: any[];
 }): Promise<Template> {
+  // ⚠️ Se seu backend ainda não tiver POST /outbound/templates, vai dar 404.
+  // Quando existir, aceitamos os formatos:
+  // - { ok:true, item: {...} }
+  // - { ok:true, template: {...} }
+  // - template direto
   const res = await request<any>("/outbound/templates", {
     method: "POST",
     body: payload
   });
 
+  if (res?.item) return res.item as Template;
   if (res?.template) return res.template as Template;
   return res as Template;
 }
@@ -1424,3 +1457,4 @@ export async function downloadConversationHistoryExcel(conversationId: string) {
     `conversation_${conversationId}.xlsx`
   );
 }
+
