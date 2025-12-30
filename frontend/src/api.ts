@@ -1521,35 +1521,25 @@ export async function deleteSmsCampaign(id: string) {
   );
 }
 
-export async function uploadSmsCampaignAudience(campaignId, file) {
+export async function uploadSmsCampaignAudience(campaignId: string, file: File) {
+  if (!campaignId) throw new Error("campaignId_required");
   if (!file) throw new Error("Arquivo CSV não informado");
 
   const fd = new FormData();
   fd.append("file", file);
 
-  const r = await fetch(
-    `${API_BASE}/outbound/sms-campaigns/${campaignId}/audience`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${getToken()}`
-        // ❌ NÃO colocar Content-Type aqui
-      },
-      body: fd
-    }
+  // ✅ usa o helper oficial do projeto:
+  // - injeta Authorization
+  // - injeta X-Tenant-Id
+  // - NÃO seta Content-Type (browser define boundary)
+  // - mantém credentials/include
+  return requestForm(
+    `/outbound/sms-campaigns/${encodeURIComponent(String(campaignId))}/audience`,
+    fd,
+    { method: "POST" }
   );
-
-  if (!r.ok) {
-    let msg = "Erro ao importar audiência";
-    try {
-      const j = await r.json();
-      msg = j?.error || msg;
-    } catch {}
-    throw new Error(msg);
-  }
-
-  return r.json();
 }
+
 
 export async function pauseSmsCampaign(id: string) {
   return request(`/outbound/sms-campaigns/${encodeURIComponent(id)}/pause`, { method: "PATCH" });
