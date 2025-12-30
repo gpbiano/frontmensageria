@@ -1,62 +1,9 @@
 // frontend/src/pages/outbound/TemplatesPage.tsx
-
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import type { Template, TemplateComponent } from "../../types";
 import { fetchTemplates, syncTemplates } from "../../api";
 import TemplatesCreatePage from "./TemplatesCreatePage";
 import "../../styles/outbound.css";
-
-type TemplatesViewMode = "list" | "create";
-
-/**
- * ✅ Backend hoje retorna algo como:
- * {
- *   id, tenantId, channel: "whatsapp",
- *   name, language: null,
- *   status: "draft" | ...,
- *   content: null | {...},
- *   metadata: null | {...},
- *   createdAt, updatedAt
- * }
- *
- * Então a gente normaliza pra UI não depender de fields que não existem no schema.
- */
-type BackendTemplate = {
-  id?: string;
-  tenantId?: string;
-  channel?: string;
-
-  name?: string;
-  language?: string | null;
-  status?: string | null;
-
-  // pode vir null no schema atual
-  content?: any;
-  metadata?: any;
-
-  createdAt?: string;
-  updatedAt?: string;
-
-  // compat (caso seu types antigo tenha isso)
-  category?: string;
-  quality?: string;
-  components?: any[];
-  hasFlow?: boolean;
-};
-
-type NormalizedTemplate = {
-  id: string;
-  name: string;
-
-  category: string | null;
-  language: string | null;
-  status: string | null;
-  quality: string | null;
-  hasFlow: boolean;
-
-  components: any[];
-  updatedAt?: string;
-  raw: BackendTemplate;
-};
 
 /* ======================================
    MAPAS PT-BR
@@ -73,7 +20,11 @@ const STATUS_PTBR: Record<string, string> = {
   PENDING: "Em análise",
   REJECTED: "Rejeitado",
   PAUSED: "Pausado",
-  DRAFT: "Rascunho"
+
+  // ✅ fallback (caso ainda venha status interno do banco)
+  DRAFT: "Rascunho",
+  DISABLED: "Desativado",
+  UNKNOWN: "—"
 };
 
 function formatDateBR(dateString?: string) {
@@ -90,83 +41,64 @@ function formatDateBR(dateString?: string) {
   });
 }
 
-function normUpper(v?: string | null) {
-  const s = String(v || "").trim();
+type TemplatesViewMode = "list" | "create";
+
+/* ======================================
+   NORMALIZERS (FIX: STATUS APROVADO NA META)
+====================================== */
+
+function asUpper(v?: any) {
+  const s = String(v ?? "").trim();
   return s ? s.toUpperCase() : "";
 }
 
-function safeId(tpl: BackendTemplate, idx: number) {
-  return String(tpl?.id || tpl?.name || `tpl_${idx}`);
+function pickStatus(tpl: any): string {
+  // prioridade: metadata/status vindo da Meta > content/status > status do banco
+  const metaStatus =
+    tpl?.metadata?.status ||
+    tpl?.metadata?.template?.status ||
+    tpl?.metadata?.metaStatus ||
+    tpl?.content?.status ||
+    tpl?.content?.template?.status ||
+    null;
+
+  const s = asUpper(metaStatus || tpl?.status || "");
+  return s || "UNKNOWN";
 }
 
-function normalizeTemplates(list: BackendTemplate[]): NormalizedTemplate[] {
-  return list.map((tpl, idx) => {
-    const md = tpl?.metadata || {};
-    const ct = tpl?.content || {};
+function pickCategory(tpl: any): string {
+  const metaCat =
+    tpl?.metadata?.category ||
+    tpl?.metadata?.template?.category ||
+    tpl?.content?.category ||
+    tpl?.content?.template?.category ||
+    null;
 
-    const name = String(tpl?.name || md?.name || "").trim() || `template_${idx + 1}`;
+  const c = asUpper(metaCat || tpl?.category || "");
+  return c || "";
+}
 
-    const language =
-      tpl?.language ??
-      ct?.language ??
-      md?.language ??
-      null;
+function pickLanguage(tpl: any): string {
+  const metaLang =
+    tpl?.metadata?.language ||
+    tpl?.metadata?.template?.language ||
+    tpl?.content?.language ||
+    tpl?.content?.template?.language ||
+    null;
 
-    const statusRaw =
-      tpl?.status ??
-      ct?.status ??
-      md?.status ??
-      null;
+  const l = String(metaLang || tpl?.language || "").trim();
+  return l ? l.toUpperCase() : "—";
+}
 
-    // 🔥 importante: UI deve aceitar "draft" (backend está salvando assim)
-    const status = statusRaw ? normUpper(String(statusRaw)) : null;
-
-    const categoryRaw =
-      tpl?.category ??
-      ct?.category ??
-      md?.category ??
-      null;
-
-    const category = categoryRaw ? normUpper(String(categoryRaw)) : null;
-
-    // quality pode vir como objeto ou string dependendo do Graph
-    const qualityRaw =
-      ct?.quality ??
-      ct?.qualityScore ??
-      md?.quality ??
-      md?.quality_score ??
-      null;
-
-    const quality =
-      typeof qualityRaw === "string"
-        ? qualityRaw
-        : qualityRaw?.quality_score || qualityRaw?.quality || null;
-
-    // componentes podem estar em content.components ou metadata.raw.components
-    const components =
-      (Array.isArray(ct?.components) && ct.components) ||
-      (Array.isArray(md?.raw?.components) && md.raw.components) ||
-      (Array.isArray(tpl?.components) && tpl.components) ||
-      [];
-
-    // Flow: se tiver "FLOW" em qualquer componente, ou se tiver campo hasFlow
-    const hasFlow =
-      Boolean(tpl?.hasFlow) ||
-      components.some((c: any) => String(c?.type || "").toUpperCase() === "FLOW");
-
-    return {
-      id: safeId(tpl, idx),
-      name,
-      category,
-      language: language ? String(language) : null,
-      status,
-      quality: quality ? String(quality) : null,
-      hasFlow,
-      components,
-      updatedAt: tpl?.updatedAt || tpl?.createdAt,
-      raw: tpl
-    };
-  });
+function pickHasFlow(tpl: any): boolean {
+  // tenta achar qualquer flag comum
+  return Boolean(
+    tpl?.hasFlow ||
+      tpl?.metadata?.hasFlow ||
+      tpl?.metadata?.flow ||
+      tpl?.content?.hasFlow ||
+      tpl?.content?.flow
+  );
 }
 
 /* ======================================
@@ -174,36 +106,20 @@ function normalizeTemplates(list: BackendTemplate[]): NormalizedTemplate[] {
 ====================================== */
 
 export default function TemplatesPage() {
-  const [templates, setTemplates] = useState<NormalizedTemplate[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Template | null>(null);
   const [mode, setMode] = useState<TemplatesViewMode>("list");
-
-  const selected = useMemo(
-    () => templates.find((t) => t.id === selectedId) || null,
-    [templates, selectedId]
-  );
 
   async function load() {
     setLoading(true);
     try {
-      const res: any = await fetchTemplates();
+      const data = await fetchTemplates();
+      setTemplates(Array.isArray(data) ? data : []);
 
-      const list: BackendTemplate[] =
-        Array.isArray(res)
-          ? res
-          : Array.isArray(res?.items)
-          ? res.items
-          : Array.isArray(res?.templates)
-          ? res.templates
-          : [];
-
-      const normalized = normalizeTemplates(list);
-      setTemplates(normalized);
-
-      if (!selectedId && normalized.length > 0) {
-        setSelectedId(normalized[0].id);
+      if (!selected && Array.isArray(data) && data.length > 0) {
+        setSelected(data[0]);
       }
     } catch (err) {
       console.error("Erro ao carregar templates:", err);
@@ -245,7 +161,7 @@ export default function TemplatesPage() {
       <div className="page-header">
         <h1>Templates</h1>
         <p className="page-subtitle">
-          Espelho dos templates da sua conta WhatsApp Business.
+          Espelho dos templates aprovados na sua conta WhatsApp Business.
         </p>
 
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -289,26 +205,30 @@ export default function TemplatesPage() {
                   </td>
                 </tr>
               ) : (
-                templates.map((tpl) => {
+                templates.map((tpl: any) => {
                   const isActive = selected?.id === tpl.id;
-                  const categoryLabel =
-                    tpl.category ? CATEGORY_PTBR[tpl.category] || tpl.category : "—";
-                  const languageLabel = tpl.language ? tpl.language.toUpperCase() : "—";
-                  const statusLabel =
-                    tpl.status ? STATUS_PTBR[tpl.status] || tpl.status : "—";
+
+                  const statusKey = pickStatus(tpl);
+                  const statusLabel = STATUS_PTBR[statusKey] || STATUS_PTBR.UNKNOWN;
+
+                  const catKey = pickCategory(tpl);
+                  const categoria = CATEGORY_PTBR[catKey] || (catKey ? catKey : "—");
+
+                  const idioma = pickLanguage(tpl);
+                  const hasFlow = pickHasFlow(tpl);
 
                   return (
                     <tr
                       key={tpl.id}
                       className={"templates-row" + (isActive ? " templates-row-active" : "")}
-                      onClick={() => setSelectedId(tpl.id)}
+                      onClick={() => setSelected(tpl)}
                     >
                       <td className="cell-bold">{tpl.name}</td>
-                      <td>{categoryLabel || "—"}</td>
-                      <td>{languageLabel}</td>
+                      <td>{categoria}</td>
+                      <td>{idioma}</td>
                       <td>{statusLabel}</td>
                       <td>{tpl.quality || "—"}</td>
-                      <td>{tpl.hasFlow ? "Sim" : "—"}</td>
+                      <td>{hasFlow ? "Sim" : "—"}</td>
                       <td>{formatDateBR(tpl.updatedAt)}</td>
                     </tr>
                   );
@@ -321,7 +241,7 @@ export default function TemplatesPage() {
         {/* PREVIEW */}
         <div className="template-preview-card">
           {selected ? (
-            <TemplatePreview template={selected} />
+            <TemplatePreview template={selected as any} />
           ) : (
             <div className="page-placeholder">
               <h3 style={{ marginBottom: 8 }}>Pré-visualização</h3>
@@ -338,16 +258,17 @@ export default function TemplatesPage() {
    PREVIEW – CARTÃO WHATSAPP
 ====================================== */
 
-function TemplatePreview({ template }: { template: NormalizedTemplate }) {
-  const components = template.components || [];
+function TemplatePreview({ template }: { template: any }) {
+  const components = template.components || template?.content?.components || [];
   const header = findComponent(components, "HEADER");
   const body = findComponent(components, "BODY");
   const footer = findComponent(components, "FOOTER");
   const buttons = findComponent(components, "BUTTONS");
 
-  const categoria = template.category ? CATEGORY_PTBR[template.category] || template.category : "—";
-  const status = template.status ? STATUS_PTBR[template.status] || template.status : "—";
-  const idioma = template.language?.toUpperCase() || "—";
+  const categoria = CATEGORY_PTBR[pickCategory(template)] || "—";
+  const statusKey = pickStatus(template);
+  const status = STATUS_PTBR[statusKey] || "—";
+  const idioma = pickLanguage(template);
 
   return (
     <div className="template-preview">
@@ -367,12 +288,14 @@ function TemplatePreview({ template }: { template: NormalizedTemplate }) {
           <div className="phone-bubble phone-bubble-template">
             {header && (
               <div className="phone-header-section">
-                {((header as any).text && String((header as any).text)) ||
-                (String((header as any).format || "").toUpperCase() === "IMAGE")
+                {(header as any).text ||
+                (header as any).format === "TEXT"
+                  ? (header as any).text
+                  : (header as any).format === "IMAGE"
                   ? "[Imagem]"
-                  : String((header as any).format || "").toUpperCase() === "DOCUMENT"
+                  : (header as any).format === "DOCUMENT"
                   ? "[Documento]"
-                  : String((header as any).format || "").toUpperCase() === "VIDEO"
+                  : (header as any).format === "VIDEO"
                   ? "[Vídeo]"
                   : "[Cabeçalho]"}
               </div>
@@ -380,19 +303,17 @@ function TemplatePreview({ template }: { template: NormalizedTemplate }) {
 
             {body && (
               <div className="phone-body-section">
-                {renderBodyText(String((body as any).text || ""))}
+                {renderBodyText(((body as any).text as string) || "")}
               </div>
             )}
 
-            {footer && (
-              <div className="phone-footer-section">{String((footer as any).text || "")}</div>
-            )}
+            {footer && <div className="phone-footer-section">{(footer as any).text}</div>}
 
             {buttons && Array.isArray((buttons as any).buttons) && (
               <div className="phone-buttons">
                 {(buttons as any).buttons.map((btn: any, idx: number) => (
                   <button key={idx} className="phone-button">
-                    {btn?.text || "Botão"}
+                    {btn.text || "Botão"}
                   </button>
                 ))}
               </div>
@@ -408,10 +329,8 @@ function TemplatePreview({ template }: { template: NormalizedTemplate }) {
    HELPERS
 ====================================== */
 
-function findComponent(components: any[], type: string) {
-  return components.find(
-    (c) => c?.type && String(c.type).toUpperCase() === type.toUpperCase()
-  );
+function findComponent(components: TemplateComponent[], type: string): TemplateComponent | undefined {
+  return components.find((c) => c.type && c.type.toUpperCase() === type.toUpperCase());
 }
 
 function renderBodyText(text: string) {
