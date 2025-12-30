@@ -18,6 +18,15 @@ function resolveModel(names) {
   for (const n of names) if (prisma?.[n]) return prisma[n];
   return null;
 }
+function modelHasField(modelName, field) {
+  try {
+    const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
+    return !!m?.fields?.some((f) => f.name === field);
+  } catch {
+    // se não conseguimos inspecionar, assume true (não quebra)
+    return true;
+  }
+}
 function getTenantId(req) {
   const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
   return tid ? String(tid) : null;
@@ -28,9 +37,7 @@ function assertPrisma(res, model, candidates) {
     return false;
   }
   if (!model) {
-    res
-      .status(503)
-      .json({ ok: false, error: "prisma_model_missing", details: { expectedAnyOf: candidates } });
+    res.status(503).json({ ok: false, error: "prisma_model_missing", details: { expectedAnyOf: candidates } });
     return false;
   }
   return true;
@@ -42,12 +49,9 @@ function getMetaEnv() {
   const apiVersion = apiVersionRaw.startsWith("v") ? apiVersionRaw : `v${apiVersionRaw}`;
   return { wabaId, token, apiVersion };
 }
-function canonStatus(metaStatus) {
-  const s = String(metaStatus || "").trim();
-  return s ? s.toUpperCase() : "DRAFT";
-}
 
 const MODEL_CANDIDATES = ["outboundTemplate", "OutboundTemplate", "template", "Template"];
+const PRISMA_MODEL_NAME = "OutboundTemplate";
 
 // ======================================================
 // GET /outbound/templates
@@ -60,10 +64,12 @@ router.get("/", requireAuth, async (req, res) => {
     const delegate = prisma?.outboundTemplate || resolveModel(MODEL_CANDIDATES);
     if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
 
-    // No teu schema, channel existe e é obrigatório → sempre filtra whatsapp
+    const where = { tenantId };
+    if (modelHasField(PRISMA_MODEL_NAME, "channel")) where.channel = "whatsapp";
+
     const items = await delegate.findMany({
-      where: { tenantId, channel: "whatsapp" },
-      orderBy: { updatedAt: "desc" }
+      where,
+      orderBy: modelHasField(PRISMA_MODEL_NAME, "updatedAt") ? { updatedAt: "desc" } : undefined
     });
 
     return res.json({ ok: true, items, templates: items, count: items.length });
@@ -114,19 +120,14 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
 
     const maxPages = 10;
     for (let i = 0; i < maxPages && nextUrl; i++) {
-      const graphRes = await fetch(nextUrl.toString(), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
+      const graphRes = await fetch(nextUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
       const graphJson = await graphRes.json().catch(() => ({}));
       if (!graphRes.ok) {
         logger.error({ status: graphRes.status, graphJson }, "❌ Meta templates sync failed");
         return res.status(502).json({ ok: false, error: "meta_api_error", details: graphJson });
       }
-
       const pageData = Array.isArray(graphJson?.data) ? graphJson.data : [];
       all.push(...pageData);
-
       const next = graphJson?.paging?.next ? String(graphJson.paging.next) : "";
       nextUrl = next ? new URL(next) : null;
     }
@@ -137,8 +138,7 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
     let updated = 0;
     let skipped = 0;
 
-    const canUpsert =
-      delegate === prisma.outboundTemplate && typeof prisma.outboundTemplate?.upsert === "function";
+    const canUpsert = delegate === prisma.outboundTemplate && typeof prisma.outboundTemplate?.upsert === "function";
 
     for (const tpl of all) {
       const name = String(tpl?.name || "").trim();
@@ -147,7 +147,7 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
         continue;
       }
 
-      const status = canonStatus(tpl?.status);
+      const statusLower = tpl?.status ? String(tpl.status).toLowerCase() : "unknown";
 
       const contentObj = {
         metaTemplateId: tpl?.id || null,
@@ -160,28 +160,33 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
         qualityScore: tpl?.quality_score || null
       };
 
-      // ✅ No teu schema: tenantId + channel + name são críticos
-      const create = {
-        tenantId,
-        channel: "whatsapp",
-        name,
-        language: tpl?.language ? String(tpl.language) : null,
-        status,
-        content: contentObj,
-        metadata: { raw: tpl, metaStatus: status, syncedAt: nowIso }
-      };
+      // ✅ Campos obrigatórios do schema (garante sempre)
+      const create = { tenantId, channel: "whatsapp", name };
+      const updateData = { channel: "whatsapp" };
 
-      const updateData = {
-        channel: "whatsapp",
-        name,
-        language: tpl?.language ? String(tpl.language) : null,
-        status,
-        content: contentObj,
-        metadata: { raw: tpl, metaStatus: status, syncedAt: nowIso }
-      };
+      if (modelHasField(PRISMA_MODEL_NAME, "language")) {
+        const lang = tpl?.language ? String(tpl.language) : null;
+        create.language = lang;
+        updateData.language = lang;
+      }
+      if (modelHasField(PRISMA_MODEL_NAME, "status")) {
+        // Meta manda APPROVED/REJECTED/PAUSED/etc — vamos persistir como lower-case
+        create.status = statusLower;
+        updateData.status = statusLower;
+      }
+      if (modelHasField(PRISMA_MODEL_NAME, "content")) {
+        create.content = contentObj;
+        updateData.content = contentObj;
+      }
+      if (modelHasField(PRISMA_MODEL_NAME, "metadata")) {
+        const md = { raw: tpl, syncedAt: nowIso };
+        create.metadata = md;
+        updateData.metadata = md;
+      }
 
       try {
         if (canUpsert) {
+          // seu schema tem @@unique([tenantId, channel, name]) -> prisma gera tenantId_channel_name
           await prisma.outboundTemplate.upsert({
             where: { tenantId_channel_name: { tenantId, channel: "whatsapp", name } },
             create,
@@ -193,7 +198,6 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
             where: { tenantId, channel: "whatsapp", name },
             data: updateData
           });
-
           if (upd?.count > 0) updated++;
           else {
             await delegate.create({ data: create });
@@ -205,19 +209,18 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
         }
       } catch (e) {
         const msg = String(e?.message || e);
-        // duplicidade por unique(tenantId, channel, name)
         if (msg.includes("P2002") || msg.toLowerCase().includes("unique")) {
           skipped++;
           continue;
         }
-        logger.error({ err: msg, tplName: name }, "❌ templatesRouter sync persist failed");
+        logger.error({ err: msg, tplName: name, create }, "❌ templatesRouter sync persist failed");
         skipped++;
       }
     }
 
     const items = await delegate.findMany({
       where: { tenantId, channel: "whatsapp" },
-      orderBy: { updatedAt: "desc" }
+      orderBy: modelHasField(PRISMA_MODEL_NAME, "updatedAt") ? { updatedAt: "desc" } : undefined
     });
 
     return res.json({
