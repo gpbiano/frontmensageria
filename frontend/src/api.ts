@@ -1,10 +1,8 @@
 // frontend/src/api.ts
 // Central de chamadas da API da plataforma GP Labs
 // ✅ Completa + compat (não quebra imports antigos)
+// ✅ Multi-tenant (X-Tenant-Id) + Auth robusto + Outbound completo (WA + SMS)
 
-// ------------------------------------------------------
-// TYPES
-// ------------------------------------------------------
 import type {
   Conversation,
   ConversationStatus,
@@ -105,11 +103,14 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
     });
   }
 
+  // impede override do Authorization
   Object.keys(normalized).forEach((k) => {
     if (k.toLowerCase() === "authorization") delete normalized[k];
   });
 
-  const hasTenantHeader = Object.keys(normalized).some((k) => k.toLowerCase() === "x-tenant-id");
+  const hasTenantHeader = Object.keys(normalized).some(
+    (k) => k.toLowerCase() === "x-tenant-id"
+  );
 
   return {
     ...normalized,
@@ -222,7 +223,9 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
   // ✅ FIX GLOBAL: garante "text" em /messages
   let effectiveBody: any = (options as any).body;
 
-  const isMessagesEndpoint = /\/messages(\?|$)/.test(path);
+  const isMessagesEndpoint =
+    /\/messages(\?|$)/.test(path) ||
+    /\/conversations\/[^/]+\/messages(\?|$)/.test(path);
 
   if (isMessagesEndpoint && isPlainObject(effectiveBody)) {
     const b: any = effectiveBody;
@@ -248,10 +251,11 @@ async function request<T = any>(path: string, options: RequestInit = {}): Promis
   const body: any =
     hasBody && isPlainObject(effectiveBody) ? JSON.stringify(effectiveBody) : (effectiveBody as any);
 
-  const shouldSetJson =
-    hasBody &&
-    isPlainObject(effectiveBody) &&
-    !new Headers(options.headers || {}).has("Content-Type");
+  // ✅ Só seta JSON se for plain object (e se ainda não veio Content-Type)
+  const headersInput = new Headers(options.headers || {});
+  const hasContentType = headersInput.has("Content-Type") || headersInput.has("content-type");
+
+  const shouldSetJson = hasBody && isPlainObject(effectiveBody) && !hasContentType;
 
   const headers = buildHeaders({
     ...(shouldSetJson ? { "Content-Type": "application/json" } : {}),
@@ -474,7 +478,7 @@ export async function setPasswordWithToken(token: string, password: string) {
 }
 
 // ======================================================
-// ME / TENANT (helpers comuns)
+// ME / TENANT
 // ======================================================
 export async function fetchMe() {
   return request("/me", { method: "GET" });
@@ -869,21 +873,14 @@ export async function updateGroupMember(
   );
 }
 
-export async function deactivateGroupMember(
-  groupId: string,
-  userId: number
-): Promise<{ success: boolean; member: any }> {
+export async function deactivateGroupMember(groupId: string, userId: number) {
   return request(
     `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/deactivate`,
     { method: "PATCH" }
   );
 }
 
-export async function activateGroupMember(
-  groupId: string,
-  userId: number,
-  payload?: { role?: GroupMemberRole }
-): Promise<{ success: boolean; member: any }> {
+export async function activateGroupMember(groupId: string, userId: number, payload?: { role?: GroupMemberRole }) {
   return request(
     `/settings/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(String(userId))}/activate`,
     { method: "PATCH", body: payload || {} }
@@ -1069,6 +1066,10 @@ export async function syncTemplates(): Promise<{ ok?: boolean; success?: boolean
   return request("/outbound/templates/sync", { method: "POST" });
 }
 
+/**
+ * ✅ Backend atual geralmente cria via endpoint próprio (não /sync).
+ * - Mantém compat com respostas variáveis.
+ */
 export async function createTemplate(payload: {
   name: string;
   category: string;
@@ -1087,7 +1088,7 @@ export async function createTemplate(payload: {
 // ======================================================
 export async function fetchAssets(): Promise<MediaItem[]> {
   const data = await request<any>("/outbound/assets");
-  return Array.isArray(data) ? (data as MediaItem[]) : [];
+  return Array.isArray(data) ? (data as MediaItem[]) : unwrapList<MediaItem>(data);
 }
 
 export async function uploadAsset(file: File): Promise<MediaItem> {
@@ -1101,7 +1102,7 @@ export async function deleteAsset(id: string | number): Promise<{ success: boole
 }
 
 // ======================================================
-// OUTBOUND — CAMPANHAS (WhatsApp)
+// OUTBOUND — CAMPANHAS (WhatsApp) — Compat
 // ======================================================
 export type CampaignStatus = "draft" | "ready" | "sending" | "done" | "failed";
 
@@ -1117,10 +1118,8 @@ export interface CampaignResultItem {
   status: "sent" | "failed" | "delivered" | "read";
   waMessageId?: string | null;
   updatedAt?: string | null;
-
   errorCode?: string | number | null;
   errorMessage?: string | null;
-
   error?: any;
 }
 
@@ -1140,7 +1139,7 @@ export interface CampaignRecord {
 
 export async function fetchCampaigns(): Promise<CampaignRecord[]> {
   const data = await request<any>("/outbound/campaigns");
-  return Array.isArray(data) ? (data as CampaignRecord[]) : [];
+  return Array.isArray(data) ? (data as CampaignRecord[]) : unwrapList<CampaignRecord>(data);
 }
 
 export async function fetchCampaignById(campaignId: string): Promise<CampaignRecord> {
@@ -1214,7 +1213,6 @@ export async function fetchOptOut(params?: {
   to?: string;
 }) {
   const qs = new URLSearchParams();
-
   if (params?.page) qs.set("page", String(params.page));
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.search) qs.set("search", params.search);
@@ -1321,7 +1319,13 @@ export async function deleteSmsTemplate(id: string) {
 // ======================================================
 // SMS CAMPAIGNS
 // ======================================================
-export type SmsCampaignStatus = "draft" | "running" | "paused" | "canceled" | "finished" | "failed";
+export type SmsCampaignStatus =
+  | "draft"
+  | "running"
+  | "paused"
+  | "canceled"
+  | "finished"
+  | "failed";
 
 export type SmsCampaignItem = {
   id: string;
@@ -1330,7 +1334,6 @@ export type SmsCampaignItem = {
   name: string;
   status: SmsCampaignStatus | string;
 
-  // dependendo do schema do backend:
   audience?: any;
   audienceCount?: number;
 
@@ -1367,7 +1370,10 @@ export async function deleteSmsCampaign(id: string) {
   const path = `/outbound/sms-campaigns/${encodeURIComponent(id)}`;
   return requestWithFallback(
     () => request(path, { method: "DELETE" }),
-    [() => request(`${path}/delete`, { method: "POST" }), () => request(`${path}/cancel`, { method: "PATCH" })]
+    [
+      () => request(`${path}/delete`, { method: "POST" }),
+      () => request(`${path}/cancel`, { method: "PATCH" })
+    ]
   );
 }
 
@@ -1418,7 +1424,7 @@ export async function downloadConversationHistoryExcel(conversationId: string) {
 }
 
 // ======================================================
-// RAW HELPERS EXPORT (às vezes usado em debug/admin)
+// RAW HELPERS EXPORT (debug/admin)
 // ======================================================
 export const __internal = {
   API_BASE,

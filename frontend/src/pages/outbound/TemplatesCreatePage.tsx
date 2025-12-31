@@ -1,6 +1,6 @@
 // frontend/src/pages/outbound/TemplatesCreatePage.tsx
 import { useMemo, useState, type FormEvent } from "react";
-import { createTemplate } from "../../api";
+import { createTemplate, uploadAsset } from "../../api";
 import type { Template, TemplateComponent } from "../../types";
 import "../../styles/templates-create.css";
 
@@ -42,6 +42,38 @@ function filenameSafe(s: string) {
     .slice(0, 80);
 }
 
+function isPublicUrl(url: string) {
+  const u = String(url || "").trim();
+  if (!u) return false;
+  return /^https?:\/\/.+/i.test(u);
+}
+
+function acceptByHeaderFormat(fmt: HeaderFormat) {
+  switch (fmt) {
+    case "IMAGE":
+      return "image/*";
+    case "VIDEO":
+      return "video/*";
+    case "DOCUMENT":
+      return ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    default:
+      return "";
+  }
+}
+
+function labelByHeaderFormat(fmt: HeaderFormat) {
+  switch (fmt) {
+    case "IMAGE":
+      return "Imagem";
+    case "VIDEO":
+      return "Vídeo";
+    case "DOCUMENT":
+      return "Documento";
+    default:
+      return "Arquivo";
+  }
+}
+
 interface TemplatesCreatePageProps {
   onBack?: () => void;
 }
@@ -60,6 +92,8 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
 
   // Header mídia (Meta usa example.header_handle)
   const [headerMediaUrl, setHeaderMediaUrl] = useState("");
+  const [headerMediaUploading, setHeaderMediaUploading] = useState(false);
+  const [headerMediaName, setHeaderMediaName] = useState<string>("");
 
   // BODY
   const [bodyText, setBodyText] = useState("Olá {{1}}, sua solicitação está em andamento.");
@@ -77,7 +111,6 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
   const [success, setSuccess] = useState<string | null>(null);
 
   const bodyVars = useMemo(() => extractOrderedVars(bodyText), [bodyText]);
-
   const headerHasVar = useMemo(() => /\{\{\d+\}\}/.test(headerText), [headerText]);
 
   const showHeaderTextFields = headerEnabled && headerFormat === "TEXT";
@@ -100,8 +133,8 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
           type === "QUICK_REPLY"
             ? "Responder"
             : type === "URL"
-              ? "Abrir link"
-              : "Ligar"
+            ? "Abrir link"
+            : "Ligar"
       }
     ]);
   }
@@ -126,14 +159,9 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
   }
 
   function downloadVariablesCsv() {
-    // CSV (Excel friendly) com ; e UTF-8
-    // Inclui:
-    // - header_text var (se header TEXT com var)
-    // - body_text vars (sempre que existir)
     const rows: Array<{ scope: string; variable: string; example: string }> = [];
 
     if (headerEnabled && headerFormat === "TEXT" && headerHasVar) {
-      // Meta permite 1 variável no header_text
       rows.push({
         scope: "header_text",
         variable: "{{1}}",
@@ -172,6 +200,50 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
     URL.revokeObjectURL(url);
   }
 
+  async function handleHeaderFileSelected(file: File | null) {
+    setError(null);
+    setSuccess(null);
+
+    if (!file) return;
+
+    // validações simples (opcional, mas evita erros bobos)
+    if (headerFormat === "IMAGE" && !file.type.startsWith("image/")) {
+      setError("Selecione um arquivo de imagem (png/jpg/webp etc).");
+      return;
+    }
+    if (headerFormat === "VIDEO" && !file.type.startsWith("video/")) {
+      setError("Selecione um arquivo de vídeo (mp4/mov etc).");
+      return;
+    }
+
+    try {
+      setHeaderMediaUploading(true);
+      setHeaderMediaName(file.name);
+
+      const asset: any = await uploadAsset(file);
+
+      const mediaUrl =
+        asset?.url ||
+        asset?.publicUrl ||
+        asset?.link ||
+        asset?.mediaUrl ||
+        asset?.downloadUrl ||
+        "";
+
+      if (!String(mediaUrl).trim()) {
+        throw new Error("Upload do arquivo não retornou uma URL pública (url/publicUrl/link).");
+      }
+
+      setHeaderMediaUrl(String(mediaUrl).trim());
+      setSuccess(`Arquivo enviado: ${file.name}`);
+    } catch (err: any) {
+      console.error("Erro ao enviar arquivo do cabeçalho:", err);
+      setError(err?.message || "Erro ao enviar arquivo. Tente novamente.");
+    } finally {
+      setHeaderMediaUploading(false);
+    }
+  }
+
   function buildComponents(): any[] {
     const components: any[] = [];
 
@@ -185,7 +257,6 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
             text: headerText.trim()
           };
 
-          // Exemplo obrigatório se tiver variável no header
           if (headerHasVar && headerExample.trim()) {
             headerComp.example = {
               header_text: [headerExample.trim()]
@@ -195,13 +266,11 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
           components.push(headerComp);
         }
       } else {
-        // MEDIA (IMAGE/VIDEO/DOCUMENT)
         const headerComp: any = {
           type: "HEADER",
           format: headerFormat
         };
 
-        // Meta: example.header_handle: [ "https://..." ] (URL pública)
         if (headerMediaUrl.trim()) {
           headerComp.example = {
             header_handle: [headerMediaUrl.trim()]
@@ -293,16 +362,26 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
       return;
     }
 
+    if (headerMediaUploading) {
+      setError("Aguarde o upload do arquivo do cabeçalho terminar.");
+      return;
+    }
+
     // validações Meta (práticas)
     if (headerEnabled && headerFormat === "TEXT" && headerHasVar && !headerExample.trim()) {
       setError("Cabeçalho com variável exige exemplo (Meta).");
       return;
     }
 
-    if (headerEnabled && headerFormat !== "TEXT" && !headerMediaUrl.trim()) {
-      // na prática, Meta exige exemplo pro header mídia no create
-      setError("Para cabeçalho com mídia, informe uma URL pública de exemplo do arquivo.");
-      return;
+    if (headerEnabled && headerFormat !== "TEXT") {
+      if (!headerMediaUrl.trim()) {
+        setError("Para cabeçalho com mídia, envie um arquivo (ou informe uma URL pública).");
+        return;
+      }
+      if (!isPublicUrl(headerMediaUrl)) {
+        setError("A URL do arquivo do cabeçalho deve começar com http:// ou https:// (acessível publicamente).");
+        return;
+      }
     }
 
     if (bodyVars.length > 0) {
@@ -325,14 +404,11 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
 
       const result = await createTemplate(payload);
 
-      // Não confiar cegamente no formato da resposta
       let templateName = name.trim();
       if (result && typeof result === "object") {
         const r: any = result;
         const maybeName = r.name ?? r.template?.name ?? r.data?.name ?? r.message_template?.name;
-        if (typeof maybeName === "string") {
-          templateName = maybeName;
-        }
+        if (typeof maybeName === "string") templateName = maybeName;
       }
 
       setSuccess(`Modelo "${templateName}" criado/enviado para análise com sucesso!`);
@@ -343,6 +419,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
       setHeaderText("");
       setHeaderExample("");
       setHeaderMediaUrl("");
+      setHeaderMediaName("");
 
       setFooterText("");
       setButtons([]);
@@ -355,7 +432,6 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
     }
   }
 
-  // Template "fake" só para preview
   const draftTemplate: Template = {
     id: 0,
     name: name || "seu_template_name",
@@ -466,16 +542,23 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                       <label>Tipo do cabeçalho</label>
                       <select
                         value={headerFormat}
-                        onChange={(e) => setHeaderFormat(e.target.value as HeaderFormat)}
+                        onChange={(e) => {
+                          const v = e.target.value as HeaderFormat;
+                          setHeaderFormat(v);
+
+                          // limpa campos quando alterna tipo
+                          setHeaderText("");
+                          setHeaderExample("");
+                          setHeaderMediaUrl("");
+                          setHeaderMediaName("");
+                        }}
                       >
                         <option value="TEXT">Texto</option>
                         <option value="IMAGE">Imagem</option>
                         <option value="VIDEO">Vídeo</option>
                         <option value="DOCUMENT">Documento</option>
                       </select>
-                      <small>
-                        Se escolher mídia, a Meta exige um exemplo de arquivo (URL pública).
-                      </small>
+                      <small>Se escolher mídia, a Meta exige um exemplo (URL pública) — aqui a gente sobe e já preenche.</small>
                     </div>
                   </div>
 
@@ -513,7 +596,33 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                   {showHeaderMediaFields && (
                     <>
                       <div className="tc-field">
-                        <label>URL pública do arquivo (exemplo para a Meta)</label>
+                        <label>{`Enviar ${labelByHeaderFormat(headerFormat)} (exemplo para a Meta)`}</label>
+                        <input
+                          type="file"
+                          accept={acceptByHeaderFormat(headerFormat)}
+                          disabled={headerMediaUploading}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0] || null;
+                            void handleHeaderFileSelected(f);
+
+                            // permite selecionar o mesmo arquivo novamente
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                        <small>
+                          Ao selecionar, o arquivo é enviado para a sua galeria (assets) e a URL pública é usada no{" "}
+                          <code>example.header_handle</code>.
+                        </small>
+
+                        {headerMediaUploading && (
+                          <div style={{ marginTop: 8, opacity: 0.9 }}>
+                            Enviando arquivo{headerMediaName ? `: ${headerMediaName}` : ""}...
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="tc-field">
+                        <label>URL pública do arquivo (auto preenchida — você também pode colar manualmente)</label>
                         <input
                           type="text"
                           value={headerMediaUrl}
@@ -540,6 +649,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
               <div className="tc-block-body">
                 <div className="tc-field">
                   <textarea rows={4} value={bodyText} onChange={(e) => setBodyText(e.target.value)} />
+
                   <div className="tc-toolbar">
                     <div className="tc-toolbar-left">
                       <button type="button" className="tc-toolbar-btn" onClick={handleAddVariableToBody}>
@@ -596,6 +706,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                 <label>Rodapé (opcional)</label>
                 <span className="tc-char-counter">{footerText.length}/60</span>
               </div>
+
               <div className="tc-block-body">
                 <div className="tc-field">
                   <input
@@ -670,6 +781,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                               placeholder="https://..."
                             />
                           </div>
+
                           <div className="tc-field">
                             <label>
                               Exemplo para variável da URL (se usar <code>{"{{1}}"}</code>)
@@ -711,11 +823,11 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
           {success && <div className="tc-alert tc-alert-success">{success}</div>}
 
           <div className="tc-footer-actions">
-            <button type="button" className="btn-secondary" onClick={handleBack} disabled={saving}>
+            <button type="button" className="btn-secondary" onClick={handleBack} disabled={saving || headerMediaUploading}>
               Voltar
             </button>
-            <button type="submit" className="btn-primary" disabled={saving}>
-              {saving ? "Enviando..." : "Enviar para análise"}
+            <button type="submit" className="btn-primary" disabled={saving || headerMediaUploading}>
+              {headerMediaUploading ? "Enviando arquivo..." : saving ? "Enviando..." : "Enviar para análise"}
             </button>
           </div>
         </form>
@@ -764,11 +876,7 @@ function TemplateCreatePreview({ template }: { template: Template }) {
                 </div>
               )}
 
-              {footer && (
-                <div className="tc-wa-footer-text">
-                  {(footer as any).text}
-                </div>
-              )}
+              {footer && <div className="tc-wa-footer-text">{(footer as any).text}</div>}
 
               {buttons && Array.isArray((buttons as any).buttons) && (
                 <div className="tc-wa-buttons">
@@ -787,13 +895,8 @@ function TemplateCreatePreview({ template }: { template: Template }) {
   );
 }
 
-function findComponent(
-  components: TemplateComponent[],
-  type: string
-): TemplateComponent | undefined {
-  return components.find(
-    (c) => c.type && c.type.toUpperCase() === type.toUpperCase()
-  );
+function findComponent(components: TemplateComponent[], type: string): TemplateComponent | undefined {
+  return components.find((c) => c.type && c.type.toUpperCase() === type.toUpperCase());
 }
 
 function renderBodyText(text: string) {
