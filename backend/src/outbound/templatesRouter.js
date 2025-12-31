@@ -1,5 +1,5 @@
 // backend/src/outbound/templatesRouter.js
-// ✅ PRISMA-FIRST (SEM data.json)
+// ✅ PRISMA-FIRST (compatível com schema atual do OutboundTemplate)
 // Base: /outbound/templates
 
 import express from "express";
@@ -14,34 +14,23 @@ const router = express.Router();
 /* =========================
  * Helpers
  * ========================= */
-function resolveModel(names) {
-  for (const n of names) if (prisma?.[n]) return prisma[n];
-  return null;
-}
-function modelHasField(modelName, field) {
-  try {
-    const m = prisma?._dmmf?.datamodel?.models?.find((x) => x.name === modelName);
-    return !!m?.fields?.some((f) => f.name === field);
-  } catch {
-    // se não conseguimos inspecionar, assume true (não quebra)
-    return true;
-  }
-}
 function getTenantId(req) {
-  const tid = req.tenant?.id || req.tenantId || req.user?.tenantId || null;
-  return tid ? String(tid) : null;
+  const tid = req?.tenant?.id || req?.tenantId || req?.user?.tenantId || null;
+  return tid ? String(tid).trim() : null;
 }
-function assertPrisma(res, model, candidates) {
+
+function assertPrisma(res) {
   if (!prisma || typeof prisma.$queryRaw !== "function") {
     res.status(503).json({ ok: false, error: "prisma_not_ready" });
     return false;
   }
-  if (!model) {
-    res.status(503).json({ ok: false, error: "prisma_model_missing", details: { expectedAnyOf: candidates } });
+  if (!prisma?.outboundTemplate) {
+    res.status(503).json({ ok: false, error: "prisma_model_missing", details: { expected: "OutboundTemplate" } });
     return false;
   }
   return true;
 }
+
 function getMetaEnv() {
   const wabaId = String(process.env.WABA_ID || process.env.WHATSAPP_WABA_ID || "").trim();
   const token = String(process.env.WHATSAPP_TOKEN || process.env.WABA_TOKEN || process.env.META_TOKEN || "").trim();
@@ -50,45 +39,97 @@ function getMetaEnv() {
   return { wabaId, token, apiVersion };
 }
 
-const MODEL_CANDIDATES = ["outboundTemplate", "OutboundTemplate", "template", "Template"];
-const PRISMA_MODEL_NAME = "OutboundTemplate";
+function safeStr(x) {
+  return String(x ?? "").trim();
+}
 
-// ======================================================
-// GET /outbound/templates
-// ======================================================
+function safeObj(x) {
+  return x && typeof x === "object" ? x : {};
+}
+
+function extractBodyTextFromComponents(components) {
+  const arr = Array.isArray(components) ? components : [];
+  const body = arr.find((c) => String(c?.type || "").toUpperCase() === "BODY");
+  return safeStr(body?.text) || "";
+}
+
+function normalizeQualityFromTpl(tpl) {
+  // Meta pode variar: quality_score normalmente é objeto
+  // Tentamos vários caminhos e guardamos o "melhor"
+  const qs = safeObj(tpl?.quality_score);
+  const q =
+    safeStr(qs?.score) ||
+    safeStr(qs?.quality_score) ||
+    safeStr(qs?.rating) ||
+    safeStr(tpl?.quality_rating) ||
+    "";
+  return q || null;
+}
+
+// Para UI: devolve campos derivados mesmo sem existirem no schema
+function enrichTemplateForUi(item) {
+  const content = safeObj(item?.content);
+  const raw = safeObj(content?.raw || content); // aceitamos content como raw completo
+  const components = Array.isArray(raw?.components) ? raw.components : Array.isArray(content?.components) ? content.components : [];
+
+  const category = safeStr(raw?.category || content?.category) || null;
+  const rejectedReason = safeStr(raw?.rejected_reason || content?.rejectedReason) || null;
+
+  const quality =
+    normalizeQualityFromTpl(raw) ||
+    normalizeQualityFromTpl(content) ||
+    (safeStr(safeObj(content?.qualityScore)?.score) ? safeStr(safeObj(content?.qualityScore)?.score) : null);
+
+  const metaTemplateId = safeStr(raw?.id || content?.metaTemplateId) || null;
+
+  const contentText = safeStr(item?.contentText) || extractBodyTextFromComponents(components);
+
+  return {
+    ...item,
+    // campos extras pra UI (não persistidos como colunas)
+    metaTemplateId,
+    category,
+    quality,
+    rejectedReason,
+    contentText,
+    // ajuda a UI se quiser renderizar components
+    components
+  };
+}
+
+/* =========================
+ * GET /outbound/templates
+ * ========================= */
 router.get("/", requireAuth, async (req, res) => {
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
+    if (!assertPrisma(res)) return;
 
-    const delegate = prisma?.outboundTemplate || resolveModel(MODEL_CANDIDATES);
-    if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
-
-    const where = { tenantId };
-    if (modelHasField(PRISMA_MODEL_NAME, "channel")) where.channel = "whatsapp";
-
-    const items = await delegate.findMany({
-      where,
-      orderBy: modelHasField(PRISMA_MODEL_NAME, "updatedAt") ? { updatedAt: "desc" } : undefined
+    // Seu schema tem channel obrigatório, então filtra direto
+    const items = await prisma.outboundTemplate.findMany({
+      where: { tenantId, channel: "whatsapp" },
+      orderBy: { updatedAt: "desc" }
     });
 
-    return res.json({ ok: true, items, templates: items, count: items.length });
+    // ✅ devolve enriquecido pra UI
+    const enriched = items.map(enrichTemplateForUi);
+
+    return res.json({ ok: true, items: enriched, templates: enriched, count: enriched.length });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ templatesRouter GET / failed");
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
-// ======================================================
-// POST /outbound/templates/sync
-// ======================================================
+/* =========================
+ * POST /outbound/templates/sync
+ * ========================= */
 router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, res) => {
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_not_resolved" });
-
-    const delegate = prisma?.outboundTemplate || resolveModel(MODEL_CANDIDATES);
-    if (!assertPrisma(res, delegate, MODEL_CANDIDATES)) return;
+    if (!assertPrisma(res)) return;
 
     const { wabaId, token, apiVersion } = getMetaEnv();
     if (!wabaId || !token) {
@@ -122,12 +163,15 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
     for (let i = 0; i < maxPages && nextUrl; i++) {
       const graphRes = await fetch(nextUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
       const graphJson = await graphRes.json().catch(() => ({}));
+
       if (!graphRes.ok) {
         logger.error({ status: graphRes.status, graphJson }, "❌ Meta templates sync failed");
         return res.status(502).json({ ok: false, error: "meta_api_error", details: graphJson });
       }
+
       const pageData = Array.isArray(graphJson?.data) ? graphJson.data : [];
       all.push(...pageData);
+
       const next = graphJson?.paging?.next ? String(graphJson.paging.next) : "";
       nextUrl = next ? new URL(next) : null;
     }
@@ -138,73 +182,76 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
     let updated = 0;
     let skipped = 0;
 
-    const canUpsert = delegate === prisma.outboundTemplate && typeof prisma.outboundTemplate?.upsert === "function";
-
     for (const tpl of all) {
-      const name = String(tpl?.name || "").trim();
+      const name = safeStr(tpl?.name);
       if (!name) {
         skipped++;
         continue;
       }
 
-      const statusLower = tpl?.status ? String(tpl.status).toLowerCase() : "unknown";
+      const channel = "whatsapp";
 
-      const contentObj = {
-        metaTemplateId: tpl?.id || null,
+      const rawStatus = safeStr(tpl?.status) || "UNKNOWN";
+      const statusLower = rawStatus.toLowerCase(); // approved / rejected / paused / etc.
+
+      const language = tpl?.language ? String(tpl.language) : null;
+
+      const components = Array.isArray(tpl?.components) ? tpl.components : [];
+      const contentText = extractBodyTextFromComponents(components);
+
+      // ✅ content vai com TUDO que a UI precisa (categoria, quality, components, etc.)
+      // Guardamos também "raw" pra facilitar debug e compatibilidade futura
+      const content = {
+        raw: tpl,
+        id: tpl?.id || null,
+        name,
         category: tpl?.category || null,
         language: tpl?.language || null,
         status: tpl?.status || null,
-        rejectedReason: tpl?.rejected_reason || null,
-        components: Array.isArray(tpl?.components) ? tpl.components : [],
-        latestTemplate: tpl?.latest_template || null,
-        qualityScore: tpl?.quality_score || null
+        rejected_reason: tpl?.rejected_reason || null,
+        quality_score: tpl?.quality_score || null,
+        components,
+        latest_template: tpl?.latest_template || null,
+        syncedAt: nowIso
       };
 
-      // ✅ Campos obrigatórios do schema (garante sempre)
-      const create = { tenantId, channel: "whatsapp", name };
-      const updateData = { channel: "whatsapp" };
-
-      if (modelHasField(PRISMA_MODEL_NAME, "language")) {
-        const lang = tpl?.language ? String(tpl.language) : null;
-        create.language = lang;
-        updateData.language = lang;
-      }
-      if (modelHasField(PRISMA_MODEL_NAME, "status")) {
-        // Meta manda APPROVED/REJECTED/PAUSED/etc — vamos persistir como lower-case
-        create.status = statusLower;
-        updateData.status = statusLower;
-      }
-      if (modelHasField(PRISMA_MODEL_NAME, "content")) {
-        create.content = contentObj;
-        updateData.content = contentObj;
-      }
-      if (modelHasField(PRISMA_MODEL_NAME, "metadata")) {
-        const md = { raw: tpl, syncedAt: nowIso };
-        create.metadata = md;
-        updateData.metadata = md;
-      }
+      const metadata = {
+        syncedAt: nowIso,
+        source: "meta_graph",
+        wabaId
+      };
 
       try {
-        if (canUpsert) {
-          // seu schema tem @@unique([tenantId, channel, name]) -> prisma gera tenantId_channel_name
-          await prisma.outboundTemplate.upsert({
-            where: { tenantId_channel_name: { tenantId, channel: "whatsapp", name } },
-            create,
-            update: updateData
+        // ✅ upsert pelo unique composto do schema: tenantId + channel + name
+        // Prisma gera o input "tenantId_channel_name"
+        // (se seu client estiver gerando outro nome, me avisa que eu ajusto)
+        const exists = await prisma.outboundTemplate.findFirst({ where: { tenantId, channel, name } });
+
+        if (exists?.id) {
+          await prisma.outboundTemplate.update({
+            where: { id: exists.id },
+            data: {
+              language,
+              status: statusLower,
+              content,
+              contentText,
+              metadata
+            }
           });
           updated++;
-        } else if (typeof delegate.updateMany === "function") {
-          const upd = await delegate.updateMany({
-            where: { tenantId, channel: "whatsapp", name },
-            data: updateData
-          });
-          if (upd?.count > 0) updated++;
-          else {
-            await delegate.create({ data: create });
-            created++;
-          }
         } else {
-          await delegate.create({ data: create });
+          await prisma.outboundTemplate.create({
+            data: {
+              tenantId,
+              channel,
+              name,
+              language,
+              status: statusLower,
+              content,
+              contentText,
+              metadata
+            }
+          });
           created++;
         }
       } catch (e) {
@@ -213,15 +260,17 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
           skipped++;
           continue;
         }
-        logger.error({ err: msg, tplName: name, create }, "❌ templatesRouter sync persist failed");
+        logger.error({ err: msg, tplName: name }, "❌ templatesRouter sync persist failed");
         skipped++;
       }
     }
 
-    const items = await delegate.findMany({
+    const items = await prisma.outboundTemplate.findMany({
       where: { tenantId, channel: "whatsapp" },
-      orderBy: modelHasField(PRISMA_MODEL_NAME, "updatedAt") ? { updatedAt: "desc" } : undefined
+      orderBy: { updatedAt: "desc" }
     });
+
+    const enriched = items.map(enrichTemplateForUi);
 
     return res.json({
       ok: true,
@@ -229,9 +278,9 @@ router.post("/sync", requireAuth, requireRole("admin", "manager"), async (req, r
       created,
       updated,
       skipped,
-      items,
-      templates: items,
-      count: items.length
+      items: enriched,
+      templates: enriched,
+      count: enriched.length
     });
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ templatesRouter POST /sync failed");
