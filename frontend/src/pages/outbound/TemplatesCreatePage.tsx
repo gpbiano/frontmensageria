@@ -5,6 +5,7 @@ import type { Template, TemplateComponent } from "../../types";
 import "../../styles/templates-create.css";
 
 type ButtonType = "QUICK_REPLY" | "URL" | "PHONE_NUMBER";
+type HeaderFormat = "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
 
 interface EditableButton {
   id: number;
@@ -32,6 +33,15 @@ function extractOrderedVars(text: string): number[] {
   return indices.sort((a, b) => a - b);
 }
 
+function filenameSafe(s: string) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 80);
+}
+
 interface TemplatesCreatePageProps {
   onBack?: () => void;
 }
@@ -44,13 +54,15 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
 
   // HEADER
   const [headerEnabled, setHeaderEnabled] = useState(false);
+  const [headerFormat, setHeaderFormat] = useState<HeaderFormat>("TEXT");
   const [headerText, setHeaderText] = useState("");
   const [headerExample, setHeaderExample] = useState("");
 
+  // Header mídia (Meta usa example.header_handle)
+  const [headerMediaUrl, setHeaderMediaUrl] = useState("");
+
   // BODY
-  const [bodyText, setBodyText] = useState(
-    "Olá {{1}}, sua solicitação está em andamento."
-  );
+  const [bodyText, setBodyText] = useState("Olá {{1}}, sua solicitação está em andamento.");
   const [bodyExamples, setBodyExamples] = useState<BodyExamples>({});
 
   // FOOTER
@@ -65,10 +77,11 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
   const [success, setSuccess] = useState<string | null>(null);
 
   const bodyVars = useMemo(() => extractOrderedVars(bodyText), [bodyText]);
-  const headerHasVar = useMemo(
-    () => /\{\{\d+\}\}/.test(headerText),
-    [headerText]
-  );
+
+  const headerHasVar = useMemo(() => /\{\{\d+\}\}/.test(headerText), [headerText]);
+
+  const showHeaderTextFields = headerEnabled && headerFormat === "TEXT";
+  const showHeaderMediaFields = headerEnabled && headerFormat !== "TEXT";
 
   function handleBodyExampleChange(index: number, value: string) {
     setBodyExamples((prev) => ({
@@ -87,8 +100,8 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
           type === "QUICK_REPLY"
             ? "Responder"
             : type === "URL"
-            ? "Abrir link"
-            : "Ligar"
+              ? "Abrir link"
+              : "Ligar"
       }
     ]);
   }
@@ -112,24 +125,91 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
     else window.history.back();
   }
 
+  function downloadVariablesCsv() {
+    // CSV (Excel friendly) com ; e UTF-8
+    // Inclui:
+    // - header_text var (se header TEXT com var)
+    // - body_text vars (sempre que existir)
+    const rows: Array<{ scope: string; variable: string; example: string }> = [];
+
+    if (headerEnabled && headerFormat === "TEXT" && headerHasVar) {
+      // Meta permite 1 variável no header_text
+      rows.push({
+        scope: "header_text",
+        variable: "{{1}}",
+        example: headerExample || ""
+      });
+    }
+
+    if (bodyVars.length > 0) {
+      for (const idx of bodyVars) {
+        rows.push({
+          scope: "body_text",
+          variable: `{{${idx}}}`,
+          example: bodyExamples[idx] || ""
+        });
+      }
+    }
+
+    if (rows.length === 0) {
+      setError("Nenhuma variável encontrada para exportar. Adicione {{1}}, {{2}}... no corpo (ou no cabeçalho).");
+      return;
+    }
+
+    const header = ["scope", "variable", "example"].join(";");
+    const lines = rows.map((r) => [r.scope, r.variable, String(r.example || "").replace(/\r?\n/g, " ")].join(";"));
+    const csv = [header, ...lines].join("\n");
+
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `template_variables_${filenameSafe(name || "modelo")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   function buildComponents(): any[] {
     const components: any[] = [];
 
     // HEADER
-    if (headerEnabled && headerText.trim()) {
-      const headerComp: any = {
-        type: "HEADER",
-        format: "TEXT",
-        text: headerText.trim()
-      };
+    if (headerEnabled) {
+      if (headerFormat === "TEXT") {
+        if (headerText.trim()) {
+          const headerComp: any = {
+            type: "HEADER",
+            format: "TEXT",
+            text: headerText.trim()
+          };
 
-      if (headerHasVar && headerExample.trim()) {
-        headerComp.example = {
-          header_text: [headerExample.trim()]
+          // Exemplo obrigatório se tiver variável no header
+          if (headerHasVar && headerExample.trim()) {
+            headerComp.example = {
+              header_text: [headerExample.trim()]
+            };
+          }
+
+          components.push(headerComp);
+        }
+      } else {
+        // MEDIA (IMAGE/VIDEO/DOCUMENT)
+        const headerComp: any = {
+          type: "HEADER",
+          format: headerFormat
         };
-      }
 
-      components.push(headerComp);
+        // Meta: example.header_handle: [ "https://..." ] (URL pública)
+        if (headerMediaUrl.trim()) {
+          headerComp.example = {
+            header_handle: [headerMediaUrl.trim()]
+          };
+        }
+
+        components.push(headerComp);
+      }
     }
 
     // BODY – obrigatório
@@ -204,15 +284,33 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
     }
 
     if (!/^[a-z0-9_]+$/.test(name.trim())) {
-      setError(
-        "O nome do modelo só pode conter letras minúsculas, números e underline (_). Sem espaços."
-      );
+      setError("O nome do modelo só pode conter letras minúsculas, números e underline (_). Sem espaços.");
       return;
     }
 
     if (!bodyText.trim()) {
       setError("O corpo da mensagem é obrigatório.");
       return;
+    }
+
+    // validações Meta (práticas)
+    if (headerEnabled && headerFormat === "TEXT" && headerHasVar && !headerExample.trim()) {
+      setError("Cabeçalho com variável exige exemplo (Meta).");
+      return;
+    }
+
+    if (headerEnabled && headerFormat !== "TEXT" && !headerMediaUrl.trim()) {
+      // na prática, Meta exige exemplo pro header mídia no create
+      setError("Para cabeçalho com mídia, informe uma URL pública de exemplo do arquivo.");
+      return;
+    }
+
+    if (bodyVars.length > 0) {
+      const missing = bodyVars.filter((idx) => !(bodyExamples[idx] || "").trim());
+      if (missing.length > 0) {
+        setError(`Preencha exemplos para as variáveis do corpo: ${missing.map((i) => `{{${i}}}`).join(", ")}`);
+        return;
+      }
     }
 
     const payload = {
@@ -231,11 +329,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
       let templateName = name.trim();
       if (result && typeof result === "object") {
         const r: any = result;
-        const maybeName =
-          r.name ??
-          r.template?.name ??
-          r.data?.name ??
-          r.message_template?.name;
+        const maybeName = r.name ?? r.template?.name ?? r.data?.name ?? r.message_template?.name;
         if (typeof maybeName === "string") {
           templateName = maybeName;
         }
@@ -245,17 +339,17 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
 
       // limpa apenas estados sensíveis; mantém categoria/idioma/nome
       setHeaderEnabled(false);
+      setHeaderFormat("TEXT");
       setHeaderText("");
       setHeaderExample("");
+      setHeaderMediaUrl("");
+
       setFooterText("");
       setButtons([]);
       setBodyExamples({});
     } catch (err: any) {
       console.error("Erro ao criar template:", err);
-      setError(
-        err?.message ||
-          "Erro ao criar modelo. Verifique os campos e tente novamente."
-      );
+      setError(err?.message || "Erro ao criar modelo. Verifique os campos e tente novamente.");
     } finally {
       setSaving(false);
     }
@@ -287,11 +381,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
         </div>
 
         <div className="header-actions">
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={handleBack}
-          >
+          <button type="button" className="btn-ghost" onClick={handleBack}>
             Voltar
           </button>
         </div>
@@ -310,10 +400,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                 <button
                   key={cat}
                   type="button"
-                  className={
-                    "tc-category-pill" +
-                    (category === cat ? " tc-category-pill-active" : "")
-                  }
+                  className={"tc-category-pill" + (category === cat ? " tc-category-pill-active" : "")}
                   onClick={() => setCategory(cat)}
                 >
                   {cat === "MARKETING" && "Marketing"}
@@ -338,17 +425,13 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                   placeholder="ex: gplabs_confirmacao_pedido"
                 />
                 <small>
-                  Apenas letras minúsculas, números e underline. Ex:{" "}
-                  <code>gplabs_status_pedido</code>
+                  Apenas letras minúsculas, números e underline. Ex: <code>gplabs_status_pedido</code>
                 </small>
               </div>
 
               <div className="tc-field tc-field-small">
                 <label>Idioma</label>
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                >
+                <select value={language} onChange={(e) => setLanguage(e.target.value)}>
                   {LANGUAGES.map((lang) => (
                     <option key={lang.value} value={lang.value}>
                       {lang.label}
@@ -375,34 +458,73 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                   Cabeçalho (opcional)
                 </label>
               </div>
+
               {headerEnabled && (
                 <div className="tc-block-body">
-                  <div className="tc-field">
-                    <label>Texto do cabeçalho</label>
-                    <input
-                      type="text"
-                      value={headerText}
-                      maxLength={60}
-                      onChange={(e) => setHeaderText(e.target.value)}
-                      placeholder="ex.: Pedido {{1}} confirmado"
-                    />
-                    <small>
-                      Máx. 60 caracteres. Pode ter 1 variável{" "}
-                      <code>{"{{1}}"}</code>.
-                    </small>
+                  <div className="tc-row">
+                    <div className="tc-field tc-field-small">
+                      <label>Tipo do cabeçalho</label>
+                      <select
+                        value={headerFormat}
+                        onChange={(e) => setHeaderFormat(e.target.value as HeaderFormat)}
+                      >
+                        <option value="TEXT">Texto</option>
+                        <option value="IMAGE">Imagem</option>
+                        <option value="VIDEO">Vídeo</option>
+                        <option value="DOCUMENT">Documento</option>
+                      </select>
+                      <small>
+                        Se escolher mídia, a Meta exige um exemplo de arquivo (URL pública).
+                      </small>
+                    </div>
                   </div>
 
-                  {headerHasVar && (
-                    <div className="tc-field">
-                      <label>Exemplo da variável do cabeçalho</label>
-                      <input
-                        type="text"
-                        value={headerExample}
-                        onChange={(e) => setHeaderExample(e.target.value)}
-                        placeholder="ex.: #12345"
-                      />
-                      <small>Obrigatório quando o cabeçalho tem variável.</small>
-                    </div>
+                  {showHeaderTextFields && (
+                    <>
+                      <div className="tc-field">
+                        <label>Texto do cabeçalho</label>
+                        <input
+                          type="text"
+                          value={headerText}
+                          maxLength={60}
+                          onChange={(e) => setHeaderText(e.target.value)}
+                          placeholder="ex.: Pedido {{1}} confirmado"
+                        />
+                        <small>
+                          Máx. 60 caracteres. Pode ter 1 variável <code>{"{{1}}"}</code>.
+                        </small>
+                      </div>
+
+                      {headerHasVar && (
+                        <div className="tc-field">
+                          <label>Exemplo da variável do cabeçalho</label>
+                          <input
+                            type="text"
+                            value={headerExample}
+                            onChange={(e) => setHeaderExample(e.target.value)}
+                            placeholder="ex.: #12345"
+                          />
+                          <small>Obrigatório quando o cabeçalho tem variável.</small>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {showHeaderMediaFields && (
+                    <>
+                      <div className="tc-field">
+                        <label>URL pública do arquivo (exemplo para a Meta)</label>
+                        <input
+                          type="text"
+                          value={headerMediaUrl}
+                          onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                          placeholder="https://... (imagem/vídeo/pdf público)"
+                        />
+                        <small>
+                          A Meta usa isso como <code>example.header_handle</code>. Precisa ser acessível publicamente.
+                        </small>
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -412,27 +534,28 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
             <div className="tc-block">
               <div className="tc-block-header between">
                 <label>Corpo</label>
-                <span className="tc-char-counter">
-                  {bodyText.length}/1024
-                </span>
+                <span className="tc-char-counter">{bodyText.length}/1024</span>
               </div>
+
               <div className="tc-block-body">
                 <div className="tc-field">
-                  <textarea
-                    rows={4}
-                    value={bodyText}
-                    onChange={(e) => setBodyText(e.target.value)}
-                  />
+                  <textarea rows={4} value={bodyText} onChange={(e) => setBodyText(e.target.value)} />
                   <div className="tc-toolbar">
                     <div className="tc-toolbar-left">
+                      <button type="button" className="tc-toolbar-btn" onClick={handleAddVariableToBody}>
+                        + Adicionar variável
+                      </button>
+
                       <button
                         type="button"
                         className="tc-toolbar-btn"
-                        onClick={handleAddVariableToBody}
+                        onClick={downloadVariablesCsv}
+                        title="Baixar CSV para preencher exemplos no Excel"
                       >
-                        + Adicionar variável
+                        ⬇ Baixar variáveis (CSV)
                       </button>
                     </div>
+
                     <div className="tc-toolbar-right">
                       <span className="tc-toolbar-hint">
                         Use <code>{"{{1}}"}</code>, <code>{"{{2}}"}</code> etc.
@@ -444,6 +567,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                 {bodyVars.length > 0 && (
                   <div className="tc-vars-panel">
                     <p>Exemplos para variáveis (requeridos pela Meta):</p>
+
                     <div className="tc-vars-grid">
                       {bodyVars.map((idx) => (
                         <div className="tc-field" key={idx}>
@@ -451,14 +575,16 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                           <input
                             type="text"
                             value={bodyExamples[idx] || ""}
-                            onChange={(e) =>
-                              handleBodyExampleChange(idx, e.target.value)
-                            }
+                            onChange={(e) => handleBodyExampleChange(idx, e.target.value)}
                             placeholder={`Exemplo para {{${idx}}}`}
                           />
                         </div>
                       ))}
                     </div>
+
+                    <small style={{ opacity: 0.85 }}>
+                      Dica: você pode baixar o CSV acima, preencher no Excel e depois copiar/colar aqui.
+                    </small>
                   </div>
                 )}
               </div>
@@ -468,9 +594,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
             <div className="tc-block">
               <div className="tc-block-header between">
                 <label>Rodapé (opcional)</label>
-                <span className="tc-char-counter">
-                  {footerText.length}/60
-                </span>
+                <span className="tc-char-counter">{footerText.length}/60</span>
               </div>
               <div className="tc-block-body">
                 <div className="tc-field">
@@ -490,25 +614,13 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
               <div className="tc-block-header between">
                 <label>Botões (opcional)</label>
                 <div className="tc-buttons-add">
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => addButton("QUICK_REPLY")}
-                  >
+                  <button type="button" className="btn-secondary" onClick={() => addButton("QUICK_REPLY")}>
                     + Personalizado
                   </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => addButton("URL")}
-                  >
+                  <button type="button" className="btn-secondary" onClick={() => addButton("URL")}>
                     + Acessar site
                   </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => addButton("PHONE_NUMBER")}
-                  >
+                  <button type="button" className="btn-secondary" onClick={() => addButton("PHONE_NUMBER")}>
                     + Ligar/WhatsApp
                   </button>
                 </div>
@@ -516,8 +628,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
 
               {buttons.length === 0 && (
                 <p className="tc-helper-text">
-                  Crie botões para respostas rápidas, abrir links ou iniciar uma
-                  ligação/WhatsApp.
+                  Crie botões para respostas rápidas, abrir links ou iniciar uma ligação/WhatsApp.
                 </p>
               )}
 
@@ -529,17 +640,11 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                         <label>Tipo</label>
                         <select
                           value={b.type}
-                          onChange={(e) =>
-                            updateButton(b.id, {
-                              type: e.target.value as ButtonType
-                            })
-                          }
+                          onChange={(e) => updateButton(b.id, { type: e.target.value as ButtonType })}
                         >
                           <option value="QUICK_REPLY">Personalizado</option>
                           <option value="URL">Acessar site</option>
-                          <option value="PHONE_NUMBER">
-                            Ligar/WhatsApp
-                          </option>
+                          <option value="PHONE_NUMBER">Ligar/WhatsApp</option>
                         </select>
                       </div>
 
@@ -549,9 +654,7 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                           type="text"
                           maxLength={25}
                           value={b.text}
-                          onChange={(e) =>
-                            updateButton(b.id, { text: e.target.value })
-                          }
+                          onChange={(e) => updateButton(b.id, { text: e.target.value })}
                           placeholder="ex.: Ver detalhes"
                         />
                       </div>
@@ -563,25 +666,18 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                             <input
                               type="text"
                               value={b.url || ""}
-                              onChange={(e) =>
-                                updateButton(b.id, { url: e.target.value })
-                              }
+                              onChange={(e) => updateButton(b.id, { url: e.target.value })}
                               placeholder="https://..."
                             />
                           </div>
                           <div className="tc-field">
                             <label>
-                              Exemplo para variável da URL (se usar{" "}
-                              <code>{"{{1}}"}</code>)
+                              Exemplo para variável da URL (se usar <code>{"{{1}}"}</code>)
                             </label>
                             <input
                               type="text"
                               value={b.urlExample || ""}
-                              onChange={(e) =>
-                                updateButton(b.id, {
-                                  urlExample: e.target.value
-                                })
-                              }
+                              onChange={(e) => updateButton(b.id, { urlExample: e.target.value })}
                               placeholder="ex.: summer2025"
                             />
                           </div>
@@ -594,21 +690,13 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
                           <input
                             type="text"
                             value={b.phoneNumber || ""}
-                            onChange={(e) =>
-                              updateButton(b.id, {
-                                phoneNumber: e.target.value
-                              })
-                            }
+                            onChange={(e) => updateButton(b.id, { phoneNumber: e.target.value })}
                             placeholder="5511999999999"
                           />
                         </div>
                       )}
 
-                      <button
-                        type="button"
-                        className="btn-ghost"
-                        onClick={() => removeButton(b.id)}
-                      >
+                      <button type="button" className="btn-ghost" onClick={() => removeButton(b.id)}>
                         Remover
                       </button>
                     </div>
@@ -620,24 +708,13 @@ export default function TemplatesCreatePage({ onBack }: TemplatesCreatePageProps
 
           {/* FEEDBACK + AÇÕES */}
           {error && <div className="tc-alert tc-alert-error">{error}</div>}
-          {success && (
-            <div className="tc-alert tc-alert-success">{success}</div>
-          )}
+          {success && <div className="tc-alert tc-alert-success">{success}</div>}
 
           <div className="tc-footer-actions">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={handleBack}
-              disabled={saving}
-            >
+            <button type="button" className="btn-secondary" onClick={handleBack} disabled={saving}>
               Voltar
             </button>
-            <button
-              type="submit"
-              className="btn-primary"
-              disabled={saving}
-            >
+            <button type="submit" className="btn-primary" disabled={saving}>
               {saving ? "Enviando..." : "Enviar para análise"}
             </button>
           </div>
@@ -661,6 +738,8 @@ function TemplateCreatePreview({ template }: { template: Template }) {
   const footer = findComponent(components, "FOOTER");
   const buttons = findComponent(components, "BUTTONS");
 
+  const headerFormat = (header as any)?.format || "TEXT";
+
   return (
     <aside className="templates-create-preview">
       <h2 className="tc-card-title">Prévia do modelo</h2>
@@ -673,7 +752,9 @@ function TemplateCreatePreview({ template }: { template: Template }) {
             <div className="tc-wa-message">
               {header && (
                 <div className="tc-wa-header-text">
-                  {(header as any).text || "[Cabeçalho]"}
+                  {String(headerFormat).toUpperCase() === "TEXT"
+                    ? ((header as any).text || "[Cabeçalho]")
+                    : `[${String(headerFormat).toUpperCase()}]`}
                 </div>
               )}
 
