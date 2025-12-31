@@ -66,23 +66,46 @@ async function getSmsCampaign(model, tenantId, id) {
 }
 
 // =========================
-// Provider helpers (env)
+// Provider helpers (env) — iAgente HTTP API
+// - iAgente exige `metodo` (ex: envio | lote)
+// - iAgente pode responder HTTP 200 + "ERRO - ..." (então não dá pra confiar só em r.ok)
 // =========================
 function assertSmsProviderEnv() {
   const user = String(process.env.IAGENTE_SMS_USER || "").trim();
   const pass = String(process.env.IAGENTE_SMS_PASS || "").trim();
   const base = String(process.env.IAGENTE_SMS_BASE_URL || "").trim();
+
+  // default seguro (envio individual)
+  const metodo = String(process.env.IAGENTE_SMS_METODO || "envio").trim();
+
   if (!user || !pass || !base) return { ok: false, error: "missing_sms_provider_env" };
-  return { ok: true, user, pass, base };
+  if (!metodo) return { ok: false, error: "missing_sms_provider_metodo" };
+
+  return { ok: true, user, pass, base, metodo };
 }
 
-function buildProviderUrl({ base, user, pass, phone, message }) {
+function buildProviderUrl({ base, user, pass, metodo, phone, message }) {
   const url = new URL(base);
+  url.searchParams.set("metodo", String(metodo || "envio")); // ✅ REQUIRED
   url.searchParams.set("usuario", user);
   url.searchParams.set("senha", pass);
   url.searchParams.set("celular", String(phone || ""));
   url.searchParams.set("mensagem", String(message || ""));
   return url.toString();
+}
+
+// iAgente: sucesso costuma vir como "OK" (puro ou prefixado) e falha como "ERRO - ..."
+function parseIagenteResult(httpOk, bodyText) {
+  const raw = String(bodyText || "").trim();
+  const upper = raw.toUpperCase();
+
+  const providerErr = upper.startsWith("ERRO") || upper.includes("ERRO -");
+  const providerOk = upper === "OK" || upper.startsWith("OK ");
+
+  // ✅ Não confiar só em HTTP 200
+  const ok = !!httpOk && providerOk && !providerErr;
+
+  return { ok, raw, providerOk, providerErr };
 }
 
 // =========================
@@ -238,7 +261,6 @@ function renderMessage(template, vars) {
 
 function resolveMessageTemplate(campaign) {
   const md = safeObj(campaign?.metadata);
-  // ✅ fonte oficial: metadata.message
   return safeStr(md?.message) || safeStr(md?.smsMessage);
 }
 
@@ -246,11 +268,6 @@ function resolveMessageTemplate(campaign) {
 // Audience normalization (robust)
 // =========================
 function normalizeAudienceRows(audience) {
-  // aceita:
-  // - audience = [{phone, vars}, ...]
-  // - audience = { rows: [...] }
-  // - audience = { audience: { rows: [...] } } (casos ruins)
-  // - row com numero/phone/phoneE164 e vars em vars/variables/meta
   const direct = Array.isArray(audience) ? audience : null;
   const rowsFromObj = Array.isArray(audience?.rows) ? audience.rows : null;
   const nestedRows = Array.isArray(audience?.audience?.rows) ? audience.audience.rows : null;
@@ -281,7 +298,17 @@ function normalizeAudienceRows(audience) {
 // =========================
 // OutboundLog helpers (analytics)
 // =========================
-async function writeLog({ tenantId, campaignId, phone, status, error, provider, providerMsgId, cost, metadata }) {
+async function writeLog({
+  tenantId,
+  campaignId,
+  phone,
+  status,
+  error,
+  provider,
+  providerMsgId,
+  cost,
+  metadata
+}) {
   const logModel = resolveLogModel();
   if (!logModel) return;
 
@@ -388,7 +415,6 @@ router.post("/", requireAuth, requireRole("admin", "manager"), async (req, res) 
       channel: "sms",
       name,
       status: STATUS.DRAFT,
-      // ✅ SEMPRE metadata.message (não existe campo message no model)
       metadata: {
         ...baseMetadata,
         message,
@@ -456,7 +482,6 @@ router.patch("/:id", requireAuth, requireRole("admin", "manager"), async (req, r
       data.name = name;
     }
 
-    // ✅ metadata sempre existe no schema atual do projeto
     const mergedMd = { ...baseMd, ...patchMdRaw };
 
     if (bodyMessage !== undefined) {
@@ -509,7 +534,6 @@ router.delete("/:id", requireAuth, requireRole("admin", "manager"), async (req, 
       });
     }
 
-    // best-effort: limpa logs
     try {
       if (logModel) {
         await logModel.deleteMany({
@@ -566,7 +590,6 @@ router.post(
         return res.status(400).json({ ok: false, error: "csv_empty_or_invalid", details: parsed.errors });
       }
 
-      // ✅ persistência ESTÁVEL: audience como { rows: [...] }
       const audience = {
         rows: parsed.rows,
         total: parsed.rows.length,
@@ -730,7 +753,6 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       return res.status(409).json({ ok: false, error: "invalid_status", status: campaign.status });
     }
 
-    // ✅ audiência robusta
     const rows = normalizeAudienceRows(campaign.audience);
 
     if (!rows.length) {
@@ -775,7 +797,6 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
 
     const maxToSend = reqLimit > 0 ? reqLimit : Number.MAX_SAFE_INTEGER;
 
-    // ✅ status + timestamps
     const nextMd = setMetaTs(campaign, {
       startedAt: new Date().toISOString(),
       pausedAt: null,
@@ -837,10 +858,12 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
       const vars = row.vars || {};
 
       const text = renderMessage(messageTemplate, vars);
+
       const url = buildProviderUrl({
         base: env.base,
         user: env.user,
         pass: env.pass,
+        metodo: env.metodo, // ✅ REQUIRED
         phone,
         message: text
       });
@@ -853,7 +876,15 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
         const r = await fetch(url);
         statusCode = r.status;
         body = await r.text();
-        ok = r.ok;
+
+        const parsed = parseIagenteResult(r.ok, body);
+        ok = parsed.ok;
+
+        // log curto (sem expor senha/mensagem)
+        logger.info(
+          { campaignId: id, i, phone, httpStatus: statusCode, ok, providerRaw: parsed.raw.slice(0, 200) },
+          "📨 iAgente SMS result"
+        );
       } catch (e) {
         ok = false;
         body = String(e?.message || e);
@@ -864,7 +895,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
         campaignId: id,
         phone,
         status: ok ? "processed" : "failed",
-        error: ok ? null : `http_${statusCode || 0}`,
+        error: ok ? null : "provider_error",
         provider: "iagente",
         metadata: {
           httpStatus: statusCode,
@@ -872,6 +903,7 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
         }
       });
 
+      // sent = tentativa (não só sucesso)
       localSent++;
       if (ok) localSuccess++;
       else localFailed++;
@@ -917,7 +949,6 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
 
     const done = prog.cursor >= rows2.length;
 
-    // salva relatório no stats.smsReport
     const baseStats = safeObj(current?.stats);
     await model.update({
       where: { id },
@@ -952,7 +983,6 @@ router.post("/:id/start", requireAuth, requireRole("admin", "manager"), async (r
   } catch (err) {
     logger.error({ err: err?.message || err }, "❌ smsCampaignsRouter POST /:id/start failed");
 
-    // best-effort: marca failed
     try {
       const model2 = resolveModel();
       const tenantId2 = getTenantId(req);
