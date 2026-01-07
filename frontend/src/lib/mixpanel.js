@@ -1,47 +1,83 @@
+// frontend/src/lib/mixpanel.js
 import mixpanel from "mixpanel-browser";
 
-const TOKEN = (import.meta.env.VITE_MIXPANEL_TOKEN || "").trim();
-const ENABLED = String(import.meta.env.VITE_MIXPANEL_ENABLED || "true") === "true";
+/**
+ * ⚠️ IMPORTANTE
+ * Defina no .env:
+ * VITE_MIXPANEL_TOKEN=seu_token_aqui
+ */
 
-let inited = false;
+const TOKEN = import.meta.env.VITE_MIXPANEL_TOKEN;
+const IS_DEV = import.meta.env.DEV;
 
+let initialized = false;
+
+/**
+ * Inicializa o Mixpanel
+ * Deve ser chamado UMA vez (main.jsx)
+ */
 export function mpInit() {
-  if (!ENABLED) return;
-  if (!TOKEN) return;
-  if (inited) return;
+  if (!TOKEN) {
+    console.warn("[Mixpanel] Token não definido (VITE_MIXPANEL_TOKEN).");
+    return;
+  }
+
+  if (initialized) return;
 
   mixpanel.init(TOKEN, {
-    debug: import.meta.env.DEV,
-    ignore_dnt: true, // se você quiser respeitar DNT, troque pra false
+    debug: IS_DEV,
+    track_pageview: true,
     persistence: "localStorage",
+    ignore_dnt: true
   });
 
-  inited = true;
+  initialized = true;
+
+  console.log("[Mixpanel] Inicializado", {
+    env: IS_DEV ? "DEV" : "PROD"
+  });
 }
 
+/**
+ * Identifica usuário logado
+ */
+export function mpIdentify(user) {
+  if (!user || !user.id) return;
+
+  mixpanel.identify(String(user.id));
+
+  mixpanel.people.set({
+    $email: user.email,
+    $name: user.name,
+    user_id: user.id
+  });
+
+  console.log("[Mixpanel] identify", {
+    id: user.id,
+    email: user.email
+  });
+}
+
+/**
+ * Track de eventos
+ */
 export function mpTrack(event, props = {}) {
-  if (!ENABLED || !TOKEN) return;
-  mpInit();
-  try {
-    mixpanel.track(event, props);
-  } catch {}
+  if (!event) return;
+
+  mixpanel.track(event, {
+    ...props,
+    env: IS_DEV ? "dev" : "prod"
+  });
+
+  if (IS_DEV) {
+    console.log("[Mixpanel] track:", event, props);
+  }
 }
 
-export function mpIdentify(userId, props = {}) {
-  if (!ENABLED || !TOKEN) return;
-  mpInit();
-  try {
-    mixpanel.identify(String(userId));
-    if (props && Object.keys(props).length) {
-      mixpanel.people.set(props);
-    }
-  } catch {}
-}
-
+/**
+ * Reset (logout)
+ */
 export function mpReset() {
-  if (!ENABLED || !TOKEN) return;
-  mpInit();
-  try {
-    mixpanel.reset();
-  } catch {}
+  mixpanel.reset();
+  console.log("[Mixpanel] reset");
 }
