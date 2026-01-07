@@ -381,4 +381,139 @@ button:hover {
 
 a { color: rgba(22, 163, 74, 0.95); }
 a:hover { text-decoration: underline; }
+/* ======================================================
+   GP LABS — FIX: Modal / Editor de Canais em LIGHT THEME
+   Cole no FINAL do settings-channels.css
+====================================================== */
+
+/* 1) Overlay do modal (fundo escurecido por trás) */
+.modal-overlay,
+.dialog-overlay,
+.overlay,
+[data-overlay],
+.ReactModal__Overlay {
+  background: rgba(2, 6, 23, 0.55) !important;
+  backdrop-filter: blur(2px) !important;
+}
+
+/* 2) Container do modal/painel (onde está o formulário) */
+.modal,
+.modal-content,
+.dialog,
+.dialog-content,
+.sheet,
+.sheet-content,
+.ReactModal__Content,
+[data-modal],
+[data-dialog],
+[data-sheet] {
+  background: rgba(255, 255, 255, 0.92) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(15, 23, 42, 0.12) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 32px 70px rgba(2, 6, 23, 0.18) !important;
+}
+
+/* 3) Se o teu “modal” na real for um card grande dentro de uma layer */
+.settings-channels-modal,
+.channel-edit-modal,
+.channel-editor,
+.channel-config-modal,
+.channel-config-panel {
+  background: rgba(255, 255, 255, 0.92) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(15, 23, 42, 0.12) !important;
+  border-radius: 16px !important;
+}
+
+/* 4) Inputs/textarea/select dentro do modal */
+.modal input,
+.modal textarea,
+.modal select,
+.dialog input,
+.dialog textarea,
+.dialog select,
+.ReactModal__Content input,
+.ReactModal__Content textarea,
+.ReactModal__Content select,
+.settings-channels-modal input,
+.settings-channels-modal textarea,
+.settings-channels-modal select {
+  background: rgba(255, 255, 255, 0.95) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(15, 23, 42, 0.18) !important;
+  border-radius: 12px !important;
+}
+
+/* placeholder no light */
+.modal input::placeholder,
+.modal textarea::placeholder,
+.dialog input::placeholder,
+.dialog textarea::placeholder {
+  color: rgba(15, 23, 42, 0.45) !important;
+}
+
+/* 5) Labels/títulos dentro do modal */
+.modal label,
+.modal h1, .modal h2, .modal h3, .modal h4,
+.dialog label,
+.dialog h1, .dialog h2, .dialog h3, .dialog h4,
+.ReactModal__Content label,
+.ReactModal__Content h1, .ReactModal__Content h2, .ReactModal__Content h3, .ReactModal__Content h4 {
+  color: rgba(15, 23, 42, 0.92) !important;
+}
+
+/* 6) Botões dentro do modal (padrão) */
+.modal button,
+.dialog button,
+.ReactModal__Content button,
+.settings-channels-modal button {
+  background: rgba(255, 255, 255, 0.88) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(15, 23, 42, 0.16) !important;
+  border-radius: 12px !important;
+}
+.modal button:hover,
+.dialog button:hover,
+.ReactModal__Content button:hover,
+.settings-channels-modal button:hover {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border-color: rgba(15, 23, 42, 0.22) !important;
+}
+
+/* 7) Botão primário (Salvar / Copiar / Rotacionar) em verde */
+.modal button.is-primary,
+.dialog button.is-primary,
+.settings-channels-modal button.is-primary,
+.ReactModal__Content button.is-primary,
+.modal button.primary,
+.dialog button.primary,
+.settings-channels-modal button.primary {
+  background: rgba(34, 197, 94, 0.18) !important;
+  border-color: rgba(34, 197, 94, 0.35) !important;
+  color: rgba(21, 128, 61, 0.98) !important;
+}
+.modal button.is-primary:hover,
+.dialog button.is-primary:hover,
+.settings-channels-modal button.is-primary:hover,
+.ReactModal__Content button.is-primary:hover,
+.modal button.primary:hover,
+.dialog button.primary:hover,
+.settings-channels-modal button.primary:hover {
+  background: rgba(34, 197, 94, 0.25) !important;
+  border-color: rgba(34, 197, 94, 0.45) !important;
+}
+
+/* 8) Se tiver bloco de "script embed" em dark, deixa com cara de editor */
+.modal pre,
+.modal code,
+.dialog pre,
+.dialog code,
+.ReactModal__Content pre,
+.ReactModal__Content code {
+  background: rgba(15, 23, 42, 0.04) !important;
+  border: 1px solid rgba(15, 23, 42, 0.10) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+  border-radius: 12px !important;
+}
 

@@ -298,3 +298,116 @@ select:focus-visible,
   box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
   border-color: rgba(34, 197, 94, 0.55) !important;
 }
+/* ======================================================
+   FIX — MODAL (Edição de Canais) estava DARK + fora da tela
+   Cole no FINAL do settings-channels.css (ou App.css)
+====================================================== */
+
+/* 1) Overlay (quando o wrapper usa inline "position: fixed" e "inset: 0") */
+.settings-page [style*="position: fixed"][style*="inset: 0"] {
+  z-index: 9999 !important;
+  background: rgba(2, 6, 23, 0.55) !important;
+  backdrop-filter: blur(6px) !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  padding: 16px !important;
+  box-sizing: border-box !important;
+}
+
+/* 2) Modal content: pega exatamente o teu DIV com background rgb(11, 18, 32) */
+.settings-page [style*="background: rgb(11, 18, 32)"],
+.settings-page [style*="background:rgb(11, 18, 32)"] {
+  background: rgba(255, 255, 255, 0.96) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(15, 23, 42, 0.14) !important;
+
+  /* não estoura a viewport */
+  width: min(1100px, calc(100vw - 32px)) !important;
+  max-width: calc(100vw - 32px) !important;
+  max-height: calc(100vh - 32px) !important;
+
+  overflow: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+
+  border-radius: 18px !important;
+  box-shadow: 0 32px 80px rgba(2, 6, 23, 0.28) !important;
+
+  /* mantém espaço interno */
+  padding: 16px !important;
+  box-sizing: border-box !important;
+}
+
+/* 3) Inputs/select/textarea dentro do modal (estavam herdando dark) */
+.settings-page [style*="background: rgb(11, 18, 32)"] input,
+.settings-page [style*="background: rgb(11, 18, 32)"] textarea,
+.settings-page [style*="background: rgb(11, 18, 32)"] select {
+  background: rgba(255, 255, 255, 0.96) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(15, 23, 42, 0.18) !important;
+  border-radius: 12px !important;
+}
+
+/* 4) Área de script (pre/code) dentro do modal */
+.settings-page [style*="background: rgb(11, 18, 32)"] pre,
+.settings-page [style*="background: rgb(11, 18, 32)"] code {
+  background: rgba(15, 23, 42, 0.04) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(15, 23, 42, 0.12) !important;
+  border-radius: 12px !important;
+}
+
+/* 5) Evita o modal “cortar” conteúdo com overflow hidden inline */
+.settings-page [style*="background: rgb(11, 18, 32)"][style*="overflow: hidden"] {
+  overflow: auto !important;
+}
+/* ======================================================
+   FIX — GRID dos cards em "Configurações > Canais"
+   (força layout 2x2 e remove desalinhamentos)
+====================================================== */
+
+/* Container que geralmente envolve os cards */
+.settings-page .channels-grid,
+.settings-page .channels-cards,
+.settings-page .channels-list,
+.settings-page .channels-container {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(320px, 1fr)) !important;
+  gap: 16px !important;
+  align-items: stretch !important;
+  justify-items: stretch !important;
+}
+
+/* Se o seu código não tem classes, pega o "primeiro bloco" de cards dentro do card principal */
+.settings-page .gp-page__card > div > div {
+  /* não deixa virar bagunça de flex antigo */
+  align-items: stretch;
+}
+
+/* Cards (várias possíveis classes/names) */
+.settings-page .channel-card,
+.settings-page .channels-grid > div,
+.settings-page .channels-cards > div,
+.settings-page .channels-list > div,
+.settings-page .channels-container > div {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+
+  /* remove qualquer deslocamento acidental */
+  position: static !important;
+  transform: none !important;
+  margin: 0 !important;
+}
+
+/* Responsivo: 1 coluna em telas menores */
+@media (max-width: 980px) {
+  .settings-page .channels-grid,
+  .settings-page .channels-cards,
+  .settings-page .channels-list,
+  .settings-page .channels-container {
+    grid-template-columns: 1fr !important;
+  }
+}

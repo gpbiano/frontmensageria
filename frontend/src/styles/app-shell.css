@@ -810,3 +810,25 @@
   justify-content: center !important;
   padding: 10px 8px !important;
 }
+/* Menu selecionado mais escuro */
+.sidebar-item-header-active,
+.sidebar-link-active {
+  background: rgba(34, 197, 94, 0.22) !important;
+  border-color: rgba(34, 197, 94, 0.35) !important;
+  color: rgba(15, 23, 42, 0.95) !important;
+}
+
+/* Hover um pouco mais escuro (menos “lavado”) */
+.sidebar-item-header:hover,
+.sidebar-link:hover {
+  background: rgba(15, 23, 42, 0.06) !important;
+  border-color: rgba(15, 23, 42, 0.16) !important;
+}
+
+/* Botão de recolher menu mais sutil */
+.sidebar-toggle-fab {
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: 12px !important;
+  opacity: 0.85 !important;
+}
