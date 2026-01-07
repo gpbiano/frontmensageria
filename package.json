@@ -1,4 +1,3 @@
-
 {
   "name": "whatsapp-plataforma-monorepo",
   "private": true,
@@ -6,6 +5,7 @@
     "widget:build": "mkdir -p widget/dist && cp widget/src/widget.js widget/dist/widget.js && cp widget/src/widget.v1.js widget/dist/widget.v1.js"
   },
   "dependencies": {
+    "mixpanel-browser": "^2.73.0",
     "node-fetch": "^3.3.2"
   }
 }
