@@ -10,6 +10,10 @@ const API_BASE =
 const AUTH_TOKEN_KEY = "gpLabsAuthToken";
 const AUTH_USER_KEY = "gpLabsAuthUser";
 
+// ✅ URLs (ajuste quando tiver as páginas reais)
+const TERMS_URL = "/termos";
+const PRIVACY_URL = "/privacidade";
+
 async function fetchJson(url, options = {}) {
   const method = (options.method || "GET").toUpperCase();
 
@@ -299,6 +303,19 @@ export default function LoginPage({ onLogin }) {
               "Entrar"
             )}
           </button>
+
+          {/* ✅ Termos/Privacidade (estilo “Aegro”) */}
+          <p className="login-legal">
+            Ao acessar, você concorda com os{" "}
+            <a href={TERMS_URL} target="_blank" rel="noreferrer">
+              Termos de Uso
+            </a>{" "}
+            e a{" "}
+            <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
+              Política de Privacidade
+            </a>
+            .
+          </p>
         </form>
       </div>
     </div>
