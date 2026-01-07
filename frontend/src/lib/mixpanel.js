@@ -2,82 +2,93 @@
 import mixpanel from "mixpanel-browser";
 
 /**
- * ⚠️ IMPORTANTE
- * Defina no .env:
- * VITE_MIXPANEL_TOKEN=seu_token_aqui
+ * Define no .env / env da plataforma:
+ * VITE_MIXPANEL_TOKEN=xxxx
  */
-
-const TOKEN = import.meta.env.VITE_MIXPANEL_TOKEN;
+const TOKEN = (import.meta.env.VITE_MIXPANEL_TOKEN || "").trim();
 const IS_DEV = import.meta.env.DEV;
 
 let initialized = false;
 
+function canUse() {
+  // Só usa se tiver token e init já tiver rodado
+  return Boolean(TOKEN) && initialized && typeof mixpanel?.track === "function";
+}
+
 /**
- * Inicializa o Mixpanel
- * Deve ser chamado UMA vez (main.jsx)
+ * Inicializa Mixpanel (chame uma vez no main.jsx)
  */
 export function mpInit() {
   if (!TOKEN) {
-    console.warn("[Mixpanel] Token não definido (VITE_MIXPANEL_TOKEN).");
+    console.warn("[Mixpanel] Token ausente: VITE_MIXPANEL_TOKEN (desativado).");
+    initialized = false;
     return;
   }
 
   if (initialized) return;
 
-  mixpanel.init(TOKEN, {
-    debug: IS_DEV,
-    track_pageview: true,
-    persistence: "localStorage",
-    ignore_dnt: true
-  });
+  try {
+    mixpanel.init(TOKEN, {
+      debug: IS_DEV,
+      track_pageview: true,
+      persistence: "localStorage",
+      ignore_dnt: true
+    });
 
-  initialized = true;
+    initialized = true;
 
-  console.log("[Mixpanel] Inicializado", {
-    env: IS_DEV ? "DEV" : "PROD"
-  });
+    if (IS_DEV) console.log("[Mixpanel] Inicializado (DEV).");
+  } catch (err) {
+    initialized = false;
+    console.error("[Mixpanel] Falha ao inicializar:", err);
+  }
 }
 
 /**
  * Identifica usuário logado
  */
 export function mpIdentify(user) {
-  if (!user || !user.id) return;
+  if (!canUse()) return;
+  if (!user || user.id == null) return;
 
-  mixpanel.identify(String(user.id));
-
-  mixpanel.people.set({
-    $email: user.email,
-    $name: user.name,
-    user_id: user.id
-  });
-
-  console.log("[Mixpanel] identify", {
-    id: user.id,
-    email: user.email
-  });
-}
-
-/**
- * Track de eventos
- */
-export function mpTrack(event, props = {}) {
-  if (!event) return;
-
-  mixpanel.track(event, {
-    ...props,
-    env: IS_DEV ? "dev" : "prod"
-  });
-
-  if (IS_DEV) {
-    console.log("[Mixpanel] track:", event, props);
+  try {
+    mixpanel.identify(String(user.id));
+    mixpanel.people?.set?.({
+      $email: user.email,
+      $name: user.name,
+      user_id: user.id
+    });
+  } catch (err) {
+    console.warn("[Mixpanel] identify falhou (ignorado):", err);
   }
 }
 
 /**
- * Reset (logout)
+ * Track de eventos (NUNCA pode quebrar a UI)
+ */
+export function mpTrack(event, props = {}) {
+  if (!canUse()) return;
+  if (!event) return;
+
+  try {
+    mixpanel.track(event, {
+      ...props,
+      env: IS_DEV ? "dev" : "prod"
+    });
+  } catch (err) {
+    console.warn("[Mixpanel] track falhou (ignorado):", err);
+  }
+}
+
+/**
+ * Reset no logout
  */
 export function mpReset() {
-  mixpanel.reset();
-  console.log("[Mixpanel] reset");
+  if (!canUse()) return;
+
+  try {
+    mixpanel.reset();
+  } catch (err) {
+    console.warn("[Mixpanel] reset falhou (ignorado):", err);
+  }
 }
