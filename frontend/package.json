@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "lucide-react": "^0.561.0",
+    "mixpanel-browser": "^2.73.0",
     "multer": "^2.0.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
