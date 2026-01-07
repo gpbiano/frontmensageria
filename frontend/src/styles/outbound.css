@@ -1,46 +1,54 @@
 /* ===============================
-   BASE – OUTBOUND (campanhas)
+   BASE – OUTBOUND (campanhas) — LIGHT / Glass
 ================================ */
 
 .page-content {
   padding: 32px;
-  color: #e5e7eb;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .page-header h1 {
   font-size: 26px;
   margin-bottom: 4px;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .page-subtitle {
   opacity: 0.75;
   margin-bottom: 12px;
+  color: rgba(15, 23, 42, 0.62);
 }
 
+/* Botão principal */
 .btn-primary {
-  background: #10b981;
-  color: #fff;
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #052e1a;
   padding: 10px 18px;
-  border-radius: 8px;
+  border-radius: 999px;
   cursor: pointer;
-  font-weight: 600;
-  transition: 0.2s;
-  border: none;
+  font-weight: 800;
+  transition: transform 0.08s ease, filter 0.15s ease, box-shadow 0.15s ease;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  box-shadow: 0 16px 40px rgba(34, 197, 94, 0.18);
 }
 
 .btn-primary:hover {
-  background: #16a34a;
+  filter: brightness(1.02);
+  transform: translateY(-1px);
 }
 
 /* ===============================
-   NÚMEROS
+   NÚMEROS — LIGHT
 ================================ */
 
 .numbers-table-card {
   margin-top: 30px;
-  background: #0a0f1c;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   padding: 20px;
   border-radius: 18px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 46px rgba(2, 6, 23, 0.08);
 }
 
 .numbers-table {
@@ -51,28 +59,31 @@
 .numbers-table th {
   text-align: left;
   padding: 12px 10px;
-  background: #111827;
-  color: #9ca3af;
-  font-size: 14px;
-  font-weight: 500;
+  background: rgba(15, 23, 42, 0.04);
+  color: rgba(15, 23, 42, 0.60);
+  font-size: 13px;
+  font-weight: 900;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
 }
 
 .numbers-table td {
   padding: 14px 10px;
-  border-bottom: 1px solid #1f2937;
-  font-size: 15px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  font-size: 14px;
+  color: rgba(15, 23, 42, 0.86);
 }
 
 .cell-bold {
-  font-weight: 600;
-  color: #f3f4f6;
+  font-weight: 900;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .loading-cell,
 .empty-cell {
   text-align: center;
   padding: 40px;
-  opacity: 0.6;
+  opacity: 0.65;
+  color: rgba(15, 23, 42, 0.60);
 }
 
 .quality-dot {
@@ -94,13 +105,13 @@
 }
 
 .status-ok {
-  color: #22c55e;
-  font-weight: 600;
+  color: #16a34a;
+  font-weight: 800;
 }
 
 .status-error {
   color: #ef4444;
-  font-weight: 600;
+  font-weight: 800;
 }
 
 /* ===============================
@@ -124,9 +135,12 @@
 ================================ */
 
 .templates-table-card {
-  background: #0a0f1c;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   padding: 20px;
   border-radius: 18px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 46px rgba(2, 6, 23, 0.08);
 }
 
 .templates-table {
@@ -137,29 +151,31 @@
 .templates-table th {
   text-align: left;
   padding: 12px 10px;
-  background: #111827;
-  color: #9ca3af;
-  font-size: 14px;
-  font-weight: 500;
+  background: rgba(15, 23, 42, 0.04);
+  color: rgba(15, 23, 42, 0.60);
+  font-size: 13px;
+  font-weight: 900;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
 }
 
 .templates-table td {
   padding: 10px 10px;
-  border-bottom: 1px solid #1f2937;
-  font-size: 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  font-size: 13px;
+  color: rgba(15, 23, 42, 0.84);
 }
 
 .templates-row {
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .templates-row:hover {
-  background: rgba(148, 163, 184, 0.05);
+  background: rgba(34, 197, 94, 0.06);
 }
 
 .templates-row-active {
-  background: rgba(16, 185, 129, 0.12);
+  background: rgba(34, 197, 94, 0.10);
 }
 
 /* ===============================
@@ -167,16 +183,20 @@
 ================================ */
 
 .template-preview-card {
-  background: #0a0f1c;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   padding: 20px;
   border-radius: 18px;
   display: flex;
   flex-direction: column;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 46px rgba(2, 6, 23, 0.08);
 }
 
 .template-preview-header h3 {
   font-size: 18px;
   margin-bottom: 8px;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .template-badges {
@@ -195,33 +215,45 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+  color: rgba(15, 23, 42, 0.76);
 }
 
 .pill-soft {
-  background: rgba(148, 163, 184, 0.2);
-  color: #e5e7eb;
+  background: rgba(148, 163, 184, 0.18);
+  color: rgba(15, 23, 42, 0.78);
+  border-color: rgba(148, 163, 184, 0.28);
 }
 
 .pill-status {
-  background: rgba(37, 99, 235, 0.2);
-  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.12);
+  color: rgba(29, 78, 216, 0.90);
+  border-color: rgba(37, 99, 235, 0.22);
 }
 
 .pill-quality {
-  background: rgba(22, 163, 74, 0.2);
-  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.12);
+  color: rgba(20, 83, 45, 0.95);
+  border-color: rgba(34, 197, 94, 0.22);
 }
 
 .pill-flow {
-  background: rgba(249, 115, 22, 0.2);
-  color: #fed7aa;
+  background: rgba(249, 115, 22, 0.14);
+  color: rgba(154, 52, 18, 0.92);
+  border-color: rgba(249, 115, 22, 0.22);
 }
 
 /* Phone preview */
-
 .phone-preview {
   margin-top: 16px;
-  background: radial-gradient(circle at top, #111827 0, #020617 60%, #000 100%);
+  background: radial-gradient(
+      circle at top,
+      rgba(15, 23, 42, 0.08) 0,
+      rgba(15, 23, 42, 0.03) 60%,
+      rgba(255, 255, 255, 0.85) 100%
+    );
+  border: 1px solid rgba(15, 23, 42, 0.10);
   border-radius: 24px;
   padding: 14px;
   display: flex;
@@ -233,35 +265,40 @@
   text-align: center;
   margin-bottom: 8px;
   opacity: 0.7;
+  color: rgba(15, 23, 42, 0.60);
 }
 
 .phone-screen {
-  background: #020617;
+  background: rgba(255, 255, 255, 0.90);
   border-radius: 20px;
   padding: 12px;
   width: 260px;
   min-height: 240px;
-  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9);
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.10);
 }
 
 .phone-bubble-template {
-  background: #047857;
+  background: linear-gradient(135deg, #22c55e, #16a34a);
   border-radius: 12px;
   padding: 10px;
-  color: #ecfdf5;
+  color: #052e1a;
   font-size: 13px;
   line-height: 1.4;
+  border: 1px solid rgba(34, 197, 94, 0.25);
 }
 
 .phone-body-section + .phone-footer-section {
   margin-top: 8px;
   font-size: 11px;
   opacity: 0.9;
+  color: rgba(5, 46, 26, 0.85);
 }
 
 .phone-header-section {
-  font-weight: 600;
+  font-weight: 800;
   margin-bottom: 6px;
+  color: rgba(5, 46, 26, 0.95);
 }
 
 .phone-buttons {
@@ -273,26 +310,26 @@
 
 .phone-button {
   border-radius: 999px;
-  border: 1px solid rgba(15, 23, 42, 0.4);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   padding: 6px 10px;
   font-size: 12px;
-  background: rgba(15, 23, 42, 0.2);
-  color: #ecfdf5;
+  background: rgba(255, 255, 255, 0.75);
+  color: rgba(15, 23, 42, 0.80);
   text-align: center;
 }
 
 .phone-button-flow {
-  border-color: rgba(249, 115, 22, 0.7);
+  border-color: rgba(249, 115, 22, 0.35);
 }
 
 /* Variáveis {{1}} no corpo */
-
 .body-variable {
-  background: rgba(15, 23, 42, 0.3);
+  background: rgba(15, 23, 42, 0.08);
   padding: 1px 4px;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
+  color: rgba(15, 23, 42, 0.85);
 }
 
 /* ===============================
@@ -308,6 +345,9 @@
     width: 100%;
   }
 }
+
+/* --------- Ajustes adicionais (mantidos) --------- */
+
 .templates-layout {
   display: flex;
   flex-direction: column;
@@ -324,24 +364,22 @@
 .templates-table-card,
 .template-preview-card {
   margin-top: 8px;
-  background: #020617;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   padding: 20px;
   border-radius: 18px;
-  border: 1px solid #111827;
 }
 
-.templates-row {
-  cursor: pointer;
-}
-
+/* linhas */
 .templates-row:hover {
-  background: #020617;
+  background: rgba(34, 197, 94, 0.06);
 }
 
 .templates-row-active {
-  background: #0f172a;
+  background: rgba(34, 197, 94, 0.10);
 }
 
+/* create form */
 .template-create-form {
   display: flex;
   flex-direction: column;
@@ -350,8 +388,8 @@
 
 .template-create-form label {
   font-size: 13px;
-  font-weight: 500;
-  color: #e5e7eb;
+  font-weight: 800;
+  color: rgba(15, 23, 42, 0.80);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -360,13 +398,21 @@
 .template-create-form input,
 .template-create-form select,
 .template-create-form textarea {
-  background: #020617;
+  background: rgba(255, 255, 255, 0.92);
   border-radius: 10px;
-  border: 1px solid #1f2937;
+  border: 1px solid rgba(15, 23, 42, 0.12);
   padding: 8px 10px;
   font-size: 14px;
-  color: #e5e7eb;
+  color: rgba(15, 23, 42, 0.86);
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.template-create-form input:focus,
+.template-create-form select:focus,
+.template-create-form textarea:focus {
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
 }
 
 .template-create-form textarea {
@@ -380,34 +426,43 @@
   margin-top: 8px;
 }
 
+/* secondary */
 .btn-secondary {
-  background: transparent;
-  color: #e5e7eb;
-  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.80);
+  color: rgba(15, 23, 42, 0.84);
+  border-radius: 999px;
   padding: 8px 14px;
-  border: 1px solid #4b5563;
+  border: 1px solid rgba(15, 23, 42, 0.12);
   font-size: 14px;
   cursor: pointer;
+  font-weight: 800;
+  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
 .btn-secondary:hover {
-  border-color: #9ca3af;
+  transform: translateY(-1px);
+  border-color: rgba(34, 197, 94, 0.28);
+  background: rgba(34, 197, 94, 0.08);
 }
 
 .template-error {
   margin-top: 4px;
   font-size: 12px;
-  color: #f87171;
+  color: #ef4444;
+  font-weight: 700;
 }
+
 /* ============================
-   REPORTS / ANALYTICS (Meta-like)
+   REPORTS / ANALYTICS — LIGHT / Meta-like
 ============================ */
 
 .glp-surface {
-  background: #0a0f1c;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   border-radius: 18px;
   padding: 16px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 46px rgba(2, 6, 23, 0.08);
 }
 
 .glp-grid {
@@ -427,21 +482,23 @@
 }
 
 .glp-card {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.80);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   border-radius: 16px;
   padding: 14px;
 }
 
 .glp-card__label {
-  opacity: 0.7;
+  opacity: 0.75;
   font-size: 12px;
   margin-bottom: 6px;
+  color: rgba(15, 23, 42, 0.62);
 }
 
 .glp-card__value {
   font-size: 26px;
-  font-weight: 700;
+  font-weight: 900;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .glp-pill {
@@ -451,9 +508,10 @@
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 12px;
-  background: rgba(52, 211, 153, 0.12);
-  border: 1px solid rgba(52, 211, 153, 0.2);
-  color: #34d399;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.22);
+  color: rgba(20, 83, 45, 0.95);
+  font-weight: 800;
 }
 
 .glp-toolbar {
@@ -478,29 +536,33 @@
 
 .glp-input,
 .glp-select {
-  background: rgba(2, 6, 23, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  color: rgba(15, 23, 42, 0.86);
   border-radius: 12px;
   padding: 10px 12px;
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .glp-input:focus,
 .glp-select:focus {
-  border-color: rgba(52, 211, 153, 0.35);
-  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.12);
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
 }
 
 .glp-field__label {
   font-size: 12px;
-  opacity: 0.7;
+  opacity: 0.75;
   margin-bottom: 6px;
+  color: rgba(15, 23, 42, 0.62);
+  font-weight: 800;
 }
 
 .glp-muted {
-  opacity: 0.7;
+  opacity: 0.75;
   font-size: 12px;
+  color: rgba(15, 23, 42, 0.60);
 }
 
 .glp-mono {
@@ -512,7 +574,8 @@
 .glp-table-wrap {
   overflow: auto;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.70);
 }
 
 .glp-table {
@@ -524,23 +587,25 @@
 .glp-table th,
 .glp-table td {
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
   text-align: left;
   vertical-align: top;
+  color: rgba(15, 23, 42, 0.84);
 }
 
 .glp-table th {
   font-size: 12px;
-  opacity: 0.7;
-  font-weight: 600;
-  background: rgba(255, 255, 255, 0.02);
+  opacity: 0.85;
+  font-weight: 900;
+  background: rgba(15, 23, 42, 0.04);
   position: sticky;
   top: 0;
 }
 
 .glp-empty {
   padding: 18px 12px;
-  opacity: 0.7;
+  opacity: 0.75;
+  color: rgba(15, 23, 42, 0.62);
 }
 
 .glp-badge {
@@ -549,26 +614,27 @@
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+  color: rgba(15, 23, 42, 0.78);
 }
 
 .glp-badge--ok {
-  color: #22c55e;
-  border-color: rgba(34, 197, 94, 0.25);
-  background: rgba(34, 197, 94, 0.08);
+  color: rgba(20, 83, 45, 0.95);
+  border-color: rgba(34, 197, 94, 0.24);
+  background: rgba(34, 197, 94, 0.12);
 }
 
 .glp-badge--info {
-  color: #60a5fa;
-  border-color: rgba(96, 165, 250, 0.25);
-  background: rgba(96, 165, 250, 0.08);
+  color: rgba(29, 78, 216, 0.95);
+  border-color: rgba(59, 130, 246, 0.25);
+  background: rgba(59, 130, 246, 0.10);
 }
 
 .glp-badge--bad {
-  color: #fb7185;
-  border-color: rgba(251, 113, 133, 0.25);
-  background: rgba(251, 113, 133, 0.08);
+  color: rgba(190, 18, 60, 0.95);
+  border-color: rgba(244, 63, 94, 0.25);
+  background: rgba(244, 63, 94, 0.10);
 }
 
 .glp-badge--muted {
@@ -576,8 +642,9 @@
 }
 
 .glp-link {
-  color: #34d399;
+  color: rgba(21, 128, 61, 0.95);
   text-decoration: none;
+  font-weight: 800;
 }
 
 .glp-link:hover {
@@ -588,36 +655,39 @@
   padding: 10px 12px;
   border-radius: 14px;
   margin: 10px 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.82);
+  color: rgba(15, 23, 42, 0.82);
 }
 
 .glp-alert--bad {
-  border-color: rgba(251, 113, 133, 0.25);
-  background: rgba(251, 113, 133, 0.08);
+  border-color: rgba(244, 63, 94, 0.22);
+  background: rgba(244, 63, 94, 0.10);
 }
 
 .glp-skeleton {
   padding: 10px 12px;
   border-radius: 14px;
   margin: 10px 0;
-  opacity: 0.7;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  opacity: 0.8;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.08);
 }
 
 .glp-timeline {
   margin: 14px 0;
   padding: 12px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.10);
 }
 
 .glp-timeline__title {
   font-size: 12px;
-  opacity: 0.7;
+  opacity: 0.75;
   margin-bottom: 10px;
+  color: rgba(15, 23, 42, 0.62);
+  font-weight: 900;
 }
 
 .glp-timeline__list {
@@ -654,16 +724,18 @@
 }
 
 .glp-panel {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   border-radius: 16px;
   padding: 12px;
 }
 
 .glp-panel__title {
   font-size: 12px;
-  opacity: 0.7;
+  opacity: 0.75;
   margin-bottom: 10px;
+  color: rgba(15, 23, 42, 0.62);
+  font-weight: 900;
 }
 
 .glp-kpis {

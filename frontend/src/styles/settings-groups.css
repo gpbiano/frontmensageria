@@ -1,8 +1,13 @@
 /* frontend/src/styles/settings-groups.css */
 
+/* ===============================
+   SETTINGS – GROUPS (LIGHT / Glass)
+   - Mantém TODAS as classes
+================================ */
+
 .settings-groups-page {
   padding: 18px;
-  color: #e5e7eb;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .settings-groups-header {
@@ -16,18 +21,21 @@
 .settings-groups-header h2 {
   margin: 0;
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 900;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .settings-groups-subtitle {
   margin: 6px 0 0;
-  opacity: 0.75;
+  opacity: 1;
   font-size: 13px;
+  color: rgba(15, 23, 42, 0.62);
 }
 
 .settings-groups-kpi {
   margin-left: 10px;
-  opacity: 0.9;
+  opacity: 0.95;
+  color: rgba(15, 23, 42, 0.72);
 }
 
 .settings-groups-toggle {
@@ -35,31 +43,36 @@
   align-items: center;
   gap: 8px;
   user-select: none;
-  opacity: 0.9;
+  opacity: 1;
   font-size: 13px;
+  color: rgba(15, 23, 42, 0.74);
 }
 
 .settings-groups-error {
-  background: rgba(239, 68, 68, 0.14);
-  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.10);
+  border: 1px solid rgba(239, 68, 68, 0.22);
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 12px;
   margin-bottom: 12px;
+  color: rgba(127, 29, 29, 0.95);
 }
 
+/* Card */
 .settings-groups-card {
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 16px;
   padding: 14px;
   margin-bottom: 14px;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 46px rgba(2, 6, 23, 0.06);
 }
 
 .settings-groups-card h3 {
   margin: 0 0 10px;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 900;
+  color: rgba(15, 23, 42, 0.90);
 }
 
 .settings-groups-form {
@@ -81,31 +94,41 @@
   }
 }
 
+/* Campos (atenção: .field é global no seu projeto, então mantive, mas com visual light) */
 .field label {
   display: block;
   font-size: 12px;
-  opacity: 0.75;
+  opacity: 1;
   margin-bottom: 6px;
+  color: rgba(15, 23, 42, 0.70);
 }
 
 .field input {
   width: 100%;
   padding: 10px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(2, 6, 23, 0.55);
-  color: #e5e7eb;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  color: rgba(15, 23, 42, 0.92);
   outline: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.field input:focus {
+  border-color: rgba(34, 197, 94, 0.45);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
 }
 
 .field input[type="color"] {
   padding: 0;
   height: 40px;
   width: 100%;
-  border-radius: 10px;
+  border-radius: 12px;
   cursor: pointer;
+  background: rgba(255, 255, 255, 0.82);
 }
 
+/* Header list */
 .settings-groups-list-header {
   display: flex;
   align-items: center;
@@ -116,10 +139,12 @@
 
 .settings-groups-empty {
   padding: 12px;
-  opacity: 0.7;
+  opacity: 1;
   font-size: 13px;
+  color: rgba(15, 23, 42, 0.62);
 }
 
+/* Grid */
 .settings-groups-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -132,15 +157,23 @@
   }
 }
 
+/* Item */
 .group-item {
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 16px;
   padding: 12px;
-  background: rgba(2, 6, 23, 0.45);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 14px 34px rgba(2, 6, 23, 0.06);
+}
+
+.group-item:hover {
+  border-color: rgba(34, 197, 94, 0.22);
+  box-shadow: 0 18px 46px rgba(2, 6, 23, 0.10);
 }
 
 .group-item.inactive {
-  opacity: 0.7;
+  opacity: 0.75;
 }
 
 .group-item-top {
@@ -152,7 +185,7 @@
 .group-badge {
   width: 12px;
   height: 36px;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
 .group-meta {
@@ -164,22 +197,26 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-weight: 700;
+  font-weight: 900;
   font-size: 14px;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .group-inactive-pill {
   font-size: 11px;
   padding: 3px 8px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  opacity: 0.9;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  opacity: 1;
+  background: rgba(15, 23, 42, 0.04);
+  color: rgba(15, 23, 42, 0.70);
 }
 
 .group-sub {
   margin-top: 4px;
   font-size: 12px;
-  opacity: 0.75;
+  opacity: 1;
+  color: rgba(15, 23, 42, 0.62);
 }
 
 .group-actions {
@@ -189,28 +226,52 @@
   margin-top: 12px;
 }
 
-/* Buttons */
+/* Buttons (mantive nomes, apenas “premium light”) */
 .btn-primary,
 .btn-secondary,
 .btn-danger,
 .btn-ghost {
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(15, 23, 42, 0.35);
-  color: #e5e7eb;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: rgba(255, 255, 255, 0.78);
+  color: rgba(15, 23, 42, 0.90);
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 800;
+  transition: transform 0.08s ease, box-shadow 0.15s ease, border-color 0.15s ease,
+    background 0.15s ease, opacity 0.15s ease;
+}
+
+.btn-primary:hover,
+.btn-secondary:hover,
+.btn-danger:hover,
+.btn-ghost:hover {
+  border-color: rgba(15, 23, 42, 0.22);
+  box-shadow: 0 14px 34px rgba(2, 6, 23, 0.10);
+  transform: translateY(-1px);
 }
 
 .btn-primary {
-  background: rgba(34, 197, 94, 0.18);
-  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.30);
+  color: rgba(5, 46, 26, 0.95);
+}
+
+.btn-primary:hover {
+  border-color: rgba(34, 197, 94, 0.45);
+  box-shadow: 0 14px 34px rgba(34, 197, 94, 0.16);
 }
 
 .btn-danger {
-  background: rgba(239, 68, 68, 0.18);
-  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: rgba(127, 29, 29, 0.95);
+}
+
+.btn-danger:hover {
+  border-color: rgba(239, 68, 68, 0.40);
+  box-shadow: 0 14px 34px rgba(239, 68, 68, 0.14);
 }
 
 .btn-ghost {
@@ -223,13 +284,16 @@
 .btn-ghost:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 /* Modal */
 .settings-groups-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(2, 6, 23, 0.45);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -239,10 +303,11 @@
 
 .settings-groups-modal {
   width: min(720px, 96vw);
-  background: rgba(2, 6, 23, 0.92);
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.90);
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 18px;
   padding: 14px;
+  box-shadow: 0 30px 90px rgba(2, 6, 23, 0.20);
 }
 
 .modal-header {
@@ -251,6 +316,7 @@
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .modal-actions {
@@ -263,11 +329,17 @@
 .modal-footnote {
   margin-top: 10px;
   font-size: 12px;
-  opacity: 0.7;
+  opacity: 1;
+  color: rgba(15, 23, 42, 0.62);
 }
 
 .modal-footnote code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
   font-size: 11px;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  padding: 2px 6px;
+  border-radius: 8px;
+  color: rgba(15, 23, 42, 0.78);
 }

@@ -1,47 +1,161 @@
-.assets-page {
-  padding: 24px;
+/* ===============================
+   ASSETS — Tema LIGHT / Glass
+   (mantém as mesmas classes)
+================================ */
+
+:root {
+  --as-bg: rgba(255, 255, 255, 0.88);
+  --as-bg-strong: rgba(255, 255, 255, 0.96);
+  --as-border: rgba(15, 23, 42, 0.12);
+  --as-border-soft: rgba(15, 23, 42, 0.08);
+  --as-text: rgba(15, 23, 42, 0.92);
+  --as-muted: rgba(15, 23, 42, 0.60);
+  --as-shadow: 0 14px 32px rgba(2, 6, 23, 0.08);
+
+  --as-green: #22c55e;
+  --as-blue: #2563eb;
+  --as-sky: #0284c7;
+  --as-red: #ef4444;
 }
 
+.assets-page {
+  padding: 24px;
+  color: var(--as-text);
+}
+
+/* Header */
 .assets-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
+  gap: 12px;
 }
 
+.assets-header h1,
+.assets-header h2,
+.assets-header h3 {
+  margin: 0;
+  color: var(--as-text);
+}
+
+/* Upload button */
 .assets-upload-btn {
-  background: #2563eb;
+  background: linear-gradient(135deg, var(--as-blue), #1d4ed8);
   color: #fff;
-  padding: 8px 14px;
-  border-radius: 8px;
+  padding: 9px 14px;
+  border-radius: 999px;
   cursor: pointer;
+  border: none;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  box-shadow: 0 14px 26px rgba(37, 99, 235, 0.18);
+  transition: transform 0.08s ease, filter 0.15s ease, box-shadow 0.15s ease;
 }
 
+.assets-upload-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
+  box-shadow: 0 18px 34px rgba(37, 99, 235, 0.22);
+}
+
+.assets-upload-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+/* Card base (mantém .card pq você já usa) */
 .card {
-  background: #0b1220;
-  border-radius: 12px;
+  background: var(--as-bg);
+  border-radius: 16px;
   padding: 16px;
+  border: 1px solid var(--as-border);
+  box-shadow: var(--as-shadow);
+  backdrop-filter: blur(10px);
 }
 
+/* Tabela */
 .assets-table {
   width: 100%;
   border-collapse: collapse;
+  overflow: hidden;
 }
 
 .assets-table th,
 .assets-table td {
-  padding: 10px;
-  border-bottom: 1px solid #1e293b;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--as-border-soft);
+  vertical-align: middle;
 }
 
+.assets-table th {
+  text-align: left;
+  font-size: 12px;
+  letter-spacing: 0.25px;
+  text-transform: uppercase;
+  color: rgba(15, 23, 42, 0.62);
+  background: rgba(255, 255, 255, 0.75);
+}
+
+/* linhas */
+.assets-table tbody tr:hover td {
+  background: rgba(34, 197, 94, 0.06);
+}
+
+/* Links */
 .assets-table a {
-  color: #38bdf8;
+  color: var(--as-sky);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.assets-table a:hover {
+  text-decoration: underline;
+}
+
+/* Actions */
+.actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .actions button {
-  margin-right: 8px;
+  margin-right: 0; /* mantém compatível, mas sem “quebrar” espaçamento */
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--as-border);
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(15, 23, 42, 0.86);
+  cursor: pointer;
+  font-weight: 800;
+  transition: transform 0.08s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
+.actions button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Danger */
 .actions .danger {
-  color: #ef4444;
+  color: #7f1d1d;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.10);
+}
+
+.actions .danger:hover {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.16);
 }

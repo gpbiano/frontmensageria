@@ -1,521 +1,384 @@
 /* ✅ IMPORTS SEMPRE NO TOPO (senão o Vite/PostCSS quebra o CSS inteiro) */
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&display=swap");
 
-/* ===============================
-   RESET BÁSICO + ALTURA TOTAL
-================================ */
+/* ======================================================
+   GP LABS — APP SHELL (LIGHT)
+   Consolidado + Bridge para app-* / sidebar-*
+   Arquivo pronto para produção
+====================================================== */
 
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-  padding: 0;
+/* ---------------- TOKENS ---------------- */
+
+:root {
+  /* Base */
+  --bg: #f8fafc;
+  --panel: rgba(255, 255, 255, 0.86);
+  --panelBorder: rgba(15, 23, 42, 0.10);
+
+  /* Texto */
+  --text: rgba(15, 23, 42, 0.92);
+  --muted: rgba(15, 23, 42, 0.60);
+
+  /* Marca */
+  --accent: #22c55e;
+  --accent2: #16a34a;
+
+  /* Radius */
+  --radius: 14px;
+
+  /* Sombras */
+  --shadow-sm: 0 6px 16px rgba(2, 6, 23, 0.06);
+  --shadow-md: 0 14px 30px rgba(2, 6, 23, 0.10);
+  --shadow-lg: 0 32px 70px rgba(2, 6, 23, 0.14);
 }
 
-* {
-  box-sizing: border-box;
-}
+/* ---------------- BASE ---------------- */
+
+html, body, #root { height: 100%; }
 
 body {
-  background: #020617;
-  color: #e5e7eb;
-  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    sans-serif;
-}
-
-/* ✅ RESET DE BOTÕES (evita diferenças entre browsers) */
-button {
-  font: inherit;
-  color: inherit;
-  letter-spacing: inherit;
-  line-height: inherit;
-  -webkit-appearance: none;
-  appearance: none;
-}
-button:focus {
-  outline: none;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
 }
 
 /* ======================================================
-   LAYOUT TRAVADO (HEADER FIXO + SCROLL SÓ NO CONTEÚDO)
+   GP LAYOUT (caso use gp-* no futuro)
 ====================================================== */
 
-/* Impede scroll da página inteira */
-html,
-body,
-#root {
-  overflow: hidden;
-}
-
-/* Shell ocupa tela inteira */
-.app-shell {
+.gp-shell {
   height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  background: #020617;
-  color: #e5e7eb;
+  color: var(--text);
+
+  background:
+    radial-gradient(1200px 600px at 18% 0%, rgba(34, 197, 94, 0.10), transparent 60%),
+    radial-gradient(900px 450px at 82% 10%, rgba(22, 163, 74, 0.06), transparent 55%),
+    var(--bg);
 }
 
-/* ===============================
-   HEADER SUPERIOR
-================================ */
+.gp-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
 
-.app-header {
-  height: 64px;
-  flex: 0 0 auto;
-  padding: 0 32px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.9);
+.gp-sidebar {
+  width: 260px;
+  transition: width 0.25s ease;
+  border-right: 1px solid var(--panelBorder);
+
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: radial-gradient(circle at top left, #022c22, #020617 55%, #000);
-  position: relative;
-  z-index: 100;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.app-header-left {
+.gp-sidebar.is-collapsed { width: 74px; }
+
+.gp-sidebar__brand {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--panelBorder);
 }
 
-.app-header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* ✅ Linha de destaque (Zenvia-like) */
-.gp-header-accent {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 4px;
-  background: linear-gradient(
-    90deg,
-    rgba(16, 185, 129, 0.95),
-    rgba(52, 211, 153, 0.95),
-    rgba(20, 83, 45, 0.95)
-  );
-  box-shadow: 0 8px 22px rgba(16, 185, 129, 0.12);
-}
-
-/* Logo topo */
-.gp-top-logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
-  object-fit: contain;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(15, 23, 42, 0.35);
-}
-
-/* Nome do Produto */
-.app-product-name {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-  color: rgba(226, 232, 240, 0.95);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.app-product-name-accent {
-  color: #22c55e;
-  font-weight: 700;
-  text-shadow: 0 0 12px rgba(34, 197, 94, 0.35);
-}
-
-/* ==========================
-   Header: dropdowns (Empresa + Perfil)
-========================== */
-
-.gp-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.gp-dd {
-  position: relative;
-}
-
-.gp-dd-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 34px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(2, 6, 23, 0.22);
-  color: rgba(226, 232, 240, 0.92);
-  cursor: pointer;
-}
-
-.gp-dd-btn:hover {
-  border-color: rgba(52, 211, 153, 0.28);
-}
-
-.gp-dd-btn-text {
-  max-width: 240px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.gp-dd-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 10px);
-  width: 260px;
+.gp-logo-badge {
+  width: 42px;
+  height: 42px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(2, 6, 23, 0.92);
-  backdrop-filter: blur(10px);
-  padding: 10px;
-  z-index: 9999;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  background: rgba(255, 255, 255, 0.90);
+  border: 1px solid var(--panelBorder);
+  box-shadow: var(--shadow-sm);
+  display: grid;
+  place-items: center;
 }
 
-.gp-dd-title {
-  font-size: 12px;
-  opacity: 0.7;
-  margin: 2px 6px 8px;
+.gp-logo-text {
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  color: rgba(15, 23, 42, 0.92);
 }
 
-.gp-dd-item {
-  width: 100%;
-  text-align: left;
-  padding: 10px 10px;
-  border-radius: 12px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: rgba(226, 232, 240, 0.92);
-  cursor: pointer;
-}
+.gp-brand-title { line-height: 1.1; }
+.gp-brand-name { font-weight: 900; font-size: 16px; }
+.gp-brand-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-.gp-dd-item:hover {
-  background: rgba(15, 23, 42, 0.55);
-  border-color: rgba(148, 163, 184, 0.1);
-}
-
-.gp-dd-item.is-muted {
-  cursor: default;
-  opacity: 0.9;
-}
-
-.gp-dd-sub {
-  font-size: 12px;
-  opacity: 0.7;
-  margin-top: 2px;
-}
-
-.gp-dd-sep {
-  height: 1px;
-  background: rgba(148, 163, 184, 0.12);
-  margin: 8px 0;
-}
-
-.gp-dd-item.is-danger {
-  color: rgba(248, 113, 113, 0.95);
-}
-.gp-dd-item.is-danger:hover {
-  background: rgba(248, 113, 113, 0.1);
-  border-color: rgba(248, 113, 113, 0.18);
-}
-
-/* ===============================
-   CORPO: SIDEBAR + MAIN
-================================ */
-
-.app-body {
-  flex: 1;
-  display: flex;
-  min-height: 0; /* 🔑 */
-  overflow: hidden;
-}
-
-/* SIDEBAR LATERAL (Zenvia-like) */
-.app-sidebar {
-  flex: 0 0 auto;
-  height: 100%;
-  border-right: 1px solid rgba(15, 23, 42, 0.9);
-  background: radial-gradient(
-      circle at top left,
-      rgba(34, 197, 94, 0.18),
-      #020617 60%
-    )
-    fixed;
-  padding: 18px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-
-  /* sidebar pode rolar */
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-/* toggle “pendurado” */
-.zenvia-sidebar {
-  position: relative;
-  transition: width 220ms ease;
-  overflow: visible; /* ✅ não cortar o toggle */
-}
-
-.sidebar-toggle-fab {
-  position: absolute;
-  top: 16px;
-  right: -14px;
+.gp-collapse-btn {
+  margin-left: auto;
   width: 34px;
   height: 34px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(15, 23, 42, 0.55);
-  color: rgba(226, 232, 240, 0.9);
+  border-radius: 12px;
+  border: 1px solid var(--panelBorder);
+  background: rgba(255, 255, 255, 0.85);
+  color: rgba(15, 23, 42, 0.70);
   display: grid;
   place-items: center;
   cursor: pointer;
-  z-index: 50;
-}
-.sidebar-toggle-fab:hover {
-  border-color: rgba(52, 211, 153, 0.28);
+  transition: all 0.15s ease;
 }
 
-/* Seções do menu */
-.sidebar-section {
-  margin-bottom: 6px;
+.gp-collapse-btn:hover {
+  border-color: rgba(34, 197, 94, 0.30);
+  background: #ffffff;
+  color: rgba(15, 23, 42, 0.95);
 }
 
-.sidebar-item-header {
+.gp-nav {
+  padding: 10px 10px 14px;
+  overflow: auto;
+}
+
+.gp-nav__section { margin-bottom: 8px; }
+
+.gp-nav__sectionBtn {
   width: 100%;
-  border: none;
-  background: transparent;
-  color: #e5e7eb;
-  padding: 8px 10px;
-  border-radius: 999px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  font-size: 14px;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.sidebar-item-header:hover {
-  background: rgba(15, 23, 42, 0.9);
-}
-
-.sidebar-item-header-active {
-  background: linear-gradient(135deg, #22c55e, #16a34a);
-  color: #022c22;
-}
-
-.sidebar-item-chevron {
-  opacity: 0.8;
-  transition: transform 0.18s ease;
-}
-.sidebar-item-chevron.open {
-  transform: rotate(180deg);
-}
-
-/* linha com ícone + label */
-.sb-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(15, 23, 42, 0.82);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.sb-ic {
+.gp-nav__sectionBtn:hover {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.06);
+}
+
+.gp-nav__sectionBtn.is-active {
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(34, 197, 94, 0.22);
+  color: rgba(15, 23, 42, 0.92);
+}
+
+.gp-nav__icon {
   width: 28px;
   height: 28px;
   border-radius: 12px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(15, 23, 42, 0.28);
-  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid var(--panelBorder);
 }
 
-.sb-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.gp-nav__label { font-weight: 700; font-size: 14px; }
+
+.gp-nav__chev {
+  margin-left: auto;
+  opacity: 0.7;
+  transition: transform 0.18s ease;
 }
 
-.sidebar-subitems {
+.gp-nav__chev.is-open { transform: rotate(180deg); }
+
+.gp-nav__items {
+  padding: 6px 8px 0 42px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-left: 6px;
-  margin: 6px 0 4px;
+  gap: 6px;
 }
 
-.sidebar-link {
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: #9ca3af;
-  text-align: left;
-  padding: 6px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.sidebar-link:hover {
-  background: rgba(15, 23, 42, 0.95);
-  color: #e5e7eb;
-}
-
-.sidebar-link-active {
-  background: rgba(34, 197, 94, 0.18);
-  color: #bbf7d0;
-}
-
-.sb-sub-ic {
-  width: 18px;
-  display: grid;
-  place-items: center;
-}
-
-/* Colapsado */
-.app-sidebar.zenvia-sidebar.is-collapsed .sidebar-item-header {
-  justify-content: center;
-  padding-left: 10px;
-  padding-right: 10px;
-}
-.app-sidebar.zenvia-sidebar.is-collapsed .sb-row {
-  justify-content: center;
-}
-
-/* ===============================
-   MAIN AREA (único scroll)
-================================ */
-
-.app-main {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 24px 28px 24px 28px;
-  display: flex;
-}
-
-/* scrollbar discreta */
-.app-main::-webkit-scrollbar {
-  width: 10px;
-}
-.app-main::-webkit-scrollbar-track {
-  background: transparent;
-}
-.app-main::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.25);
-  border-radius: 999px;
-}
-.app-main::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.45);
-}
-
-/* Páginas que ocupam tudo */
-.page-full {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  height: 100%;
-}
-
-/* Placeholders */
-.page-placeholder,
-.lobby-placeholder {
-  flex: 1;
-  border-radius: 16px;
-  border: 1px solid rgba(15, 23, 42, 0.9);
-  background: radial-gradient(
-    circle at top left,
-    rgba(34, 197, 94, 0.18),
-    rgba(15, 23, 42, 0.98)
-  );
-  padding: 20px 22px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  color: #e5e7eb;
-}
-
-.page-placeholder h2,
-.lobby-placeholder h2 {
-  font-size: 22px;
-  margin: 0 0 8px;
-}
-
-.page-placeholder p,
-.lobby-placeholder p {
-  font-size: 14px;
-  opacity: 0.9;
-}
-
-/* ==========================
-   Controles de som / silêncio
-========================== */
-.chat-audio-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.audio-btn {
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  background: rgba(2, 6, 23, 0.6);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  color: #94a3b8;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.gp-nav__item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.75);
+  color: rgba(15, 23, 42, 0.74);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.audio-btn:hover {
-  background: rgba(2, 6, 23, 0.85);
-  color: #e5e7eb;
+.gp-nav__item:hover {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+  color: rgba(15, 23, 42, 0.88);
 }
 
-.audio-btn.active {
-  background: rgba(34, 197, 94, 0.15);
-  border-color: rgba(34, 197, 94, 0.6);
-  color: #22c55e;
-  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
+.gp-nav__item.is-active {
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(34, 197, 94, 0.22);
+  color: rgba(21, 128, 61, 0.95);
 }
-.gp-help-btn {
-  display: inline-flex;
+
+/* ======================================================
+   BRIDGE REAL (teu JSX atual usa app-* / zenvia-sidebar)
+====================================================== */
+
+/* Shell: header em cima, body embaixo */
+.app-shell {
+  height: 100vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column; /* ✅ essencial */
+  color: var(--text);
+
+  background:
+    radial-gradient(1200px 600px at 18% 0%, rgba(34, 197, 94, 0.10), transparent 60%),
+    radial-gradient(900px 450px at 82% 10%, rgba(22, 163, 74, 0.06), transparent 55%),
+    var(--bg);
+}
+
+/* Body: sidebar + main */
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* Header (topbar real) */
+.app-header.gp-header,
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+
+  height: 64px;
+  min-height: 64px;
+  flex: 0 0 auto;
+
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+
+  padding: 0 16px;
+  border-bottom: 1px solid var(--panelBorder);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(10px);
+}
+
+/* A “barra verde” do header (se existir) não empurra layout */
+.gp-header-accent {
+  display: none !important;
+}
+
+/* Logo topo controlado */
+.gp-top-logo {
+  height: 28px;
+  width: auto;
+  display: block;
+}
+
+/* Main */
+.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* Sidebar (teu nav tem .app-sidebar zenvia-sidebar) */
+.app-sidebar.zenvia-sidebar {
+  flex: 0 0 320px;
+  width: 320px;
+  min-height: 0;
+
+  border-right: 1px solid var(--panelBorder);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: auto;
+  gap: 10px; /* ✅ não fica colado */
+}
+
+.app-sidebar.zenvia-sidebar.is-collapsed {
+  flex-basis: 76px;
+  width: 76px;
+  padding: 10px;
+}
+
+/* Toggle FAB não ficar solto */
+.sidebar-toggle-fab {
+  position: sticky;
+  top: 10px;
+  margin-left: auto;
+  z-index: 2;
+}
+
+/* Organização do menu */
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.sidebar-item-header { width: 100%; }
+.sidebar-subitems {
+  padding-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-sidebar.zenvia-sidebar.is-collapsed .sidebar-subitems {
+  padding-left: 0;
+}
+
+/* Botões do menu: full width e alinhados */
+.app-sidebar.zenvia-sidebar button,
+.app-sidebar.zenvia-sidebar a {
+  width: 100%;
+}
+
+/* (Opcional) deixa o primeiro bloco com respiro */
+.zenvia-sidebar .sidebar-section:first-child {
+  margin-top: 6px;
+}
+
+/* ======================================================
+   Controles básicos (não cru)
+====================================================== */
+
+select, button, input, textarea { font: inherit; }
+
+select, input, textarea {
+  border: 1px solid rgba(15, 23, 42, 0.14);
   border-radius: 10px;
-  text-decoration: none;
-  color: inherit;
-  opacity: 0.95;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(15, 23, 42, 0.88);
 }
 
-.gp-help-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  opacity: 1;
+select:focus, input:focus, textarea:focus {
+  outline: none;
+  border-color: rgba(34, 197, 94, 0.70);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
 }
 
-.gp-help-text {
-  font-size: 13px;
-  font-weight: 600;
+button {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+  color: rgba(15, 23, 42, 0.88);
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
 }
+
+button:hover {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(15, 23, 42, 0.18);
+}
+
+a { color: rgba(22, 163, 74, 0.95); }
+a:hover { text-decoration: underline; }
+

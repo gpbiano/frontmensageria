@@ -1,32 +1,54 @@
+/* ======================================================
+   GP LABS — APP SHELL (LIGHT)
+   Arquivo estrutural (layout + navegação)
+====================================================== */
+
+/* ---------------- TOKENS ---------------- */
+
 :root {
-  --bg: #020617;
-  --panel: rgba(2, 6, 23, 0.45);
-  --panelBorder: rgba(148, 163, 184, 0.12);
-  --text: rgba(226, 232, 240, 0.92);
-  --muted: rgba(148, 163, 184, 0.85);
+  /* Base */
+  --bg: #f8fafc;
+  --panel: rgba(255, 255, 255, 0.86);
+  --panelBorder: rgba(15, 23, 42, 0.10);
 
-  --accent: #34d399;
-  --accent2: #10b981;
+  /* Texto */
+  --text: rgba(15, 23, 42, 0.92);
+  --muted: rgba(15, 23, 42, 0.60);
 
+  /* Marca */
+  --accent: #22c55e;
+  --accent2: #16a34a;
+
+  /* Radius */
   --radius: 14px;
+
+  /* Sombras */
+  --shadow-sm: 0 6px 16px rgba(2, 6, 23, 0.06);
+  --shadow-md: 0 14px 30px rgba(2, 6, 23, 0.10);
 }
+
+/* ---------------- SHELL ---------------- */
 
 .gp-shell {
   height: 100vh;
   display: flex;
-  background: radial-gradient(
-      1200px 600px at 20% 0%,
-      rgba(16, 185, 129, 0.18),
+  color: var(--text);
+
+  background:
+    radial-gradient(
+      1200px 600px at 18% 0%,
+      rgba(34, 197, 94, 0.10),
       transparent 60%
     ),
     radial-gradient(
-      900px 450px at 80% 10%,
-      rgba(52, 211, 153, 0.10),
+      900px 450px at 82% 10%,
+      rgba(22, 163, 74, 0.06),
       transparent 55%
     ),
     var(--bg);
-  color: var(--text);
 }
+
+/* ---------------- MAIN ---------------- */
 
 .gp-main {
   flex: 1;
@@ -36,17 +58,16 @@
   padding: 16px;
 }
 
-/* ---------------- Sidebar ---------------- */
+/* ---------------- SIDEBAR ---------------- */
 
 .gp-sidebar {
   width: 260px;
   transition: width 0.25s ease;
   border-right: 1px solid var(--panelBorder);
-  background: linear-gradient(
-      180deg,
-      rgba(2, 6, 23, 0.65),
-      rgba(2, 6, 23, 0.35)
-    );
+
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -56,30 +77,31 @@
   width: 74px;
 }
 
+/* ---------------- BRAND ---------------- */
+
 .gp-sidebar__brand {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 14px 12px;
   border-bottom: 1px solid var(--panelBorder);
-  position: relative;
 }
 
 .gp-logo-badge {
   width: 42px;
   height: 42px;
   border-radius: 14px;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.90);
+  border: 1px solid var(--panelBorder);
+  box-shadow: var(--shadow-sm);
   display: grid;
   place-items: center;
-  flex: 0 0 auto;
 }
 
 .gp-logo-text {
-  font-weight: 800;
-  letter-spacing: 0.5px;
-  color: rgba(226, 232, 240, 0.95);
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .gp-brand-title {
@@ -87,7 +109,7 @@
 }
 
 .gp-brand-name {
-  font-weight: 800;
+  font-weight: 900;
   font-size: 16px;
 }
 
@@ -97,22 +119,29 @@
   margin-top: 2px;
 }
 
+/* ---------------- COLLAPSE BUTTON ---------------- */
+
 .gp-collapse-btn {
   margin-left: auto;
   width: 34px;
   height: 34px;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(15, 23, 42, 0.45);
-  color: rgba(226, 232, 240, 0.85);
+  border: 1px solid var(--panelBorder);
+  background: rgba(255, 255, 255, 0.85);
+  color: rgba(15, 23, 42, 0.70);
   display: grid;
   place-items: center;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
+
 .gp-collapse-btn:hover {
-  border-color: rgba(52, 211, 153, 0.28);
-  color: rgba(226, 232, 240, 0.95);
+  border-color: rgba(34, 197, 94, 0.30);
+  background: #ffffff;
+  color: rgba(15, 23, 42, 0.95);
 }
+
+/* ---------------- NAV ---------------- */
 
 .gp-nav {
   padding: 10px 10px 14px;
@@ -128,22 +157,27 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 12px;
+  padding: 12px;
   border-radius: 14px;
   border: 1px solid transparent;
   background: transparent;
-  color: rgba(226, 232, 240, 0.86);
+  color: rgba(15, 23, 42, 0.82);
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
+
 .gp-nav__sectionBtn:hover {
-  background: rgba(15, 23, 42, 0.35);
-  border-color: rgba(148, 163, 184, 0.10);
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.06);
 }
+
 .gp-nav__sectionBtn.is-active {
-  background: rgba(52, 211, 153, 0.16);
-  border-color: rgba(52, 211, 153, 0.22);
-  color: rgba(226, 232, 240, 0.95);
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(34, 197, 94, 0.22);
+  color: rgba(15, 23, 42, 0.92);
 }
+
+/* Icon */
 
 .gp-nav__icon {
   width: 28px;
@@ -151,23 +185,26 @@
   border-radius: 12px;
   display: grid;
   place-items: center;
-  background: rgba(15, 23, 42, 0.35);
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid var(--panelBorder);
 }
 
 .gp-nav__label {
-  font-weight: 650;
+  font-weight: 700;
   font-size: 14px;
 }
 
 .gp-nav__chev {
   margin-left: auto;
-  opacity: 0.75;
+  opacity: 0.7;
   transition: transform 0.18s ease;
 }
+
 .gp-nav__chev.is-open {
   transform: rotate(180deg);
 }
+
+/* Sub items */
 
 .gp-nav__items {
   padding: 6px 8px 0 42px;
@@ -177,52 +214,599 @@
 }
 
 .gp-nav__item {
-  text-align: left;
   padding: 10px 12px;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.10);
-  background: rgba(2, 6, 23, 0.20);
-  color: rgba(226, 232, 240, 0.80);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.75);
+  color: rgba(15, 23, 42, 0.74);
   cursor: pointer;
+  transition: all 0.15s ease;
 }
+
 .gp-nav__item:hover {
-  border-color: rgba(148, 163, 184, 0.18);
-  background: rgba(15, 23, 42, 0.28);
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+  color: rgba(15, 23, 42, 0.88);
 }
+
 .gp-nav__item.is-active {
-  border-color: rgba(52, 211, 153, 0.22);
-  background: rgba(16, 185, 129, 0.16);
-  color: rgba(226, 232, 240, 0.95);
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(34, 197, 94, 0.22);
+  color: rgba(21, 128, 61, 0.95);
 }
+/* ======================================================
+   BRIDGE (gp-* -> app-* / sidebar-*)
+   Cole no FINAL do app-shell.css
+====================================================== */
 
-/* ---------------- Page placeholder ---------------- */
-
-.gp-page {
-  min-height: calc(100vh - 32px);
+/* Estrutura: shell em coluna, body em linha */
+.app-shell {
+  height: 100vh;
+  min-height: 0;
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  color: var(--text);
+  background:
+    radial-gradient(1200px 600px at 18% 0%, rgba(34, 197, 94, 0.10), transparent 60%),
+    radial-gradient(900px 450px at 82% 10%, rgba(22, 163, 74, 0.06), transparent 55%),
+    var(--bg);
+}
+
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* Header fixo e “limpo” */
+.app-header.gp-header {
+  height: 64px;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  gap: 14px;
+
+  border-bottom: 1px solid var(--panelBorder);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(10px);
+}
+
+/* Evita barra/linha extra empurrando layout */
+.gp-header-accent {
+  display: none !important;
+}
+
+/* Logo do topo controlada */
+.gp-top-logo {
+  height: 28px;
+  width: auto;
+  display: block;
+}
+
+/* Main */
+.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* Sidebar = gp-sidebar (mesmo visual) */
+.app-sidebar.zenvia-sidebar {
+  flex: 0 0 320px;
+  width: 320px;
+  min-height: 0;
+
+  border-right: 1px solid var(--panelBorder);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.app-sidebar.zenvia-sidebar.is-collapsed {
+  flex-basis: 76px;
+  width: 76px;
+  padding: 10px;
+}
+
+/* Botão flutuante do toggle (não ficar “solto”) */
+.sidebar-toggle-fab {
+  position: sticky;
+  top: 10px;
+  margin-left: auto;
+  z-index: 2;
+}
+
+/* Organização do menu: espaçamento e alinhamento */
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.sidebar-item-header {
+  width: 100%;
+}
+
+/* Submenu com recuo e respiro */
+.sidebar-subitems {
+  padding-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Quando estiver colapsado, tira padding do submenu (não deve aparecer anyway) */
+.app-sidebar.zenvia-sidebar.is-collapsed .sidebar-subitems {
+  padding-left: 0;
+}
+
+/* Evita “colado” no topo do menu */
+.zenvia-sidebar .sidebar-section:first-child {
+  margin-top: 6px;
+}
+/* ======================================================
+   PATCH FINAL — header sticky + menu “descolado”
+   Cole no FINAL do app-shell.css
+====================================================== */
+
+/* 1) Header fica sempre no topo */
+.app-header.gp-header {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+}
+
+/* 2) Sidebar com espaçamento e layout consistente */
+.app-sidebar.zenvia-sidebar {
+  gap: 10px; /* ✅ respiro entre toggle e seções */
+}
+
+/* 3) Botões do menu sempre full width e alinhados */
+.app-sidebar.zenvia-sidebar button,
+.app-sidebar.zenvia-sidebar a {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  text-align: left;
+}
+
+/* 4) Botão da seção (Atendimento/Chatbot/Campanhas/Config) com cara de card */
+.sidebar-item-header {
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.70);
+  color: rgba(15, 23, 42, 0.88);
+}
+
+.sidebar-item-header:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(15, 23, 42, 0.16);
+}
+
+/* 5) Subitens com respiro e “leve” */
+.sidebar-subitems .sidebar-link {
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.sidebar-subitems .sidebar-link:hover {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(15, 23, 42, 0.14);
+}
+
+/* 6) Evita o main “colar” no header */
+.app-main {
+  padding-top: 14px;
+}
+/* ======================================================
+   AJUSTES FINOS — Header direita + Toggle menor + Botões mais escuros
+   Cole NO FINAL do app-shell.css
+====================================================== */
+
+/* ---------- Header: garante alinhamento à direita e não “vazar” ---------- */
+.app-header.gp-header {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+}
+
+.app-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 180px;
+}
+
+.app-header-right.gp-header-actions {
+  margin-left: auto;           /* ✅ empurra tudo pra direita */
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.gp-dd {
+  position: relative;
+}
+
+.gp-dd-menu {
+  position: absolute;
+  right: 0;                    /* ✅ dropdown abre alinhado à direita */
+  top: calc(100% + 8px);
+  z-index: 80;
+}
+
+/* Se o "Ajuda" estiver indo pro canto da tela, força ele ficar no fluxo */
+.gp-help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* ---------- Botões do header (mais escuros) ---------- */
+.gp-dd-btn,
+.gp-help-btn {
+  background: rgba(15, 23, 42, 0.06) !important;
+  border: 1px solid rgba(15, 23, 42, 0.12) !important;
+  color: rgba(15, 23, 42, 0.88) !important;
+  border-radius: 12px !important;
+  padding: 8px 10px !important;
+}
+
+.gp-dd-btn:hover,
+.gp-help-btn:hover {
+  background: rgba(15, 23, 42, 0.10) !important;
+  border-color: rgba(15, 23, 42, 0.18) !important;
+}
+
+.gp-dd-btn:active,
+.gp-help-btn:active {
+  background: rgba(15, 23, 42, 0.14) !important;
+}
+
+/* ---------- Toggle do menu (menor e mais discreto) ---------- */
+.sidebar-toggle-fab {
+  width: 34px !important;
+  height: 34px !important;
+  padding: 0 !important;
+  border-radius: 12px !important;
+
+  border: 1px solid rgba(15, 23, 42, 0.14) !important;
+  background: rgba(15, 23, 42, 0.06) !important;
+  color: rgba(15, 23, 42, 0.78) !important;
+
+  display: grid !important;
+  place-items: center !important;
+
+  margin-left: auto;
+}
+
+.sidebar-toggle-fab:hover {
+  background: rgba(15, 23, 42, 0.10) !important;
+  border-color: rgba(15, 23, 42, 0.18) !important;
+}
+
+.sidebar-toggle-fab svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+/* ---------- Menu: itens mais escuros + selecionado mais escuro ---------- */
+.sidebar-item-header,
+.sidebar-link {
+  background: rgba(15, 23, 42, 0.04) !important;
+  border: 1px solid rgba(15, 23, 42, 0.10) !important;
+  color: rgba(15, 23, 42, 0.86) !important;
+}
+
+.sidebar-item-header:hover,
+.sidebar-link:hover {
+  background: rgba(15, 23, 42, 0.08) !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+
+/* ✅ selecionado (seção) */
+.sidebar-item-header-active {
+  background: rgba(15, 23, 42, 0.12) !important;
+  border-color: rgba(15, 23, 42, 0.22) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+}
+
+/* ✅ selecionado (subitem) */
+.sidebar-link-active {
+  background: rgba(15, 23, 42, 0.12) !important;
+  border-color: rgba(15, 23, 42, 0.22) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+}
+
+/* ícones no menu um pouco mais presentes */
+.sb-ic,
+.sb-sub-ic {
+  color: rgba(15, 23, 42, 0.80);
+}
+/* ======================================================
+   MENU ATIVO — VERDE GP LABS (FIX FINAL)
+   Cole NO FINAL do app-shell.css
+====================================================== */
+
+/* ---------- VARIÁVEIS DE APOIO ---------- */
+:root {
+  --menu-bg: rgba(15, 23, 42, 0.04);
+  --menu-border: rgba(15, 23, 42, 0.12);
+
+  --menu-active-bg: rgba(34, 197, 94, 0.16);   /* verde claro */
+  --menu-active-border: rgba(34, 197, 94, 0.35);
+  --menu-active-text: #166534;                 /* verde escuro */
+
+  --menu-active-strong-bg: rgba(34, 197, 94, 0.26);
+}
+
+/* ---------- BOTÕES BASE ---------- */
+.sidebar-item-header,
+.sidebar-link {
+  background: var(--menu-bg) !important;
+  border: 1px solid var(--menu-border) !important;
+  color: rgba(15, 23, 42, 0.86) !important;
+  transition: all 0.15s ease;
+}
+
+/* Hover */
+.sidebar-item-header:hover,
+.sidebar-link:hover {
+  background: rgba(34, 197, 94, 0.08) !important;
+  border-color: rgba(34, 197, 94, 0.25) !important;
+}
+
+/* ---------- SEÇÃO ATIVA (Atendimento / Chatbot / etc) ---------- */
+.sidebar-item-header-active {
+  background: var(--menu-active-bg) !important;
+  border-color: var(--menu-active-border) !important;
+  color: var(--menu-active-text) !important;
+  font-weight: 600;
+}
+
+/* Ícone da seção ativa */
+.sidebar-item-header-active svg {
+  color: var(--menu-active-text) !important;
+}
+
+/* ---------- SUBITEM ATIVO (Conversas, Grupos, etc) ---------- */
+.sidebar-link-active {
+  background: var(--menu-active-strong-bg) !important;
+  border-color: var(--menu-active-border) !important;
+  color: var(--menu-active-text) !important;
+  font-weight: 600;
+}
+
+/* Ícone do subitem ativo */
+.sidebar-link-active svg {
+  color: var(--menu-active-text) !important;
+}
+
+/* ---------- QUANDO MENU ESTIVER COLAPSADO ---------- */
+.app-sidebar.is-collapsed .sidebar-item-header-active {
+  background: rgba(34, 197, 94, 0.22) !important;
+}
+
+/* ---------- CHEVRON (setinha) ---------- */
+.sidebar-item-header-active .sidebar-item-chevron {
+  color: var(--menu-active-text) !important;
+}
+/* ======================================================
+   GP LABS — PATCH VISUAL (igual produção)
+   - seta/chevron alinhada
+   - botão recolher menu mais sutil e menor
+   - estados ativos em verde (mais escuro quando selecionado)
+   - Ajuda com outra cor
+   - "Cliente OnLine" mantendo OnLine verde
+   Cole no FINAL do app-shell.css
+====================================================== */
+
+:root {
+  --gp-green: #22c55e;
+  --gp-green-700: #16a34a;
+  --gp-ink: rgba(15, 23, 42, 0.92);
+  --gp-muted: rgba(15, 23, 42, 0.62);
+  --gp-border: rgba(15, 23, 42, 0.12);
+  --gp-hover: rgba(15, 23, 42, 0.05);
+}
+
+/* ---------------- HEADER ---------------- */
+
+/* mantém o "OnLine" verde */
+.app-product-name-accent {
+  color: var(--gp-green-700) !important;
+  font-weight: 900;
+}
+
+/* header actions sem “estourar” e alinhado à direita */
+.gp-header-actions,
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+/* Ajuda com outra cor (azul/indigo sutil) */
+.gp-help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  height: 36px;
+  padding: 0 12px;
+
+  border-radius: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  background: rgba(37, 99, 235, 0.08);
+  color: rgba(30, 64, 175, 0.95) !important;
+
+  text-decoration: none;
+}
+.gp-help-btn:hover {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+/* ---------------- SIDEBAR ---------------- */
+
+.app-sidebar.zenvia-sidebar {
+  gap: 12px;
+}
+
+/* botão recolher/expandir: menor e mais “sutil” */
+.sidebar-toggle-fab {
+  position: sticky;
+  top: 10px;
+
+  width: 32px !important;
+  height: 32px !important;
+  padding: 0 !important;
+
+  border-radius: 10px !important;
+  border: 1px solid var(--gp-border) !important;
+  background: rgba(255, 255, 255, 0.65) !important;
+  color: rgba(15, 23, 42, 0.75) !important;
+
+  display: grid !important;
+  place-items: center !important;
+
+  box-shadow: 0 6px 16px rgba(2, 6, 23, 0.06);
+}
+.sidebar-toggle-fab:hover {
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(15, 23, 42, 0.18) !important;
+}
+
+/* seção do menu: garante seta alinhada e texto + ícone corretos */
+.sidebar-item-header {
+  width: 100% !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+
+  padding: 10px 12px !important;
+  border-radius: 14px !important;
+
+  border: 1px solid rgba(15, 23, 42, 0.10) !important;
+  background: rgba(255, 255, 255, 0.62) !important;
+  color: rgba(15, 23, 42, 0.86) !important;
+}
+.sidebar-item-header:hover {
+  background: rgba(255, 255, 255, 0.90) !important;
+  border-color: rgba(15, 23, 42, 0.16) !important;
+}
+
+/* ativo (como produção): verde e um pouco mais escuro */
+.sidebar-item-header-active {
+  background: rgba(34, 197, 94, 0.18) !important;
+  border-color: rgba(34, 197, 94, 0.32) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+}
+
+/* linha interna do header do menu ocupa a esquerda toda */
+.sidebar-item-header .sb-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ícone com “badge” discreto */
+.sidebar-item-header .sb-ic {
+  width: 28px;
+  height: 28px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+}
+
+/* chevron sempre no extremo direito e alinhado */
+.sidebar-item-chevron {
+  margin-left: 12px !important;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  opacity: 0.75;
+}
+.sidebar-item-chevron.open {
+  transform: rotate(180deg);
 }
 
-.gp-page__card {
-  width: min(900px, 100%);
-  border-radius: var(--radius);
-  background: var(--panel);
-  border: 1px solid var(--panelBorder);
-  padding: 18px;
+/* subitems com recuo e respiro */
+.sidebar-subitems {
+  padding-left: 12px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
 }
 
-.gp-page__h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
+/* links do submenu */
+.sidebar-link {
+  width: 100% !important;
+
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+
+  padding: 9px 12px !important;
+  border-radius: 12px !important;
+
+  border: 1px solid rgba(15, 23, 42, 0.10) !important;
+  background: rgba(255, 255, 255, 0.58) !important;
+  color: rgba(15, 23, 42, 0.78) !important;
+}
+.sidebar-link:hover {
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(15, 23, 42, 0.16) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
 }
 
-.gp-page__p {
-  margin: 0 0 6px;
-  color: rgba(226, 232, 240, 0.86);
+/* submenu ativo: verde (e um tom mais escuro quando selecionado) */
+.sidebar-link-active {
+  background: rgba(34, 197, 94, 0.20) !important;
+  border-color: rgba(34, 197, 94, 0.34) !important;
+  color: rgba(21, 128, 61, 0.98) !important;
 }
 
-.gp-page__muted {
-  margin: 0;
-  color: rgba(148, 163, 184, 0.85);
+/* ícone do subitem */
+.sb-sub-ic {
+  width: 26px;
+  height: 26px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.75);
+}
+
+/* quando sidebar colapsada, centraliza tudo e mantém botão toggle compacto */
+.app-sidebar.zenvia-sidebar.is-collapsed .sidebar-item-header,
+.app-sidebar.zenvia-sidebar.is-collapsed .sidebar-link {
+  justify-content: center !important;
+  padding: 10px 8px !important;
 }

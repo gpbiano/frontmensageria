@@ -1,24 +1,26 @@
 /* ===============================
-   SETTINGS – CHANNELS (NEW)
+   SETTINGS – CHANNELS (NEW) — LIGHT / Glass
 ================================ */
 
 :root {
-  --sc-bg: #070b16;
-  --sc-card: #0b1220;
-  --sc-border: rgba(255, 255, 255, 0.08);
-  --sc-border-strong: rgba(255, 255, 255, 0.12);
-  --sc-text: #e5e7eb;
-  --sc-muted: rgba(229, 231, 235, 0.75);
-  --sc-muted2: rgba(229, 231, 235, 0.6);
+  /* Base light */
+  --sc-bg: rgba(248, 250, 252, 0.92);
+  --sc-card: rgba(255, 255, 255, 0.82);
+  --sc-border: rgba(15, 23, 42, 0.10);
+  --sc-border-strong: rgba(15, 23, 42, 0.14);
+  --sc-text: rgba(15, 23, 42, 0.92);
+  --sc-muted: rgba(15, 23, 42, 0.62);
+  --sc-muted2: rgba(15, 23, 42, 0.52);
 
-  --sc-green: #34d399;
-  --sc-green-2: rgba(52, 211, 153, 0.14);
-  --sc-red: #f87171;
-  --sc-red-2: rgba(248, 113, 113, 0.14);
-  --sc-yellow: #fbbf24;
-  --sc-yellow-2: rgba(251, 191, 36, 0.12);
+  /* Accents */
+  --sc-green: #22c55e;
+  --sc-green-2: rgba(34, 197, 94, 0.12);
+  --sc-red: #ef4444;
+  --sc-red-2: rgba(239, 68, 68, 0.10);
+  --sc-yellow: #f59e0b;
+  --sc-yellow-2: rgba(245, 158, 11, 0.10);
 
-  --sc-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  --sc-shadow: 0 18px 46px rgba(2, 6, 23, 0.10);
   --sc-radius: 18px;
 }
 
@@ -33,17 +35,20 @@
 /* topo */
 .settings-title {
   font-size: 26px;
-  font-weight: 800;
+  font-weight: 900;
   margin: 0;
   letter-spacing: -0.02em;
+  color: var(--sc-text);
 }
 
 .settings-subtitle {
   margin: 8px 0 18px 0;
-  opacity: 0.82;
+  opacity: 1;
   line-height: 1.4;
+  color: var(--sc-muted);
 }
 
+/* pill info */
 .settings-env-info {
   display: inline-flex;
   align-items: center;
@@ -52,24 +57,30 @@
   padding: 8px 10px;
   border: 1px solid var(--sc-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.72);
   font-size: 12px;
-  opacity: 0.9;
+  color: var(--sc-muted);
+  box-shadow: 0 10px 26px rgba(2, 6, 23, 0.06);
+  backdrop-filter: blur(10px);
 }
 
+/* section */
 .settings-section {
   margin-top: 18px;
   padding: 16px;
   border: 1px solid var(--sc-border);
   border-radius: var(--sc-radius);
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.70);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 46px rgba(2, 6, 23, 0.06);
 }
 
 .settings-section-title {
   margin: 0;
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 900;
   letter-spacing: -0.01em;
+  color: var(--sc-text);
 }
 
 .settings-section-description {
@@ -100,14 +111,16 @@
   border-radius: var(--sc-radius);
   padding: 16px;
   box-shadow: var(--sc-shadow);
-  transition: transform 0.15s ease, border-color 0.15s ease,
-    background 0.15s ease;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease,
+    box-shadow 0.15s ease;
+  backdrop-filter: blur(12px);
 }
 
 .settings-channel-card:hover {
   transform: translateY(-1px);
-  border-color: rgba(52, 211, 153, 0.25);
-  background: rgba(11, 18, 32, 0.96);
+  border-color: rgba(34, 197, 94, 0.25);
+  background: rgba(255, 255, 255, 0.90);
+  box-shadow: 0 22px 60px rgba(2, 6, 23, 0.12);
 }
 
 .settings-channel-header {
@@ -119,7 +132,8 @@
 
 .settings-channel-title {
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 900;
+  color: var(--sc-text);
 }
 
 .settings-channel-description {
@@ -132,21 +146,22 @@
 /* buttons */
 .settings-primary-btn {
   appearance: none;
-  border: 1px solid rgba(52, 211, 153, 0.35);
-  background: rgba(52, 211, 153, 0.12);
-  color: #d1fae5;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-weight: 800;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.12);
+  color: rgba(5, 46, 26, 0.95);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 900;
   cursor: pointer;
-  transition: transform 0.12s ease, background 0.12s ease,
-    border-color 0.12s ease, opacity 0.12s ease;
+  transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease,
+    opacity 0.12s ease, box-shadow 0.15s ease;
   user-select: none;
 }
 
 .settings-primary-btn:hover {
-  background: rgba(52, 211, 153, 0.18);
-  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 14px 34px rgba(34, 197, 94, 0.14);
 }
 
 .settings-primary-btn:active {
@@ -156,6 +171,7 @@
 .settings-primary-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 /* status pill */
@@ -166,9 +182,10 @@
   padding: 6px 10px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 900;
   border: 1px solid var(--sc-border);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.80);
+  color: rgba(15, 23, 42, 0.78);
 }
 
 .status-pill::before {
@@ -176,13 +193,13 @@
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(15, 23, 42, 0.25);
 }
 
 .status-pill-on {
-  border-color: rgba(52, 211, 153, 0.35);
+  border-color: rgba(34, 197, 94, 0.28);
   background: var(--sc-green-2);
-  color: #d1fae5;
+  color: rgba(20, 83, 45, 0.95);
 }
 
 .status-pill-on::before {
@@ -190,9 +207,9 @@
 }
 
 .status-pill-off {
-  border-color: rgba(248, 113, 113, 0.35);
+  border-color: rgba(239, 68, 68, 0.25);
   background: var(--sc-red-2);
-  color: #fecaca;
+  color: rgba(127, 29, 29, 0.95);
 }
 
 .status-pill-off::before {
@@ -200,9 +217,9 @@
 }
 
 .status-pill-soon {
-  border-color: rgba(251, 191, 36, 0.35);
+  border-color: rgba(245, 158, 11, 0.25);
   background: var(--sc-yellow-2);
-  color: #fde68a;
+  color: rgba(120, 53, 15, 0.95);
 }
 
 .status-pill-soon::before {
@@ -214,14 +231,16 @@
   margin-top: 14px;
   padding: 14px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.72);
   border: 1px solid var(--sc-border);
+  backdrop-filter: blur(12px);
 }
 
 .settings-steps-title {
   margin: 0 0 6px 0;
-  font-weight: 800;
+  font-weight: 900;
   font-size: 13px;
+  color: var(--sc-text);
 }
 
 .settings-steps-description {
@@ -241,11 +260,12 @@
 
 /* small code look */
 code {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.10);
   padding: 2px 6px;
   border-radius: 8px;
   font-size: 12px;
+  color: rgba(15, 23, 42, 0.78);
 }
 
 /* optional: textarea monospace in modal */
@@ -259,7 +279,7 @@ textarea[readonly] {
 
 /* modal close button hover */
 button[title="Fechar"]:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(15, 23, 42, 0.04);
 }
 
 /* focus states */
@@ -275,6 +295,6 @@ input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 .settings-primary-btn:focus-visible {
-  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.22);
-  border-color: rgba(52, 211, 153, 0.45) !important;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.55) !important;
 }

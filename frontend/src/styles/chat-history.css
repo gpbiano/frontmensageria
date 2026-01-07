@@ -1,6 +1,19 @@
 /* =====================================================
    CHAT HISTORY — Layout e Sidebar (somente HISTÓRICO)
+   Tema LIGHT / Glass — consistente com Cliente OnLine
 ===================================================== */
+
+:root {
+  --ch-bg: rgba(255, 255, 255, 0.88);
+  --ch-bg-soft: rgba(255, 255, 255, 0.76);
+  --ch-border: rgba(15, 23, 42, 0.12);
+  --ch-border-soft: rgba(15, 23, 42, 0.08);
+  --ch-text: rgba(15, 23, 42, 0.92);
+  --ch-muted: rgba(15, 23, 42, 0.62);
+
+  --ch-green: #22c55e;
+  --ch-shadow: 0 14px 32px rgba(2, 6, 23, 0.08);
+}
 
 .chat-history-layout {
   height: calc(100vh - 64px);
@@ -11,6 +24,7 @@
   min-height: 0;
 }
 
+/* Sidebar */
 .chat-history-sidebar {
   width: 360px;
   min-width: 320px;
@@ -20,13 +34,16 @@
   gap: 12px;
   min-height: 0;
 
-  background: rgba(2, 6, 23, 0.35);
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: var(--ch-bg);
+  border: 1px solid var(--ch-border);
   border-radius: 14px;
   padding: 14px;
   box-sizing: border-box;
+  box-shadow: var(--ch-shadow);
+  backdrop-filter: blur(10px);
 }
 
+/* Main */
 .chat-history-main {
   flex: 1;
   min-width: 0;
@@ -35,11 +52,13 @@
   display: flex;
   flex-direction: column;
 
-  background: rgba(2, 6, 23, 0.2);
-  border: 1px solid rgba(148, 163, 184, 0.10);
+  background: var(--ch-bg);
+  border: 1px solid var(--ch-border);
   border-radius: 14px;
   padding: 14px;
   box-sizing: border-box;
+  box-shadow: var(--ch-shadow);
+  backdrop-filter: blur(10px);
 }
 
 /* Header */
@@ -47,12 +66,14 @@
   margin: 0;
   font-size: 20px;
   letter-spacing: 0.2px;
+  color: var(--ch-text);
 }
 
 .chat-history-header p {
   margin: 6px 0 0 0;
   font-size: 12px;
-  opacity: 0.75;
+  opacity: 1;
+  color: var(--ch-muted);
 }
 
 /* Filtros */
@@ -65,21 +86,23 @@
 .chat-history-filters button {
   height: 34px;
   padding: 0 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(2, 6, 23, 0.35);
-  color: rgba(226, 232, 240, 0.95);
+  border-radius: 999px;
+  border: 1px solid var(--ch-border);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ch-text);
   cursor: pointer;
   font-size: 12px;
 }
 
 .chat-history-filters button:hover {
-  background: rgba(2, 6, 23, 0.55);
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
 }
 
 .chat-history-filters button.active {
   border-color: rgba(34, 197, 94, 0.45);
-  background: rgba(20, 83, 45, 0.14);
+  background: rgba(34, 197, 94, 0.12);
+  color: #166534;
 }
 
 /* Busca */
@@ -87,16 +110,21 @@
   width: 100%;
   height: 36px;
   padding: 0 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(2, 6, 23, 0.35);
-  color: rgba(226, 232, 240, 0.95);
+  border-radius: 12px;
+  border: 1px solid var(--ch-border);
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--ch-text);
   outline: none;
   box-sizing: border-box;
 }
 
+.chat-history-search input::placeholder {
+  color: rgba(15, 23, 42, 0.45);
+}
+
 .chat-history-search input:focus {
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: rgba(34, 197, 94, 0.45);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
 }
 
 /* Lista */
@@ -110,23 +138,39 @@
   gap: 10px;
 }
 
+/* scrollbar leve */
+.chat-history-list::-webkit-scrollbar {
+  width: 10px;
+}
+.chat-history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-history-list::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+}
+.chat-history-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 23, 42, 0.28);
+}
+
 .chat-history-empty {
   padding: 14px 10px;
   font-size: 13px;
-  opacity: 0.75;
+  opacity: 1;
+  color: var(--ch-muted);
 }
 
 /* Item */
 .chat-history-item {
   width: 100%;
   text-align: left;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 12px;
   cursor: pointer;
 
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(2, 6, 23, 0.25);
-  color: rgba(226, 232, 240, 0.95);
+  border: 1px solid var(--ch-border-soft);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ch-text);
 
   display: flex;
   flex-direction: column;
@@ -135,13 +179,13 @@
 }
 
 .chat-history-item:hover {
-  border-color: rgba(34, 197, 94, 0.28);
-  background: rgba(2, 6, 23, 0.32);
+  border-color: rgba(34, 197, 94, 0.35);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.10);
 }
 
 .chat-history-item.selected {
   border-color: rgba(34, 197, 94, 0.45);
-  background: rgba(20, 83, 45, 0.14);
+  background: rgba(34, 197, 94, 0.10);
 }
 
 .chat-history-item-main {
@@ -152,19 +196,21 @@
 }
 
 .chat-history-contact-name {
-  font-weight: 700;
+  font-weight: 800;
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+  color: var(--ch-text);
 }
 
 .chat-history-phone,
 .chat-history-last-message {
   font-size: 12px;
-  opacity: 0.78;
+  opacity: 1;
+  color: var(--ch-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -176,7 +222,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.8;
+  opacity: 1;
+  color: var(--ch-muted);
 }
 
 /* Responsivo */

@@ -1,13 +1,30 @@
 /* ===============================
    CHATBOT – ASSISTENTE VIRTUAL
    GP LABS (somente tela de configuração do bot)
+   (Tema LIGHT + sem vazar estilos para outras páginas)
 ================================ */
 
+:root {
+  --gp-surface: rgba(255, 255, 255, 0.88);
+  --gp-surface-strong: rgba(255, 255, 255, 0.96);
+  --gp-border: rgba(15, 23, 42, 0.10);
+  --gp-border2: rgba(15, 23, 42, 0.14);
+  --gp-text: rgba(15, 23, 42, 0.92);
+  --gp-muted: rgba(15, 23, 42, 0.60);
+  --gp-shadow: 0 14px 30px rgba(2, 6, 23, 0.08);
+  --gp-radius: 16px;
+
+  --gp-accent: #22c55e;
+  --gp-accent2: #16a34a;
+}
+
+/* Página */
 .chatbot-page {
   padding: 32px 40px;
   max-width: 1200px;
   margin: 0 auto;
-  color: #f9fafb;
+
+  color: var(--gp-text);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
 }
 
@@ -22,14 +39,15 @@
 
 .chatbot-header h1 {
   margin: 0;
-  font-size: 28px;
-  font-weight: 700;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--gp-text);
 }
 
 .chatbot-header p {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   font-size: 14px;
-  color: #9ca3af;
+  color: var(--gp-muted);
   max-width: 640px;
 }
 
@@ -39,23 +57,28 @@
   border-radius: 999px;
   padding: 10px 20px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 800;
   cursor: pointer;
-  background: linear-gradient(135deg, #22c55e, #16a34a);
-  color: #022c22;
-  box-shadow: 0 12px 30px rgba(34, 197, 94, 0.35);
+
+  background: linear-gradient(135deg, var(--gp-accent), var(--gp-accent2));
+  color: #06281a;
+
+  box-shadow: 0 12px 26px rgba(34, 197, 94, 0.22);
   white-space: nowrap;
-  transition: transform 0.1s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+
+  transition: transform 0.1s ease, box-shadow 0.15s ease, opacity 0.15s ease, filter 0.15s ease;
 }
 
 .chatbot-save-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 16px 40px rgba(34, 197, 94, 0.45);
+  box-shadow: 0 16px 34px rgba(34, 197, 94, 0.28);
+  filter: brightness(1.02);
 }
 
 .chatbot-save-btn:disabled {
   opacity: 0.6;
   cursor: wait;
+  box-shadow: none;
 }
 
 /* GRID PRINCIPAL */
@@ -74,23 +97,25 @@
 
 /* CARDS */
 .chatbot-card {
-  background: #020617;
-  border-radius: 16px;
+  background: var(--gp-surface);
+  border-radius: var(--gp-radius);
   padding: 18px 20px;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--gp-border);
+  box-shadow: var(--gp-shadow);
+  color: var(--gp-text);
 }
 
 .chatbot-card h2 {
   margin: 0 0 4px;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--gp-text);
 }
 
 .chatbot-card-subtitle {
   margin: 0 0 14px;
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--gp-muted);
 }
 
 /* CAMPOS */
@@ -115,46 +140,47 @@
 
 .chatbot-field-row label {
   font-size: 13px;
-  font-weight: 500;
-  color: #e5e7eb;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.86);
 }
 
 .chatbot-help {
   font-size: 11px;
-  color: #9ca3af;
+  color: rgba(15, 23, 42, 0.55);
 }
 
 /* Inputs genéricos */
 .chatbot-input,
 .chatbot-select,
 .chatbot-textarea {
-  background: rgba(15, 23, 42, 0.9);
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  padding: 8px 10px;
+  background: var(--gp-surface-strong);
+  border-radius: 12px;
+  border: 1px solid var(--gp-border2);
+  padding: 10px 12px;
   font-size: 13px;
-  color: #e5e7eb;
+  color: var(--gp-text);
   font-family: inherit;
+
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
 .chatbot-textarea {
   resize: vertical;
-  min-height: 64px;
+  min-height: 80px;
 }
 
 .chatbot-input::placeholder,
 .chatbot-textarea::placeholder {
-  color: #6b7280;
+  color: rgba(15, 23, 42, 0.45);
 }
 
 .chatbot-input:focus,
 .chatbot-select:focus,
 .chatbot-textarea:focus {
-  border-color: #34d399;
-  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.5);
-  background: #020617;
+  border-color: rgba(34, 197, 94, 0.65);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
+  background: #fff;
 }
 
 /* SWITCH (toggle de ativo) */
@@ -165,6 +191,7 @@
   gap: 10px;
   width: 100%;
   font-size: 13px;
+  color: rgba(15, 23, 42, 0.86);
 }
 
 .chatbot-switch {
@@ -184,7 +211,7 @@
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background: #4b5563;
+  background: rgba(15, 23, 42, 0.28);
   border-radius: 999px;
   transition: 0.2s;
 }
@@ -196,13 +223,14 @@
   width: 16px;
   left: 3px;
   top: 3px;
-  background: #e5e7eb;
+  background: rgba(255, 255, 255, 0.98);
   border-radius: 999px;
   transition: 0.2s;
+  box-shadow: 0 6px 14px rgba(2, 6, 23, 0.12);
 }
 
 .chatbot-switch input:checked + .chatbot-switch-slider {
-  background: #22c55e;
+  background: var(--gp-accent);
 }
 
 .chatbot-switch input:checked + .chatbot-switch-slider::before {
@@ -228,37 +256,40 @@
     grid-template-columns: 1fr;
   }
 }
+
 /* ==============================
    BOTÃO ENCERRAR ATENDIMENTO
+   ⚠️ Importante: NÃO VAZAR
+   - removi o seletor genérico ".chat-panel-header button"
+   - deixei apenas para classes específicas
 ============================== */
 
-.chat-panel-header button,
 .chat-panel-header .btn-close,
 .chat-panel-header .close-conversation {
   height: 34px;
   padding: 0 14px;
 
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
 
-  border-radius: 10px;
+  border-radius: 12px;
   border: 1px solid rgba(239, 68, 68, 0.35);
 
   background: rgba(239, 68, 68, 0.12);
-  color: rgba(254, 226, 226, 0.95);
+  color: rgba(127, 29, 29, 0.92);
 
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
-.chat-panel-header button:hover,
 .chat-panel-header .btn-close:hover,
 .chat-panel-header .close-conversation:hover {
-  background: rgba(239, 68, 68, 0.22);
-  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.50);
 }
 
-.chat-panel-header button:disabled {
+.chat-panel-header .btn-close:disabled,
+.chat-panel-header .close-conversation:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

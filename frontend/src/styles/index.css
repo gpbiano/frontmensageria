@@ -1,68 +1,165 @@
+/* ======================================================
+   INDEX (GLOBAL RESET) — GP Labs
+   Remove defaults do Vite que quebram layout
+====================================================== */
+
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Ubuntu, "Helvetica Neue", Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* ✅ NÃO usar color-scheme aqui (evita overrides automáticos) */
 }
 
+/* Reset básico */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* ✅ Corpo neutro (NÃO centraliza app) */
+body {
+  min-width: 320px;
+  background: transparent;
+  color: inherit;
+}
+
+/* Links neutros (seu tema define cor depois) */
 a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+  color: inherit;
+  text-decoration: none;
 }
 a:hover {
-  color: #535bf2;
+  text-decoration: underline;
+}
+
+/* Botões e inputs: não imponha tema aqui */
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* Imagens */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+/* =====================================================
+   FIX: Sidebar/menu fora do lugar (centralizado)
+   Força layout full-width e alinhado à esquerda
+===================================================== */
+
+.app-shell {
+  width: 100%;
+  max-width: none !important;
+}
+
+.app-body {
+  width: 100%;
+  max-width: none !important;
+
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start !important;
+
+  margin: 0 !important;
+}
+
+/* garante que a sidebar não “flutue” com margin auto */
+.app-sidebar {
+  flex: 0 0 auto;
+  margin: 0 !important;
+  align-self: stretch;
+}
+
+/* main ocupa o resto */
+.app-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* =====================================================
+   FIX FINAL: body do Vite está centralizando tudo
+   (body { display:flex; place-items:center; })
+   Sobrescreve para layout de app (sidebar + main)
+===================================================== */
+
+html, body {
+  width: 100%;
+  height: 100%;
 }
 
 body {
+  display: block !important;     /* derruba o flex centralizador */
+  place-items: unset !important; /* remove o center */
+  min-height: 100vh;
   margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
+}
+
+/* garante que o React root ocupe a tela toda */
+#root {
+  width: 100%;
   min-height: 100vh;
 }
+/* ======================================================
+   FIX MENU FORA DO LUGAR — App Shell Layout
+   Cole NO FINAL do CSS global
+====================================================== */
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+/* 1) App shell precisa ser COLUNA (header em cima, body embaixo) */
+.app-shell {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100vh !important;
+  min-height: 0 !important;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+/* 2) Body precisa ser ROW (sidebar esquerda, main direita) */
+.app-body {
+  flex: 1 !important;
+  min-height: 0 !important;
+  display: flex !important;
+  align-items: stretch !important;
+}
+
+/* 3) Sidebar sempre “colada” na esquerda, com altura total do body */
+.app-sidebar {
+  flex: 0 0 auto !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+}
+
+/* 4) Main ocupa o restante e permite scroll interno */
+.app-main {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+}
+
+/* 5) Evita que estilos antigos do patch deixem app-shell como ROW */
+.gp-shell {
+  /* gp-shell pode continuar row se você usar em outra página,
+     mas o app-shell (layout atual) precisa ser coluna */
+}
+
+/* 6) (Opcional) se algum CSS antigo estiver aplicando “center” no nav */
+.app-sidebar * {
+  align-content: initial;
 }

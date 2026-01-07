@@ -38,11 +38,34 @@ import SettingsChannelsPage from "./pages/settings/SettingsChannelsPage.jsx";
 // Criar Senha (Público)
 import CreatePasswordPage from "./pages/auth/CreatePasswordPage.jsx";
 
-// CSS
+/* ==========================================================
+   CSS (ORDEM CORRETA)
+========================================================== */
+import "./styles/index.css";
+import "./styles/app-shell.css";
 import "./styles/App.css";
+
+// ✅ Chat (módulos sensíveis)
+import "./styles/chat-panel.css";
+import "./styles/chat-composer.css";
+import "./styles/chat-history.css";
+import "./styles/chat-human.css";
+import "./styles/chatbot.css";
+import "./styles/chatbot-history.css";
+
+// ✅ Páginas / módulos
+import "./styles/login-page.css";
+import "./styles/create-password.css";
+import "./styles/optout.css";
+
 import "./styles/outbound.css";
+import "./styles/campaigns.css";
+import "./styles/templates-create.css";
+import "./styles/assets.css";
+
 import "./styles/settings-groups.css";
 import "./styles/settings-channels.css";
+import "./styles/settings-users.css";
 
 // ✅ Ícones
 import {
@@ -75,7 +98,8 @@ const SIDEBAR_LS_COLLAPSED = "gp.sidebar.collapsed";
 const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
 
 // ✅ Help Portal
-const HELP_PORTAL_URL = "https://gplabs.atlassian.net/servicedesk/customer/portals";
+const HELP_PORTAL_URL =
+  "https://gplabs.atlassian.net/servicedesk/customer/portals";
 
 /* ==========================================================
    AUTH HELPERS
@@ -137,17 +161,14 @@ export default function App() {
       setAuthVersion((v) => v + 1);
     }
 
-    // 1) muda em outra aba
     function onStorage(e) {
       if (e.key === AUTH_TOKEN_KEY || e.key === AUTH_USER_KEY) bump();
     }
 
-    // 2) muda na mesma aba (login/logout)
     function onAuthChanged() {
       bump();
     }
 
-    // 3) quando volta pra aba (às vezes Safari/Chrome “pausa” storage em background)
     function onFocus() {
       bump();
     }
@@ -166,7 +187,10 @@ export default function App() {
   }, []);
 
   // ✅ derivado: se não tem token AGORA, não está autenticado (ponto final)
-  const tokenNow = useMemo(() => (getStoredAuthToken() || "").trim(), [authVersion]);
+  const tokenNow = useMemo(
+    () => (getStoredAuthToken() || "").trim(),
+    [authVersion]
+  );
   const isAuthenticated = Boolean(tokenNow);
 
   function handleLogin() {
@@ -227,6 +251,7 @@ const MENU = [
     id: "chatbot",
     label: "Chatbot",
     items: [
+      // OBS: id "historico" existe em 2 seções — ok pq você usa (main+sub)
       { id: "historico", label: "Histórico de Chats" },
       { id: "config", label: "Configurações" }
     ]
@@ -438,7 +463,9 @@ function PlatformShell({ onLogout }) {
 
                 <div className="gp-dd-item is-muted">
                   {userDisplayName}
-                  <div className="gp-dd-sub">{userEmail ? userEmail : "Perfil do usuário"}</div>
+                  <div className="gp-dd-sub">
+                    {userEmail ? userEmail : "Perfil do usuário"}
+                  </div>
                 </div>
 
                 <div className="gp-dd-sep" />
@@ -467,6 +494,7 @@ function PlatformShell({ onLogout }) {
           </div>
         </div>
 
+        {/* se teu CSS já esconde, ok manter; senão pode remover */}
         <div className="gp-header-accent" />
       </header>
 
@@ -475,7 +503,7 @@ function PlatformShell({ onLogout }) {
         {/* SIDEBAR */}
         <nav
           className={"app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")}
-          style={{ width: collapsed ? 76 : 320 }}
+          /* ✅ REMOVIDO: style inline estava brigando com o CSS (largura do menu) */
         >
           <button
             type="button"
@@ -527,7 +555,9 @@ function PlatformShell({ onLogout }) {
                         <button
                           type="button"
                           key={item.id}
-                          className={"sidebar-link" + (isItemActive ? " sidebar-link-active" : "")}
+                          className={
+                            "sidebar-link" + (isItemActive ? " sidebar-link-active" : "")
+                          }
                           onClick={() => handleItemClick(section.id, item.id)}
                         >
                           <span className="sb-sub-ic">
@@ -666,10 +696,7 @@ function SectionRenderer({ main, sub, goTo }) {
       );
 
     return (
-      <Placeholder
-        title={`Campanhas · ${subSectionLabel(sub)}`}
-        text="Seção em construção."
-      />
+      <Placeholder title={`Campanhas · ${subSectionLabel(sub)}`} text="Seção em construção." />
     );
   }
 
