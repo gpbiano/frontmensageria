@@ -41,7 +41,7 @@ import SettingsChannelsPage from "./pages/settings/SettingsChannelsPage.jsx";
 // Criar Senha (Público)
 import CreatePasswordPage from "./pages/auth/CreatePasswordPage.jsx";
 
-// ✅ Admin Routes (NOVO)
+// ✅ Admin Routes
 import AdminRoutes from "./routes/adminRoutes.jsx";
 
 /* ==========================================================
@@ -146,76 +146,6 @@ function clearStoredAuth() {
 }
 
 /* ==========================================================
-   APP
-========================================================== */
-export default function App() {
-  // ✅ Página pública (sem login): /criar-senha?token=...
-  const isCreatePasswordRoute = useMemo(() => {
-    if (typeof window === "undefined") return false;
-    const path = window.location.pathname || "/";
-    return path === "/criar-senha";
-  }, []);
-
-  // ✅ gatilho para recalcular auth quando o token mudar (mesma aba)
-  const [authVersion, setAuthVersion] = useState(0);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    function bump() {
-      setAuthVersion((v) => v + 1);
-    }
-
-    function onStorage(e) {
-      if (e.key === AUTH_TOKEN_KEY || e.key === AUTH_USER_KEY) bump();
-    }
-
-    function onAuthChanged() {
-      bump();
-    }
-
-    function onFocus() {
-      bump();
-    }
-
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("gp-auth-changed", onAuthChanged);
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
-
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("gp-auth-changed", onAuthChanged);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onFocus);
-    };
-  }, []);
-
-  const tokenNow = useMemo(() => (getStoredAuthToken() || "").trim(), [authVersion]);
-  const isAuthenticated = Boolean(tokenNow);
-
-  function handleLogin(payload) {
-    window.dispatchEvent(new Event("gp-auth-changed"));
-    if (payload?.user) mpIdentify(payload.user);
-  }
-
-  function handleLogout(payload = {}) {
-    mpTrack("auth_logout", { source: payload?.source || "user_menu" });
-    mpReset();
-    clearStoredAuth();
-  }
-
-  if (isCreatePasswordRoute) return <CreatePasswordPage />;
-  if (!isAuthenticated) return <LoginPage onLogin={handleLogin} />;
-
-  return (
-    <BrowserRouter>
-      <PlatformShell onLogout={handleLogout} />
-    </BrowserRouter>
-  );
-}
-
-/* ==========================================================
    MENU
 ========================================================== */
 const SECTION_ICONS = {
@@ -293,6 +223,76 @@ const BASE_MENU = [
 ];
 
 /* ==========================================================
+   APP
+========================================================== */
+export default function App() {
+  // ✅ Página pública (sem login): /criar-senha?token=...
+  const isCreatePasswordRoute = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const path = window.location.pathname || "/";
+    return path === "/criar-senha";
+  }, []);
+
+  // ✅ gatilho para recalcular auth quando o token mudar (mesma aba)
+  const [authVersion, setAuthVersion] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    function bump() {
+      setAuthVersion((v) => v + 1);
+    }
+
+    function onStorage(e) {
+      if (e.key === AUTH_TOKEN_KEY || e.key === AUTH_USER_KEY) bump();
+    }
+
+    function onAuthChanged() {
+      bump();
+    }
+
+    function onFocus() {
+      bump();
+    }
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("gp-auth-changed", onAuthChanged);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("gp-auth-changed", onAuthChanged);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, []);
+
+  const tokenNow = useMemo(() => (getStoredAuthToken() || "").trim(), [authVersion]);
+  const isAuthenticated = Boolean(tokenNow);
+
+  function handleLogin(payload) {
+    window.dispatchEvent(new Event("gp-auth-changed"));
+    if (payload?.user) mpIdentify(payload.user);
+  }
+
+  function handleLogout(payload = {}) {
+    mpTrack("auth_logout", { source: payload?.source || "user_menu" });
+    mpReset();
+    clearStoredAuth();
+  }
+
+  if (isCreatePasswordRoute) return <CreatePasswordPage />;
+  if (!isAuthenticated) return <LoginPage onLogin={handleLogin} />;
+
+  return (
+    <BrowserRouter>
+      <PlatformShell onLogout={handleLogout} />
+    </BrowserRouter>
+  );
+}
+
+/* ==========================================================
    PLATFORM SHELL
 ========================================================== */
 function PlatformShell({ onLogout }) {
@@ -342,6 +342,7 @@ function PlatformShell({ onLogout }) {
     function sync() {
       const u = getStoredAuthUser();
       setAuthUser(u);
+
       if (u) mpIdentify(u);
 
       const t = (getStoredAuthToken() || "").trim();
@@ -404,48 +405,51 @@ function PlatformShell({ onLogout }) {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  // ✅ admin route detector (reativo, sem gambiarra)
-  const isAdminRoute = useMemo(() => {
-    const p = location?.pathname || "/";
-    return p.startsWith("/admin");
-  }, [location?.pathname]);
+  // ✅ admin route detector (AGORA PELO ROUTER)
+  const pathname = location?.pathname || "/";
+  const isAdminRoute = pathname.startsWith("/admin");
 
   // ✅ resolve qual item admin está ativo pela URL
   const activeAdminItem = useMemo(() => {
     if (!isAdminRoute) return "";
-    const p = location.pathname || "";
-    if (p.startsWith("/admin/cadastros")) return "cadastros";
-    if (p.startsWith("/admin/tenants")) return "cadastros"; // compat (rota antiga)
-    if (p.startsWith("/admin/financeiro")) return "financeiro";
-    if (p.startsWith("/admin/monitor")) return "monitor";
-    if (p.startsWith("/admin/dashboard")) return "dashboard";
+    if (pathname.startsWith("/admin/cadastros")) return "cadastros";
+    if (pathname.startsWith("/admin/tenants")) return "cadastros"; // compat
+    if (pathname.startsWith("/admin/financeiro")) return "financeiro";
+    if (pathname.startsWith("/admin/monitor")) return "monitor";
+    if (pathname.startsWith("/admin/dashboard")) return "dashboard";
     return "cadastros";
-  }, [isAdminRoute, location.pathname]);
+  }, [isAdminRoute, pathname]);
 
   // ✅ page_view
   const lastPageRef = useRef("");
   useEffect(() => {
     const page = isAdminRoute
-      ? `Admin > ${location.pathname}`
+      ? `Admin > ${pathname}`
       : `${mainSectionLabel(mainSection)} > ${subSectionLabel(subSection)}`;
 
-    const key = isAdminRoute ? `admin:${location.pathname}` : `${mainSection}:${subSection}`;
+    const key = isAdminRoute ? `admin:${pathname}` : `${mainSection}:${subSection}`;
+
     if (lastPageRef.current === key) return;
     lastPageRef.current = key;
 
     mpTrack("page_view", {
       page,
       main: isAdminRoute ? "admin" : mainSection,
-      sub: isAdminRoute ? location.pathname : subSection
+      sub: isAdminRoute ? pathname : subSection
     });
-  }, [mainSection, subSection, isAdminRoute, location.pathname]);
+  }, [mainSection, subSection, isAdminRoute, pathname]);
 
   function handleHeaderClick(sectionId) {
     if (collapsed) {
       const sec = MENU.find((s) => s.id === sectionId);
       const first = sec?.items?.[0]?.id || "conversas";
 
-      mpTrack("menu_item_click", { section_id: sectionId, item_id: first, collapsed: true });
+      mpTrack("menu_item_click", {
+        section_id: sectionId,
+        item_id: first,
+        collapsed: true
+      });
+
       handleItemClick(sectionId, first);
       return;
     }
@@ -464,9 +468,13 @@ function PlatformShell({ onLogout }) {
   }
 
   function handleItemClick(sectionId, itemId) {
-    mpTrack("menu_item_click", { section_id: sectionId, item_id: itemId, collapsed });
+    mpTrack("menu_item_click", {
+      section_id: sectionId,
+      item_id: itemId,
+      collapsed
+    });
 
-    // ✅ Admin: navega via React Router (corrige o “clic não roda”)
+    // ✅ Admin usa o router (NADA de pushState)
     if (sectionId === "admin") {
       setOpenSection(sectionId);
 
@@ -483,7 +491,7 @@ function PlatformShell({ onLogout }) {
     setSubSection(itemId);
     setOpenSection(sectionId);
 
-    // se estava no admin, volta para raiz
+    // se estava no admin e clicou em outra seção, volta pra raiz
     if (isAdminRoute) navigate("/");
   }
 
@@ -551,7 +559,9 @@ function PlatformShell({ onLogout }) {
             target="_blank"
             rel="noreferrer"
             title="Central de Ajuda"
-            onClick={() => mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })}
+            onClick={() =>
+              mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })
+            }
           >
             <LifeBuoy size={16} />
             {!collapsed && <span className="gp-help-text">Ajuda</span>}
@@ -579,7 +589,9 @@ function PlatformShell({ onLogout }) {
 
                 <div className="gp-dd-item is-muted">
                   {userDisplayName}
-                  <div className="gp-dd-sub">{userEmail ? userEmail : "Perfil do usuário"}</div>
+                  <div className="gp-dd-sub">
+                    {userEmail ? userEmail : "Perfil do usuário"}
+                  </div>
                 </div>
 
                 <div className="gp-dd-sep" />
@@ -637,7 +649,9 @@ function PlatformShell({ onLogout }) {
               <div className="sidebar-section" key={section.id}>
                 <button
                   type="button"
-                  className={"sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")}
+                  className={
+                    "sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")
+                  }
                   onClick={() => handleHeaderClick(section.id)}
                   title={collapsed ? section.label : undefined}
                 >
@@ -690,8 +704,9 @@ function PlatformShell({ onLogout }) {
         {/* MAIN */}
         <main className="app-main">
           {isAdminRoute ? (
-            // ✅ sem wrappers extras aqui (deixa o fundo padrão do app-main)
-            <AdminRoutes />
+            <div className="page-full">
+              <AdminRoutes />
+            </div>
           ) : (
             <SectionRenderer main={mainSection} sub={subSection} goTo={goTo} />
           )}

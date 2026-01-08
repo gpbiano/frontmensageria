@@ -3,7 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 
 import AdminPage from "../pages/admin/AdminPage.jsx";
 
-// Cadastros (Empresas / Tenants)
+// Cadastros (Tenants)
 import TenantsListPage from "../pages/admin/TenantsListPage.jsx";
 import TenantCreatePage from "../pages/admin/TenantCreatePage.jsx";
 import TenantDetailPage from "../pages/admin/TenantDetailPage.jsx";
