@@ -5,13 +5,18 @@ import logger from "../../logger.js";
 import prismaMod from "../../lib/prisma.js";
 
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
-
 const router = express.Router();
 
 /**
- * Se você configurar um segredo no webhook do Asaas, pode validar assinatura aqui (opcional).
- * Caso não use, deixe ASAAS_WEBHOOK_SECRET vazio e a validação fica desligada.
+ * ✅ Asaas (recomendado):
+ * Se você configurar "authToken" no webhook do Asaas,
+ * ele envia no header:  asaas-access-token: <authToken>
+ *
+ * Então use ASAAS_WEBHOOK_TOKEN no servidor.
+ *
+ * (mantive compat com teu ASAAS_WEBHOOK_SECRET e headers antigos, caso já esteja usando)
  */
+const ASAAS_WEBHOOK_TOKEN = String(process.env.ASAAS_WEBHOOK_TOKEN || "").trim();
 const ASAAS_WEBHOOK_SECRET = String(process.env.ASAAS_WEBHOOK_SECRET || "").trim();
 
 function safeStr(v) {
@@ -26,16 +31,23 @@ function timingSafeEq(a, b) {
 }
 
 /**
- * ✅ Validação simples por segredo compartilhado (header = secret).
- * Se você quiser HMAC do payload (mais comum), eu te ajusto depois.
+ * ✅ Validação por segredo compartilhado (token):
+ * - Prioridade: asaas-access-token (padrão Asaas quando usa authToken)
+ * - Compat: x-webhook-signature / asaas-signature (se você já usava)
+ *
+ * Se nenhum segredo estiver configurado, validação fica desligada.
  */
 function validateSignature(req) {
-  if (!ASAAS_WEBHOOK_SECRET) return true;
+  const expected = ASAAS_WEBHOOK_TOKEN || ASAAS_WEBHOOK_SECRET;
+  if (!expected) return true;
 
-  const sig = safeStr(req.headers["x-webhook-signature"] || req.headers["asaas-signature"]);
-  if (!sig) return false;
+  const received =
+    safeStr(req.headers["asaas-access-token"]) ||
+    safeStr(req.headers["x-webhook-signature"]) ||
+    safeStr(req.headers["asaas-signature"]);
 
-  return timingSafeEq(sig, ASAAS_WEBHOOK_SECRET);
+  if (!received) return false;
+  return timingSafeEq(received, expected);
 }
 
 function daysBetween(a, b) {
@@ -50,19 +62,23 @@ function isWithinTrial(billing, now) {
 }
 
 /**
- * Normaliza múltiplos nomes possíveis de evento (Asaas pode variar).
- * Mantém compat com o que você já tinha e adiciona eventos comuns.
+ * Normaliza eventos do Asaas
  */
 function normalizeEvent(raw) {
   const e = safeStr(raw).toUpperCase();
 
   // pagos
-  if (e === "PAYMENT_RECEIVED" || e === "PAYMENT_CONFIRMED") return "PAID";
+  if (
+    e === "PAYMENT_RECEIVED" ||
+    e === "PAYMENT_CONFIRMED" ||
+    e === "PAYMENT_RECEIVED_IN_CASH"
+  )
+    return "PAID";
 
   // atrasos
   if (e === "PAYMENT_OVERDUE") return "OVERDUE";
 
-  // cancelamento/estorno (não vamos bloquear automaticamente aqui, só registrar)
+  // cancelamento/estorno
   if (e === "PAYMENT_CANCELED" || e === "PAYMENT_DELETED") return "CANCELED";
   if (e === "PAYMENT_REFUNDED") return "REFUNDED";
 
@@ -70,20 +86,18 @@ function normalizeEvent(raw) {
 }
 
 /**
- * Extrai campos de payment em diferentes formatos (defensivo).
+ * Extrai payment em formatos possíveis (defensivo)
  */
 function pickPayment(payload) {
-  return payload?.payment || payload?.data?.payment || payload?.data || {};
+  if (!payload) return {};
+  if (payload.payment) return payload.payment;
+  if (payload.data?.payment) return payload.data.payment;
+  if (payload.data) return payload.data;
+  return payload;
 }
 
 /**
- * POST /webhook/asaas
- *
- * Esperado (comum):
- * {
- *   event: "PAYMENT_RECEIVED" | "PAYMENT_OVERDUE" | ...
- *   payment: { subscription: "...", customer: "...", status: "...", id: "...", invoiceUrl: "...", ... }
- * }
+ * POST /webhooks/asaas  (quando montado como app.use("/webhooks/asaas", router))
  */
 router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
   try {
@@ -93,23 +107,30 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
 
     const now = new Date();
 
-    const rawEvent = safeStr(req.body?.event);
+    const rawEvent = safeStr(req.body?.event || req.body?.type);
     const event = normalizeEvent(rawEvent);
 
     const payment = pickPayment(req.body);
+
     const subscriptionId = safeStr(payment?.subscription);
     const customerId = safeStr(payment?.customer);
 
     // urls / ids úteis pra UI
     const paymentId = safeStr(payment?.id);
-    const invoiceUrl = safeStr(payment?.invoiceUrl || payment?.invoiceUrlExternal || payment?.bankSlipUrl);
-    const bankSlipUrl = safeStr(payment?.bankSlipUrl);
+    const invoiceUrl = safeStr(
+      payment?.invoiceUrl || payment?.invoiceUrlExternal || payment?.invoiceUrlCustomer
+    );
+    const bankSlipUrl = safeStr(payment?.bankSlipUrl || payment?.boletoUrl);
     const pixQrCode = safeStr(payment?.pixQrCode);
     const pixPayload = safeStr(payment?.pixPayload);
 
     // se não tem subscription/customer, ignora (não temos como mapear)
     if (!subscriptionId && !customerId) {
-      return res.json({ ok: true, ignored: true, reason: "missing_subscription_and_customer" });
+      return res.json({
+        ok: true,
+        ignored: true,
+        reason: "missing_subscription_and_customer"
+      });
     }
 
     // acha billing por subscription ou customer
@@ -161,7 +182,10 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
         }
       });
 
-      return res.json({ ok: true, action: stillTrial ? "paid_trialing" : "paid_activated" });
+      return res.json({
+        ok: true,
+        action: stillTrial ? "paid_trialing" : "paid_activated"
+      });
     }
 
     // ======================================================
@@ -169,11 +193,10 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     //    - se passar graceDays => BLOCKED
     // ======================================================
     if (event === "OVERDUE") {
-      // se ainda está em trial, normalmente não deve cair aqui,
-      // mas se cair, marcamos PAST_DUE mesmo assim (política da plataforma).
-      const delinquentSince = billing.delinquentSince ? new Date(billing.delinquentSince) : now;
+      const delinquentSince = billing.delinquentSince
+        ? new Date(billing.delinquentSince)
+        : now;
 
-      // marca como em atraso
       const updated = await prisma.tenantBilling.update({
         where: { tenantId },
         data: {
@@ -210,7 +233,7 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     }
 
     // ======================================================
-    // 3) Outros eventos => só espelha o que der, sem mexer no acesso
+    // 3) Outros eventos => só espelha, sem mexer no acesso
     // ======================================================
     if (event === "CANCELED") {
       await prisma.tenantBilling.update({
