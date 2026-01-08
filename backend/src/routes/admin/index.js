@@ -10,7 +10,7 @@ router.get("/health", (req, res) => {
   res.json({ ok: true, module: "admin" });
 });
 
-router.use("/tenants", tenantsAdminRouter);
+router.use("/tenants", admimTenantsRouter);
 router.use("/users", usersAdminRouter);
 router.use("/tenants/:tenantId/members", membershipsAdminRouter);
 
