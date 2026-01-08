@@ -1,41 +1,32 @@
-// frontend/src/pages/admin/TenantsListPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listTenants, deleteTenant } from "../../api/admin";
-
-function Badge({ children }) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "2px 8px",
-        border: "1px solid #ddd",
-        borderRadius: 999,
-        fontSize: 12
-      }}
-    >
-      {children}
-    </span>
-  );
-}
+import { listTenants } from "../../api/admin.js";
+import "../../styles/admin.css";
 
 export default function TenantsListPage() {
   const nav = useNavigate();
 
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
-  const [items, setItems] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [err, setErr] = useState("");
+  const [rows, setRows] = useState([]);
 
   async function load() {
+    setErr("");
     setLoading(true);
     try {
-      // backend aceita page/pageSize/q
-      const { data } = await listTenants({ page: 1, pageSize: 50, q: q || "" });
-      setItems(data?.items || []);
-      setTotal(Number(data?.total || 0));
+      const resp = await listTenants({ page: 1, pageSize: 50, q: q.trim() });
+      const data = resp?.data || {};
+      const items = data?.tenants || data?.items || data?.data || [];
+      setRows(Array.isArray(items) ? items : []);
     } catch (e) {
-      alert("Falha ao listar tenants");
+      const msg =
+        e?.response?.data?.error ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Falha ao carregar tenants.";
+      setErr(String(msg));
+      setRows([]);
     } finally {
       setLoading(false);
     }
@@ -46,95 +37,100 @@ export default function TenantsListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const filtered = useMemo(() => items || [], [items]);
-
-  async function onDelete(t) {
-    const ok = window.confirm(
-      `Tem certeza que deseja deletar o tenant "${t?.name}"?\n\nEssa ação pode apagar dados (cascade).`
-    );
-    if (!ok) return;
-
-    try {
-      await deleteTenant(t.id);
-      await load();
-      alert("Tenant deletado ✅");
-    } catch (e) {
-      alert("Falha ao deletar tenant");
-    }
-  }
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return rows;
+    return rows.filter((t) => {
+      const name = String(t?.name || "").toLowerCase();
+      const slug = String(t?.slug || "").toLowerCase();
+      return name.includes(s) || slug.includes(s);
+    });
+  }, [rows, q]);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-        <div>
-          <h2 style={{ margin: 0 }}>Cadastros</h2>
-          <div style={{ marginTop: 6, opacity: 0.75, fontSize: 13 }}>
-            Total: <b>{total}</b> {loading ? "• carregando..." : ""}
-          </div>
-        </div>
+    <div>
+      <div className="admin-header-row">
+        <h1 className="admin-h1">Empresas</h1>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            placeholder="Buscar por nome ou slug..."
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            style={{ padding: 8, minWidth: 280 }}
-          />
-          <button onClick={load} disabled={loading}>
-            Buscar
+        <div className="admin-actions" style={{ gap: 8 }}>
+          <button className="admin-link" type="button" onClick={() => load()} disabled={loading}>
+            {loading ? "Atualizando..." : "Atualizar"}
           </button>
-          <button onClick={() => nav("/admin/tenants/new")}>+ Novo</button>
+
+          <button
+            className="admin-primary"
+            type="button"
+            onClick={() => nav("/admin/cadastros/new")}
+          >
+            Criar empresa
+          </button>
         </div>
       </div>
 
-      <hr style={{ margin: "16px 0" }} />
+      <div className="admin-form" style={{ marginBottom: 12 }}>
+        <div>
+          <label className="admin-label">Buscar</label>
+          <input
+            className="admin-field"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar por nome ou slug"
+          />
+        </div>
+      </div>
+
+      {err && (
+        <div style={{ marginBottom: 12 }} className="admin-badge">
+          {err}
+        </div>
+      )}
 
       {loading ? (
-        <div>Carregando...</div>
-      ) : !filtered.length ? (
-        <div style={{ opacity: 0.7 }}>Nenhum tenant encontrado.</div>
+        <div className="admin-badge">Carregando...</div>
+      ) : filtered.length === 0 ? (
+        <div className="admin-badge">Nenhuma empresa encontrada.</div>
       ) : (
-        <table width="100%" cellPadding={10} style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-              <th>Nome</th>
-              <th>Slug</th>
-              <th>Status</th>
-              <th>Plano</th>
-              <th>Billing</th>
-              <th style={{ width: 260 }}>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((t) => {
-              const b = t?.billing || null;
+        <div className="admin-card" style={{ padding: 0, overflow: "hidden" }}>
+          <table className="admin-table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: 12 }}>Nome</th>
+                <th style={{ textAlign: "left", padding: 12 }}>Slug</th>
+                <th style={{ textAlign: "left", padding: 12 }}>Status</th>
+                <th style={{ textAlign: "right", padding: 12 }}>Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((t) => {
+                const id = String(t?.id || "");
+                const name = String(t?.name || "");
+                const slug = String(t?.slug || "");
+                const isActive = t?.isActive !== false;
 
-              return (
-                <tr key={t.id} style={{ borderBottom: "1px solid #f2f2f2" }}>
-                  <td style={{ fontWeight: 600 }}>{t.name}</td>
-                  <td>{t.slug}</td>
-                  <td>
-                    <Badge>{t.isActive ? "ATIVO" : "INATIVO"}</Badge>
-                  </td>
-                  <td>
-                    <Badge>{b?.planCode || "-"}</Badge>
-                  </td>
-                  <td>
-                    <Badge>{b?.status || "-"}</Badge>
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button onClick={() => nav(`/admin/tenants/${t.id}`)}>Editar</button>
-                      <button onClick={() => onDelete(t)} style={{ color: "#b00020" }}>
-                        Deletar
+                return (
+                  <tr key={id} style={{ borderTop: "1px solid rgba(0,0,0,0.06)" }}>
+                    <td style={{ padding: 12 }}>{name}</td>
+                    <td style={{ padding: 12, opacity: 0.85 }}>{slug}</td>
+                    <td style={{ padding: 12 }}>
+                      <span className="admin-badge" style={{ opacity: 0.9 }}>
+                        {isActive ? "Ativo" : "Inativo"}
+                      </span>
+                    </td>
+                    <td style={{ padding: 12, textAlign: "right" }}>
+                      <button
+                        className="admin-link"
+                        type="button"
+                        onClick={() => nav(`/admin/cadastros/${id}`)}
+                      >
+                        Editar
                       </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
