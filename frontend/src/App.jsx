@@ -1,6 +1,6 @@
 // frontend/src/App.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, useLocation, useNavigate } from "react-router-dom";
 
 import LoginPage from "./pages/LoginPage.jsx";
 import { mpIdentify, mpTrack, mpReset } from "./lib/mixpanel";
@@ -296,6 +296,9 @@ const BASE_MENU = [
    PLATFORM SHELL
 ========================================================== */
 function PlatformShell({ onLogout }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [mainSection, setMainSection] = useState("atendimento");
   const [subSection, setSubSection] = useState("conversas");
 
@@ -335,14 +338,10 @@ function PlatformShell({ onLogout }) {
   // ✅ Usuário logado
   const [authUser, setAuthUser] = useState(() => getStoredAuthUser());
 
-  // ✅ controla refresh do path (Admin usa URL)
-  const [routeVersion, setRouteVersion] = useState(0);
-
   useEffect(() => {
     function sync() {
       const u = getStoredAuthUser();
       setAuthUser(u);
-
       if (u) mpIdentify(u);
 
       const t = (getStoredAuthToken() || "").trim();
@@ -358,14 +357,6 @@ function PlatformShell({ onLogout }) {
       window.removeEventListener("storage", sync);
     };
   }, [onLogout]);
-
-  useEffect(() => {
-    function onPop() {
-      setRouteVersion((v) => v + 1);
-    }
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
 
   const userDisplayName =
     (authUser?.name && String(authUser.name).trim()) ||
@@ -413,66 +404,48 @@ function PlatformShell({ onLogout }) {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  // ✅ admin route detector
+  // ✅ admin route detector (reativo, sem gambiarra)
   const isAdminRoute = useMemo(() => {
-    if (typeof window === "undefined") return false;
-    const p = window.location.pathname || "/";
+    const p = location?.pathname || "/";
     return p.startsWith("/admin");
-  }, [routeVersion]);
+  }, [location?.pathname]);
 
   // ✅ resolve qual item admin está ativo pela URL
   const activeAdminItem = useMemo(() => {
     if (!isAdminRoute) return "";
-    const p = window.location.pathname || "";
+    const p = location.pathname || "";
     if (p.startsWith("/admin/cadastros")) return "cadastros";
     if (p.startsWith("/admin/tenants")) return "cadastros"; // compat (rota antiga)
     if (p.startsWith("/admin/financeiro")) return "financeiro";
     if (p.startsWith("/admin/monitor")) return "monitor";
     if (p.startsWith("/admin/dashboard")) return "dashboard";
     return "cadastros";
-  }, [isAdminRoute, routeVersion]);
+  }, [isAdminRoute, location.pathname]);
 
   // ✅ page_view
   const lastPageRef = useRef("");
   useEffect(() => {
     const page = isAdminRoute
-      ? `Admin > ${window.location.pathname}`
+      ? `Admin > ${location.pathname}`
       : `${mainSectionLabel(mainSection)} > ${subSectionLabel(subSection)}`;
 
-    const key = isAdminRoute
-      ? `admin:${window.location.pathname}`
-      : `${mainSection}:${subSection}`;
-
+    const key = isAdminRoute ? `admin:${location.pathname}` : `${mainSection}:${subSection}`;
     if (lastPageRef.current === key) return;
     lastPageRef.current = key;
 
     mpTrack("page_view", {
       page,
       main: isAdminRoute ? "admin" : mainSection,
-      sub: isAdminRoute ? window.location.pathname : subSection
+      sub: isAdminRoute ? location.pathname : subSection
     });
-  }, [mainSection, subSection, isAdminRoute, routeVersion]);
-
-  function navigateTo(path) {
-    try {
-      window.history.pushState({}, "", path);
-      setRouteVersion((v) => v + 1);
-    } catch {
-      window.location.href = path;
-    }
-  }
+  }, [mainSection, subSection, isAdminRoute, location.pathname]);
 
   function handleHeaderClick(sectionId) {
     if (collapsed) {
       const sec = MENU.find((s) => s.id === sectionId);
       const first = sec?.items?.[0]?.id || "conversas";
 
-      mpTrack("menu_item_click", {
-        section_id: sectionId,
-        item_id: first,
-        collapsed: true
-      });
-
+      mpTrack("menu_item_click", { section_id: sectionId, item_id: first, collapsed: true });
       handleItemClick(sectionId, first);
       return;
     }
@@ -491,22 +464,18 @@ function PlatformShell({ onLogout }) {
   }
 
   function handleItemClick(sectionId, itemId) {
-    mpTrack("menu_item_click", {
-      section_id: sectionId,
-      item_id: itemId,
-      collapsed
-    });
+    mpTrack("menu_item_click", { section_id: sectionId, item_id: itemId, collapsed });
 
-    // ✅ Admin usa URL
+    // ✅ Admin: navega via React Router (corrige o “clic não roda”)
     if (sectionId === "admin") {
       setOpenSection(sectionId);
 
-      if (itemId === "dashboard") return navigateTo("/admin/dashboard");
-      if (itemId === "cadastros") return navigateTo("/admin/cadastros");
-      if (itemId === "financeiro") return navigateTo("/admin/financeiro");
-      if (itemId === "monitor") return navigateTo("/admin/monitor");
+      if (itemId === "dashboard") return navigate("/admin/dashboard");
+      if (itemId === "cadastros") return navigate("/admin/cadastros");
+      if (itemId === "financeiro") return navigate("/admin/financeiro");
+      if (itemId === "monitor") return navigate("/admin/monitor");
 
-      return navigateTo("/admin/cadastros");
+      return navigate("/admin/cadastros");
     }
 
     // ✅ resto continua state-based
@@ -514,14 +483,15 @@ function PlatformShell({ onLogout }) {
     setSubSection(itemId);
     setOpenSection(sectionId);
 
-    if (isAdminRoute) navigateTo("/");
+    // se estava no admin, volta para raiz
+    if (isAdminRoute) navigate("/");
   }
 
   function goTo(main, sub) {
     setMainSection(main);
     setSubSection(sub);
     setOpenSection(main);
-    if (isAdminRoute) navigateTo("/");
+    if (isAdminRoute) navigate("/");
   }
 
   return (
@@ -581,9 +551,7 @@ function PlatformShell({ onLogout }) {
             target="_blank"
             rel="noreferrer"
             title="Central de Ajuda"
-            onClick={() =>
-              mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })
-            }
+            onClick={() => mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })}
           >
             <LifeBuoy size={16} />
             {!collapsed && <span className="gp-help-text">Ajuda</span>}
@@ -611,9 +579,7 @@ function PlatformShell({ onLogout }) {
 
                 <div className="gp-dd-item is-muted">
                   {userDisplayName}
-                  <div className="gp-dd-sub">
-                    {userEmail ? userEmail : "Perfil do usuário"}
-                  </div>
+                  <div className="gp-dd-sub">{userEmail ? userEmail : "Perfil do usuário"}</div>
                 </div>
 
                 <div className="gp-dd-sep" />
@@ -671,9 +637,7 @@ function PlatformShell({ onLogout }) {
               <div className="sidebar-section" key={section.id}>
                 <button
                   type="button"
-                  className={
-                    "sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")
-                  }
+                  className={"sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")}
                   onClick={() => handleHeaderClick(section.id)}
                   title={collapsed ? section.label : undefined}
                 >
@@ -726,9 +690,8 @@ function PlatformShell({ onLogout }) {
         {/* MAIN */}
         <main className="app-main">
           {isAdminRoute ? (
-            <div className="page-full">
-              <AdminRoutes />
-            </div>
+            // ✅ sem wrappers extras aqui (deixa o fundo padrão do app-main)
+            <AdminRoutes />
           ) : (
             <SectionRenderer main={mainSection} sub={subSection} goTo={goTo} />
           )}
