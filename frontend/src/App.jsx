@@ -1,9 +1,7 @@
 // frontend/src/App.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import LoginPage from "./pages/LoginPage.jsx";
-
-// ✅ Mixpanel (wrapper)
-import { mpInit, mpIdentify, mpTrack, mpReset } from "./lib/mixpanel";
+import { mpIdentify, mpTrack, mpReset } from "./lib/mixpanel";
 
 // Atendimento (HUMANO)
 import ChatHumanPage from "./pages/human/ChatHumanPage.jsx";
@@ -147,11 +145,6 @@ function clearStoredAuth() {
    APP
 ========================================================== */
 export default function App() {
-  // ✅ Init do Mixpanel (safe/guarded no wrapper)
-  useEffect(() => {
-    mpInit();
-  }, []);
-
   // ✅ Página pública (sem login): /criar-senha?token=...
   const isCreatePasswordRoute = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -201,29 +194,20 @@ export default function App() {
   );
   const isAuthenticated = Boolean(tokenNow);
 
-  function handleLogin() {
+  function handleLogin(payload) {
     // ✅ LoginPage salva token; aqui só força refresh do estado
     window.dispatchEvent(new Event("gp-auth-changed"));
 
-    // ✅ Mixpanel: login + identify
-    const u = getStoredAuthUser();
-    mpTrack("Auth Login", { hasUser: Boolean(u), hasToken: Boolean(tokenNow) });
-
-    if (u?.id || u?.email) {
-      mpIdentify(u.id || u.email, {
-        name: u?.name || "",
-        email: u?.email || "",
-        role: u?.role || "",
-        tenantId: u?.tenantId || "",
-      });
-    }
+    // extra: garante identify (se LoginPage não conseguir por algum motivo)
+    if (payload?.user) mpIdentify(payload.user);
   }
 
-  function handleLogout() {
-    // ✅ Mixpanel: logout + reset de sessão
-    mpTrack("Auth Logout");
+  function handleLogout(payload = {}) {
+    // ✅ Track + reset ANTES de limpar storage
+    mpTrack("auth_logout", {
+      source: payload?.source || "user_menu"
+    });
     mpReset();
-
     clearStoredAuth();
   }
 
@@ -333,9 +317,13 @@ function PlatformShell({ onLogout }) {
   }, [openSection]);
 
   // ✅ Se por qualquer motivo o token sumir, derruba sessão
+  const didAutoLogoutRef = useRef(false);
   useEffect(() => {
     const t = (getStoredAuthToken() || "").trim();
-    if (!t) onLogout?.();
+    if (!t && !didAutoLogoutRef.current) {
+      didAutoLogoutRef.current = true;
+      onLogout?.({ source: "token_missing" });
+    }
   }, [onLogout]);
 
   // ✅ Empresa (mock)
@@ -349,17 +337,13 @@ function PlatformShell({ onLogout }) {
       const u = getStoredAuthUser();
       setAuthUser(u);
 
-      const t = (getStoredAuthToken() || "").trim();
-      if (!t) onLogout?.();
+      // identify sempre que sincronizar (não quebra se disabled)
+      if (u) mpIdentify(u);
 
-      // ✅ Mixpanel: garante identify mesmo em refresh / storage / multi-aba
-      if (u?.id || u?.email) {
-        mpIdentify(u.id || u.email, {
-          name: u?.name || "",
-          email: u?.email || "",
-          role: u?.role || "",
-          tenantId: u?.tenantId || "",
-        });
+      const t = (getStoredAuthToken() || "").trim();
+      if (!t && !didAutoLogoutRef.current) {
+        didAutoLogoutRef.current = true;
+        onLogout?.({ source: "token_missing" });
       }
     }
     window.addEventListener("gp-auth-changed", sync);
@@ -376,14 +360,6 @@ function PlatformShell({ onLogout }) {
     "Usuário";
 
   const userEmail = (authUser?.email && String(authUser.email).trim()) || "";
-
-  // ✅ Page View (SPA: troca de seção/subseção)
-  useEffect(() => {
-    mpTrack("Page View", {
-      area: mainSection,
-      page: subSection
-    });
-  }, [mainSection, subSection]);
 
   // dropdowns header
   const [isCompanyOpen, setIsCompanyOpen] = useState(false);
@@ -402,39 +378,65 @@ function PlatformShell({ onLogout }) {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
+  // ✅ page_view (centralizado)
+  const lastPageRef = useRef("");
+  useEffect(() => {
+    const page = `${mainSectionLabel(mainSection)} > ${subSectionLabel(subSection)}`;
+    const key = `${mainSection}:${subSection}`;
+    if (lastPageRef.current === key) return;
+    lastPageRef.current = key;
+
+    mpTrack("page_view", {
+      page,
+      main: mainSection,
+      sub: subSection
+    });
+  }, [mainSection, subSection]);
+
   function handleHeaderClick(sectionId) {
     if (collapsed) {
       const sec = MENU.find((s) => s.id === sectionId);
       const first = sec?.items?.[0]?.id || "conversas";
+
+      mpTrack("menu_item_click", {
+        section_id: sectionId,
+        item_id: first,
+        collapsed: true
+      });
+
       handleItemClick(sectionId, first);
       return;
     }
-    setOpenSection((prev) => (prev === sectionId ? null : sectionId));
+
+    setOpenSection((prev) => {
+      const next = prev === sectionId ? null : sectionId;
+
+      mpTrack("menu_section_toggle", {
+        section_id: sectionId,
+        action: next ? "open" : "close",
+        collapsed: false
+      });
+
+      return next;
+    });
   }
 
   function handleItemClick(sectionId, itemId) {
+    mpTrack("menu_item_click", {
+      section_id: sectionId,
+      item_id: itemId,
+      collapsed
+    });
+
     setMainSection(sectionId);
     setSubSection(itemId);
     setOpenSection(sectionId);
-
-    // ✅ Mixpanel: clique de menu
-    mpTrack("Menu Click", {
-      area: sectionId,
-      item: itemId
-    });
   }
 
   function goTo(main, sub) {
     setMainSection(main);
     setSubSection(sub);
     setOpenSection(main);
-
-    // ✅ Mixpanel: navegação programática (ex: voltar campanha)
-    mpTrack("Navigate", {
-      area: main,
-      page: sub,
-      source: "goTo"
-    });
   }
 
   return (
@@ -457,7 +459,6 @@ function PlatformShell({ onLogout }) {
               onClick={() => {
                 setIsCompanyOpen((v) => !v);
                 setIsUserOpen(false);
-                mpTrack("Header Company Toggle", { open: !isCompanyOpen });
               }}
               title="Empresa logada"
             >
@@ -479,7 +480,6 @@ function PlatformShell({ onLogout }) {
                   className="gp-dd-item"
                   onClick={() => {
                     setIsCompanyOpen(false);
-                    mpTrack("Company Switch Click", { status: "coming_soon" });
                     alert("Em breve: alternar empresa.");
                   }}
                 >
@@ -496,7 +496,9 @@ function PlatformShell({ onLogout }) {
             target="_blank"
             rel="noreferrer"
             title="Central de Ajuda"
-            onClick={() => mpTrack("Help Click", { location: "header" })}
+            onClick={() =>
+              mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })
+            }
           >
             <LifeBuoy size={16} />
             {!collapsed && <span className="gp-help-text">Ajuda</span>}
@@ -510,7 +512,6 @@ function PlatformShell({ onLogout }) {
               onClick={() => {
                 setIsUserOpen((v) => !v);
                 setIsCompanyOpen(false);
-                mpTrack("Header User Toggle", { open: !isUserOpen });
               }}
               title="Perfil"
             >
@@ -536,7 +537,6 @@ function PlatformShell({ onLogout }) {
                   className="gp-dd-item"
                   onClick={() => {
                     setIsUserOpen(false);
-                    mpTrack("Profile Click", { status: "coming_soon" });
                     alert("Em breve: página de perfil.");
                   }}
                 >
@@ -547,8 +547,7 @@ function PlatformShell({ onLogout }) {
                   className="gp-dd-item is-danger"
                   onClick={() => {
                     setIsUserOpen(false);
-                    mpTrack("Logout Click");
-                    onLogout?.();
+                    onLogout?.({ source: "user_menu" });
                   }}
                 >
                   Sair
@@ -565,15 +564,14 @@ function PlatformShell({ onLogout }) {
       {/* BODY */}
       <div className="app-body">
         {/* SIDEBAR */}
-        <nav
-          className={"app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")}
-        >
+        <nav className={"app-sidebar zenvia-sidebar" + (collapsed ? " is-collapsed" : "")}>
           <button
             type="button"
             className="sidebar-toggle-fab"
             onClick={() => {
-              setCollapsed((v) => !v);
-              mpTrack("Sidebar Toggle", { collapsed: !collapsed });
+              const next = !collapsed;
+              setCollapsed(next);
+              mpTrack("menu_sidebar_toggle", { collapsed: next });
             }}
             title={collapsed ? "Expandir menu" : "Recolher menu"}
           >
@@ -592,13 +590,7 @@ function PlatformShell({ onLogout }) {
                   className={
                     "sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")
                   }
-                  onClick={() => {
-                    handleHeaderClick(section.id);
-                    mpTrack("Menu Section Toggle", {
-                      area: section.id,
-                      open: collapsed ? true : openSection !== section.id
-                    });
-                  }}
+                  onClick={() => handleHeaderClick(section.id)}
                   title={collapsed ? section.label : undefined}
                 >
                   <span className="sb-row">

@@ -1,6 +1,7 @@
 // frontend/src/pages/LoginPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import "../styles/login-page.css";
+import { mpIdentify, mpTrack } from "../lib/mixpanel";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
@@ -10,29 +11,16 @@ const API_BASE =
 const AUTH_TOKEN_KEY = "gpLabsAuthToken";
 const AUTH_USER_KEY = "gpLabsAuthUser";
 
-// ✅ URLs (ajuste quando tiver as páginas reais)
-const TERMS_URL = "/termos";
-const PRIVACY_URL = "/privacidade";
-
 async function fetchJson(url, options = {}) {
   const method = (options.method || "GET").toUpperCase();
 
-  // ✅ Merge de headers (SEM risco de sobrescrever Content-Type)
-  const baseHeaders = {
-    "Content-Type": "application/json"
-  };
-
-  const mergedHeaders = {
-    ...baseHeaders,
-    ...(options.headers || {})
-  };
+  const baseHeaders = { "Content-Type": "application/json" };
+  const mergedHeaders = { ...baseHeaders, ...(options.headers || {}) };
 
   const fetchOptions = {
     ...options,
     method,
     headers: mergedHeaders,
-
-    // ✅ Ajuda muito em PROD com Cloudflare/CORS
     mode: "cors",
     credentials: "include",
     cache: "no-store"
@@ -43,7 +31,6 @@ async function fetchJson(url, options = {}) {
   const contentType = res.headers.get("content-type") || "";
   const rawText = await res.text().catch(() => "");
 
-  // ✅ Se a API não retornar JSON, mostra preview pra debugar
   if (!contentType.includes("application/json")) {
     throw new Error(
       `Resposta inválida da API (${res.status}): ${rawText?.slice?.(0, 200) || ""}`
@@ -94,6 +81,12 @@ function maskToken(t) {
   return `${s.slice(0, 14)}...${s.slice(-8)} (len=${s.length})`;
 }
 
+function emailDomain(email) {
+  const s = String(email || "").trim().toLowerCase();
+  const parts = s.split("@");
+  return parts.length === 2 ? parts[1] : "";
+}
+
 export default function LoginPage({ onLogin }) {
   const isDev = import.meta.env.DEV;
 
@@ -134,7 +127,6 @@ export default function LoginPage({ onLogin }) {
     const storageForUser = rememberMe ? localStorage : sessionStorage;
     const okUser = safeSet(storageForUser, AUTH_USER_KEY, JSON.stringify(user || null));
 
-    // ✅ sanity check real (evita “não aparece no local storage”)
     const savedLocal = safeGet(localStorage, AUTH_TOKEN_KEY);
     const savedSession = safeGet(sessionStorage, AUTH_TOKEN_KEY);
     const saved = savedLocal || savedSession;
@@ -159,10 +151,7 @@ export default function LoginPage({ onLogin }) {
       console.warn("[AUTH] Não consegui persistir o usuário no storage.");
     }
 
-    // ✅ evento pra mesma aba (App pode ouvir se quiser)
     window.dispatchEvent(new Event("gp-auth-changed"));
-
-    // debug opcional (não interfere)
     window.__GP_AUTH_TOKEN__ = t;
 
     console.log("[AUTH] sessão persistida", {
@@ -185,6 +174,12 @@ export default function LoginPage({ onLogin }) {
       return;
     }
 
+    // ✅ Mixpanel: submit
+    mpTrack("auth_login_submit", {
+      email_domain: emailDomain(cleanEmail),
+      remember_me: Boolean(rememberMe)
+    });
+
     setIsSubmitting(true);
     setError("");
 
@@ -206,10 +201,23 @@ export default function LoginPage({ onLogin }) {
 
       persistSession({ token: data.token, user: data.user });
 
+      // ✅ Mixpanel: identify + success
+      mpIdentify(data.user);
+      mpTrack("auth_login_success", {
+        remember_me: Boolean(rememberMe),
+        user_id: String(data?.user?.id ?? "")
+      });
+
       setPassword("");
       onLogin?.({ token: data.token, user: data.user });
     } catch (err) {
       console.error("Erro ao logar:", err);
+
+      // ✅ Mixpanel: error
+      mpTrack("auth_login_error", {
+        reason: String(err?.message || err || "").slice(0, 180),
+        email_domain: emailDomain(cleanEmail)
+      });
 
       // ⚠️ Fallback APENAS em DEV
       if (isDev) {
@@ -220,6 +228,14 @@ export default function LoginPage({ onLogin }) {
         };
         try {
           persistSession(fakeData);
+
+          mpIdentify(fakeData.user);
+          mpTrack("auth_login_success", {
+            remember_me: Boolean(rememberMe),
+            user_id: "0",
+            dev_fallback: true
+          });
+
           onLogin?.(fakeData);
         } catch (e2) {
           setError(e2?.message || "Falha ao salvar sessão (DEV).");
@@ -303,20 +319,41 @@ export default function LoginPage({ onLogin }) {
               "Entrar"
             )}
           </button>
-
-          {/* ✅ Termos/Privacidade (estilo “Aegro”) */}
-          <p className="login-legal">
-            Ao acessar, você concorda com os{" "}
-            <a href={TERMS_URL} target="_blank" rel="noreferrer">
-              Termos de Uso
-            </a>{" "}
-            e a{" "}
-            <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
-              Política de Privacidade
-            </a>
-            .
-          </p>
         </form>
+
+        {/* ✅ Termos (texto simples e seguro) */}
+        <div
+          style={{
+            marginTop: 12,
+            fontSize: 12,
+            opacity: 0.75,
+            lineHeight: 1.35
+          }}
+        >
+          Ao acessar, você concorda com nossos{" "}
+          <a
+            href="#"
+            className="login-link"
+            onClick={(e) => {
+              e.preventDefault();
+              alert("Em breve: Termos de Uso e Política de Privacidade.");
+            }}
+          >
+            Termos de Uso
+          </a>{" "}
+          e{" "}
+          <a
+            href="#"
+            className="login-link"
+            onClick={(e) => {
+              e.preventDefault();
+              alert("Em breve: Política de Privacidade.");
+            }}
+          >
+            Política de Privacidade
+          </a>
+          .
+        </div>
       </div>
     </div>
   );

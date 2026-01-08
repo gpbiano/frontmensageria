@@ -1,5 +1,6 @@
 // frontend/src/pages/outbound/campaigns/steps/StepUploadAudience.jsx
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { mpTrack } from "../../../../lib/mixpanel";
 
 function extractVarIndexesFromTemplate(template) {
   const indexes = new Set();
@@ -38,17 +39,58 @@ function buildExampleRow(headers) {
   });
 }
 
+function safeStr(v) {
+  return String(v ?? "").trim();
+}
+
+function isCsvFile(file) {
+  const name = String(file?.name || "").toLowerCase();
+  return name.endsWith(".csv") || String(file?.type || "").includes("csv");
+}
+
 export default function StepUploadAudience({
   campaignId,
-  template, // ✅ NOVO: vem do wizard (template selecionado)
+  template, // ✅ vem do wizard (template selecionado)
   onBack,
   onNext,
   loading = false
 }) {
   const inputRef = useRef(null);
+  const trackedViewRef = useRef(false);
+
   const [file, setFile] = useState(null);
+  const [localErr, setLocalErr] = useState("");
 
   const headers = useMemo(() => buildAudienceHeaders(template), [template]);
+  const varsCount = useMemo(() => Math.max(0, headers.length - 1), [headers]);
+
+  // track view (uma vez)
+  useEffect(() => {
+    if (trackedViewRef.current) return;
+    trackedViewRef.current = true;
+
+    mpTrack("campaign_wizard_audience_step_view", {
+      campaign_id: campaignId ?? null,
+      template_name: safeStr(template?.name) || "",
+      template_category: safeStr(template?.category) || "",
+      template_vars_count: varsCount
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function setPickedFile(f) {
+    setLocalErr("");
+    setFile(f || null);
+
+    if (f) {
+      mpTrack("campaign_audience_file_selected", {
+        campaign_id: campaignId ?? null,
+        file_name: String(f.name || ""),
+        file_size: Number(f.size || 0),
+        template_vars_count: varsCount
+      });
+    }
+  }
 
   function downloadExample() {
     const row = buildExampleRow(headers);
@@ -60,9 +102,77 @@ export default function StepUploadAudience({
     const a = document.createElement("a");
     a.href = url;
     a.download = `exemplo_audiencia_${template?.name || "template"}.csv`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
 
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 300);
+
+    mpTrack("campaign_audience_example_downloaded", {
+      campaign_id: campaignId ?? null,
+      template_name: safeStr(template?.name) || "",
+      template_vars_count: varsCount
+    });
+  }
+
+  function handleBack() {
+    mpTrack("campaign_wizard_back_clicked", {
+      step: "audience",
+      campaign_id: campaignId ?? null
+    });
+    onBack?.();
+  }
+
+  async function handleNext() {
+    setLocalErr("");
+
+    if (!file) {
+      const msg = "Selecione um arquivo CSV para prosseguir.";
+      setLocalErr(msg);
+      mpTrack("campaign_audience_upload_blocked", {
+        campaign_id: campaignId ?? null,
+        reason: msg
+      });
+      return;
+    }
+
+    if (!isCsvFile(file)) {
+      const msg = "O arquivo precisa ser .csv";
+      setLocalErr(msg);
+      mpTrack("campaign_audience_upload_blocked", {
+        campaign_id: campaignId ?? null,
+        reason: msg,
+        file_name: String(file?.name || "")
+      });
+      return;
+    }
+
+    mpTrack("campaign_audience_upload_clicked", {
+      campaign_id: campaignId ?? null,
+      file_name: String(file?.name || ""),
+      file_size: Number(file?.size || 0),
+      template_vars_count: varsCount
+    });
+
+    try {
+      // o wizard já trata o upload e vai pro próximo step
+      await onNext?.(file);
+
+      mpTrack("campaign_audience_upload_success", {
+        campaign_id: campaignId ?? null,
+        file_name: String(file?.name || ""),
+        file_size: Number(file?.size || 0)
+      });
+    } catch (e) {
+      const msg = safeStr(e?.message) || "Erro ao enviar audiência.";
+      setLocalErr(msg);
+
+      mpTrack("campaign_audience_upload_error", {
+        campaign_id: campaignId ?? null,
+        error: msg,
+        file_name: String(file?.name || "")
+      });
+    }
   }
 
   return (
@@ -104,6 +214,12 @@ export default function StepUploadAudience({
           <strong>body_var_*</strong> conforme o template.
         </div>
 
+        {!!localErr && (
+          <div className="cmp-pill" style={{ borderColor: "rgba(239,68,68,0.35)" }}>
+            <span className="cmp-err">●</span> {localErr}
+          </div>
+        )}
+
         <div
           className="cmp-dropzone"
           onClick={() => inputRef.current?.click()}
@@ -111,9 +227,10 @@ export default function StepUploadAudience({
           onDrop={(e) => {
             e.preventDefault();
             const f = e.dataTransfer.files?.[0];
-            if (f) setFile(f);
+            if (f) setPickedFile(f);
           }}
           role="button"
+          aria-label="Selecionar CSV de audiência"
         >
           <div className="cmp-pill">
             <span className="cmp-ok">●</span> Clique para escolher ou arraste seu CSV aqui
@@ -127,18 +244,19 @@ export default function StepUploadAudience({
             type="file"
             accept=".csv,text/csv"
             style={{ display: "none" }}
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
+            onChange={(e) => setPickedFile(e.target.files?.[0] || null)}
             disabled={loading}
           />
         </div>
 
         <div className="cmp-actions">
-          <button className="cmp-btn" onClick={onBack} disabled={loading}>
+          <button className="cmp-btn" onClick={handleBack} disabled={loading}>
             Retornar
           </button>
+
           <button
             className="cmp-btn cmp-btn-primary"
-            onClick={() => onNext(file)}
+            onClick={handleNext}
             disabled={!file || loading}
           >
             {loading ? "Enviando…" : "Prosseguir"}

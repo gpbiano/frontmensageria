@@ -1,5 +1,6 @@
 // frontend/src/pages/settings/SettingsChannelsPage.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import { mpTrack } from "../../lib/mixpanel";
 
 import {
   fetchChannels,
@@ -233,17 +234,46 @@ export default function SettingsChannelsPage() {
   const messenger = channelsState?.messenger || null;
   const instagram = channelsState?.instagram || null;
 
-  async function loadChannels() {
+  function trackOnceSafe(name, props) {
+    // helper “silencioso” (mixpanel já é silencioso, mas mantém consistente)
+    try {
+      mpTrack(name, props);
+    } catch {
+      // noop
+    }
+  }
+
+  async function loadChannels(reason = "initial") {
     setLoading(true);
     setError("");
+
+    trackOnceSafe("channels_page_load_submit", { reason });
+
     try {
       const data = await fetchChannels();
       if (!mountedRef.current) return;
+
       const unwrapped = unwrapChannelsResponse(data);
       setChannelsState(unwrapped || {});
+
+      const summary = {
+        webchat_enabled: Boolean(unwrapped?.webchat?.enabled),
+        whatsapp_status: normalizeChannelStatus(unwrapped?.whatsapp?.status),
+        messenger_status: normalizeChannelStatus(unwrapped?.messenger?.status),
+        instagram_status: normalizeChannelStatus(unwrapped?.instagram?.status)
+      };
+
+      trackOnceSafe("channels_page_loaded", { reason, ...summary });
     } catch (e) {
       if (!mountedRef.current) return;
-      setError(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setError(err.msg || String(e));
+
+      trackOnceSafe("channels_page_load_error", {
+        reason,
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setLoading(false);
@@ -251,7 +281,7 @@ export default function SettingsChannelsPage() {
   }
 
   useEffect(() => {
-    loadChannels();
+    loadChannels("initial");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -259,6 +289,8 @@ export default function SettingsChannelsPage() {
   // ✅ Webchat
   // ===============================
   function openWebchatConfig() {
+    trackOnceSafe("channel_card_open", { channel: "webchat" });
+
     const ch = webchat || {};
     const cfg = ch?.config || {};
 
@@ -294,16 +326,31 @@ export default function SettingsChannelsPage() {
 
   async function loadSnippet() {
     setSnippetLoading(true);
+
+    trackOnceSafe("webchat_snippet_load", { source: "modal_open" });
+
     try {
       const res = await fetchWebchatSnippet();
       if (!mountedRef.current) return;
+
       const scriptTag = res?.scriptTag || res?.snippet || "";
       setSnippet(scriptTag);
       setSnippetMeta(res || null);
-    } catch {
+
+      trackOnceSafe("webchat_snippet_loaded", {
+        has_snippet: Boolean(scriptTag),
+        allowed_origins_count: Array.isArray(res?.allowedOrigins) ? res.allowedOrigins.length : 0
+      });
+    } catch (e) {
       if (!mountedRef.current) return;
       setSnippet("");
       setSnippetMeta(null);
+
+      const err = extractErr(e);
+      trackOnceSafe("webchat_snippet_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setSnippetLoading(false);
@@ -318,37 +365,54 @@ export default function SettingsChannelsPage() {
   async function saveWebchat() {
     if (!webchatDraft) return;
 
+    const cfg = webchatDraft.config || {};
+    const primaryColor = String(cfg.primaryColor || "#34d399").trim();
+
+    const payload = {
+      enabled: !!webchatDraft.enabled,
+      allowedOrigins: Array.isArray(webchatDraft.allowedOrigins) ? webchatDraft.allowedOrigins : [],
+      config: {
+        primaryColor,
+        color: primaryColor,
+        position: cfg.position === "left" ? "left" : "right",
+        buttonText: String(cfg.buttonText || "Ajuda"),
+        headerTitle: String(cfg.headerTitle || "Atendimento"),
+        title: String(cfg.headerTitle || "Atendimento"),
+        greeting: String(cfg.greeting || "Olá! Como posso ajudar?")
+      }
+    };
+
+    trackOnceSafe("webchat_save_submit", {
+      enabled: Boolean(payload.enabled),
+      position: payload.config.position,
+      allowed_origins_count: payload.allowedOrigins.length
+    });
+
     setSaving(true);
     setError("");
 
     try {
-      const cfg = webchatDraft.config || {};
-      const primaryColor = String(cfg.primaryColor || "#34d399").trim();
-
-      const payload = {
-        enabled: !!webchatDraft.enabled,
-        allowedOrigins: Array.isArray(webchatDraft.allowedOrigins) ? webchatDraft.allowedOrigins : [],
-        config: {
-          primaryColor,
-          color: primaryColor,
-          position: cfg.position === "left" ? "left" : "right",
-          buttonText: String(cfg.buttonText || "Ajuda"),
-          headerTitle: String(cfg.headerTitle || "Atendimento"),
-          title: String(cfg.headerTitle || "Atendimento"),
-          greeting: String(cfg.greeting || "Olá! Como posso ajudar?")
-        }
-      };
-
       await updateWebchatChannel(payload);
-      await loadChannels();
+      await loadChannels("after_webchat_save");
       await loadSnippet();
 
       if (!mountedRef.current) return;
       setToast("Configuração salva com sucesso.");
       setTimeout(() => mountedRef.current && setToast(""), 2000);
+
+      trackOnceSafe("webchat_save_success", {
+        enabled: Boolean(payload.enabled),
+        allowed_origins_count: payload.allowedOrigins.length
+      });
     } catch (e) {
       if (!mountedRef.current) return;
-      setError(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setError(err.msg || String(e));
+
+      trackOnceSafe("webchat_save_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setSaving(false);
@@ -357,7 +421,12 @@ export default function SettingsChannelsPage() {
 
   async function rotateKey() {
     const ok = confirm("Ao rotacionar a chave, scripts antigos deixarão de funcionar. Deseja continuar?");
-    if (!ok) return;
+    if (!ok) {
+      trackOnceSafe("webchat_rotate_key_cancel", {});
+      return;
+    }
+
+    trackOnceSafe("webchat_rotate_key_submit", {});
 
     setSaving(true);
     setError("");
@@ -367,27 +436,40 @@ export default function SettingsChannelsPage() {
       const newKey = res?.widgetKey || "";
       setWebchatDraft((p) => (p ? { ...p, widgetKey: newKey } : p));
 
-      await loadChannels();
+      await loadChannels("after_webchat_rotate_key");
       await loadSnippet();
 
       if (!mountedRef.current) return;
       setToast("Chave atualizada.");
       setTimeout(() => mountedRef.current && setToast(""), 2000);
+
+      trackOnceSafe("webchat_rotate_key_success", {
+        has_new_key: Boolean(newKey)
+      });
     } catch (e) {
       if (!mountedRef.current) return;
-      setError(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setError(err.msg || String(e));
+
+      trackOnceSafe("webchat_rotate_key_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setSaving(false);
     }
   }
 
-  async function copy(text) {
+  async function copy(text, meta = {}) {
     try {
       await navigator.clipboard.writeText(String(text || ""));
       setToast("Copiado!");
       setTimeout(() => mountedRef.current && setToast(""), 1200);
+
+      trackOnceSafe("clipboard_copy", { ...meta, ok: true });
     } catch {
+      trackOnceSafe("clipboard_copy", { ...meta, ok: false });
       // sem fallback
     }
   }
@@ -472,6 +554,8 @@ export default function SettingsChannelsPage() {
     setWaErr("");
     setWaConnecting(true);
 
+    trackOnceSafe("whatsapp_connect_start", {});
+
     try {
       const startRaw = await startWhatsAppEmbeddedSignup();
       const start = normalizeMetaStart(startRaw);
@@ -500,7 +584,13 @@ export default function SettingsChannelsPage() {
       )}/dialog/oauth?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
-      setWaErr(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setWaErr(err.msg || String(e));
+
+      trackOnceSafe("whatsapp_connect_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setWaConnecting(false);
@@ -509,21 +599,34 @@ export default function SettingsChannelsPage() {
 
   async function disconnectWhatsApp() {
     const ok = confirm("Deseja desconectar o WhatsApp deste tenant?");
-    if (!ok) return;
+    if (!ok) {
+      trackOnceSafe("whatsapp_disconnect_cancel", {});
+      return;
+    }
 
     setWaErr("");
     setWaConnecting(true);
 
+    trackOnceSafe("whatsapp_disconnect_submit", {});
+
     try {
       await disconnectWhatsAppChannel();
-      await loadChannels();
+      await loadChannels("after_whatsapp_disconnect");
       if (!mountedRef.current) return;
 
       setToast("WhatsApp desconectado.");
       setTimeout(() => mountedRef.current && setToast(""), 2000);
+
+      trackOnceSafe("whatsapp_disconnect_success", {});
     } catch (e) {
       if (!mountedRef.current) return;
-      setWaErr(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setWaErr(err.msg || String(e));
+
+      trackOnceSafe("whatsapp_disconnect_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setWaConnecting(false);
@@ -545,6 +648,8 @@ export default function SettingsChannelsPage() {
   }
 
   function openMessengerModal() {
+    trackOnceSafe("messenger_modal_open", { connected: msIsConnected });
+
     setMsErr("");
     setMsPages([]);
     setMsSelectedPageId("");
@@ -556,6 +661,9 @@ export default function SettingsChannelsPage() {
   async function loadMessengerPages() {
     setMsErr("");
     setMsConnecting(true);
+
+    // ⚠️ NÃO mandamos token pro Mixpanel (sensível)
+    trackOnceSafe("messenger_pages_load_submit", {});
 
     try {
       const token = String(msUserToken || "").trim();
@@ -569,10 +677,18 @@ export default function SettingsChannelsPage() {
       setMsPages(pages);
       if (pages.length === 1) setMsSelectedPageId(String(pages[0].id));
       if (!pages.length) setMsErr("Nenhuma página retornada. Verifique permissões do token.");
+
+      trackOnceSafe("messenger_pages_load_success", { pages_count: pages.length });
     } catch (e) {
       if (!mountedRef.current) return;
-      setMsErr(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setMsErr(err.msg || String(e));
       setMsPages([]);
+
+      trackOnceSafe("messenger_pages_load_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setMsConnecting(false);
@@ -583,6 +699,15 @@ export default function SettingsChannelsPage() {
     setMsErr("");
     setMsConnecting(true);
 
+    const subscribedFields = String(msSubFields || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    trackOnceSafe("messenger_connect_submit", {
+      subscribed_fields_count: subscribedFields.length
+    });
+
     try {
       const pageId = String(msSelectedPageId || "").trim();
       if (!pageId) throw new Error("Selecione uma página.");
@@ -591,21 +716,24 @@ export default function SettingsChannelsPage() {
       const pageAccessToken = String(page?.pageAccessToken || "").trim();
       if (!pageAccessToken) throw new Error("Página selecionada sem pageAccessToken. Recarregue as páginas.");
 
-      const subscribedFields = String(msSubFields || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-
       await connectMessengerChannel({ pageId, pageAccessToken, subscribedFields });
-      await loadChannels();
+      await loadChannels("after_messenger_connect");
 
       if (!mountedRef.current) return;
       setToast("Messenger conectado com sucesso.");
       setTimeout(() => mountedRef.current && setToast(""), 2000);
       setMsModalOpen(false);
+
+      trackOnceSafe("messenger_connect_success", { page_id: pageId });
     } catch (e) {
       if (!mountedRef.current) return;
-      setMsErr(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setMsErr(err.msg || String(e));
+
+      trackOnceSafe("messenger_connect_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setMsConnecting(false);
@@ -614,21 +742,34 @@ export default function SettingsChannelsPage() {
 
   async function disconnectMessenger() {
     const ok = confirm("Deseja desconectar o Messenger deste tenant?");
-    if (!ok) return;
+    if (!ok) {
+      trackOnceSafe("messenger_disconnect_cancel", {});
+      return;
+    }
 
     setMsErr("");
     setMsConnecting(true);
 
+    trackOnceSafe("messenger_disconnect_submit", {});
+
     try {
       await disconnectMessengerChannel();
-      await loadChannels();
+      await loadChannels("after_messenger_disconnect");
 
       if (!mountedRef.current) return;
       setToast("Messenger desconectado.");
       setTimeout(() => mountedRef.current && setToast(""), 2000);
+
+      trackOnceSafe("messenger_disconnect_success", {});
     } catch (e) {
       if (!mountedRef.current) return;
-      setMsErr(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setMsErr(err.msg || String(e));
+
+      trackOnceSafe("messenger_disconnect_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setMsConnecting(false);
@@ -650,6 +791,8 @@ export default function SettingsChannelsPage() {
   }
 
   function openInstagramModal() {
+    trackOnceSafe("instagram_modal_open", { connected: igIsConnected });
+
     setIgErr("");
     setIgPages([]);
     setIgSelectedPageId("");
@@ -661,6 +804,8 @@ export default function SettingsChannelsPage() {
   async function startInstagramConnect() {
     setIgErr("");
     setIgConnecting(true);
+
+    trackOnceSafe("instagram_connect_start", {});
 
     try {
       const start = await startInstagramBusinessLogin();
@@ -709,7 +854,13 @@ export default function SettingsChannelsPage() {
       )}/dialog/oauth?${params.toString()}`;
     } catch (e) {
       if (!mountedRef.current) return;
-      setIgErr(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setIgErr(err.msg || String(e));
+
+      trackOnceSafe("instagram_connect_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setIgConnecting(false);
@@ -720,6 +871,11 @@ export default function SettingsChannelsPage() {
   async function finalizeInstagramWithPage() {
     setIgErr("");
     setIgConnecting(true);
+
+    trackOnceSafe("instagram_connect_submit", {
+      has_connect_state: Boolean(String(igConnectState || "").trim()),
+      has_page: Boolean(String(igSelectedPageId || "").trim())
+    });
 
     try {
       const pageId = String(igSelectedPageId || "").trim();
@@ -734,7 +890,7 @@ export default function SettingsChannelsPage() {
         subscribedFields: ["messages"]
       });
 
-      await loadChannels();
+      await loadChannels("after_instagram_connect");
 
       if (!mountedRef.current) return;
       setToast("Instagram conectado com sucesso.");
@@ -744,9 +900,17 @@ export default function SettingsChannelsPage() {
       setIgPages([]);
       setIgSelectedPageId("");
       setIgConnectState("");
+
+      trackOnceSafe("instagram_connect_success", { page_id: pageId });
     } catch (e) {
       if (!mountedRef.current) return;
-      setIgErr(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setIgErr(err.msg || String(e));
+
+      trackOnceSafe("instagram_connect_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setIgConnecting(false);
@@ -755,21 +919,34 @@ export default function SettingsChannelsPage() {
 
   async function disconnectInstagram() {
     const ok = confirm("Deseja desconectar o Instagram deste tenant?");
-    if (!ok) return;
+    if (!ok) {
+      trackOnceSafe("instagram_disconnect_cancel", {});
+      return;
+    }
 
     setIgErr("");
     setIgConnecting(true);
 
+    trackOnceSafe("instagram_disconnect_submit", {});
+
     try {
       await disconnectInstagramChannel();
-      await loadChannels();
+      await loadChannels("after_instagram_disconnect");
 
       if (!mountedRef.current) return;
       setToast("Instagram desconectado.");
       setTimeout(() => mountedRef.current && setToast(""), 2000);
+
+      trackOnceSafe("instagram_disconnect_success", {});
     } catch (e) {
       if (!mountedRef.current) return;
-      setIgErr(extractErr(e).msg || String(e));
+      const err = extractErr(e);
+      setIgErr(err.msg || String(e));
+
+      trackOnceSafe("instagram_disconnect_error", {
+        code: err.code || "",
+        message: String(err.msg || "").slice(0, 160)
+      });
     } finally {
       if (!mountedRef.current) return;
       setIgConnecting(false);
@@ -785,6 +962,13 @@ export default function SettingsChannelsPage() {
 
       const channel = detectChannelByPath(url.pathname);
       if (!channel) return;
+
+      trackOnceSafe("oauth_callback_detected", {
+        channel,
+        has_code: Boolean(url.searchParams.get("code")),
+        has_state: Boolean(url.searchParams.get("state")),
+        has_error: Boolean(url.searchParams.get("error"))
+      });
 
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
@@ -828,15 +1012,20 @@ export default function SettingsChannelsPage() {
 
             setToast(pages.length > 1 ? "Escolha a página para conectar." : "Página carregada.");
             setTimeout(() => mountedRef.current && setToast(""), 2000);
+
+            trackOnceSafe("instagram_oauth_finish_success", { pages_count: pages.length });
           } else {
             // WhatsApp
             setWaConnecting(true);
+
             await finishWhatsAppEmbeddedSignup({ code, state });
-            await loadChannels();
+            await loadChannels("after_whatsapp_oauth");
 
             if (!mountedRef.current) return;
             setToast("WhatsApp conectado com sucesso.");
             setTimeout(() => mountedRef.current && setToast(""), 2000);
+
+            trackOnceSafe("whatsapp_oauth_finish_success", {});
           }
 
           // ✅ limpa query
@@ -849,8 +1038,13 @@ export default function SettingsChannelsPage() {
         } catch (e) {
           if (!mountedRef.current) return;
           const msg = extractErr(e).msg || String(e);
-          if (channel === "instagram") setIgErr(msg);
-          else setWaErr(msg);
+          if (channel === "instagram") {
+            setIgErr(msg);
+            trackOnceSafe("instagram_oauth_finish_error", { message: String(msg || "").slice(0, 160) });
+          } else {
+            setWaErr(msg);
+            trackOnceSafe("whatsapp_oauth_finish_error", { message: String(msg || "").slice(0, 160) });
+          }
         } finally {
           if (!mountedRef.current) return;
           setWaConnecting(false);
@@ -971,7 +1165,14 @@ export default function SettingsChannelsPage() {
                 </button>
               ) : (
                 <>
-                  <button className="settings-primary-btn" onClick={() => setWaModalOpen(true)} disabled={waConnecting}>
+                  <button
+                    className="settings-primary-btn"
+                    onClick={() => {
+                      trackOnceSafe("channel_details_open", { channel: "whatsapp" });
+                      setWaModalOpen(true);
+                    }}
+                    disabled={waConnecting}
+                  >
                     Detalhes
                   </button>
                   <button
@@ -1120,7 +1321,7 @@ export default function SettingsChannelsPage() {
               Canais carregados do backend.
               <button
                 style={{ marginLeft: 10, all: "unset", cursor: "pointer", textDecoration: "underline" }}
-                onClick={loadChannels}
+                onClick={() => loadChannels("manual_refresh")}
               >
                 Recarregar
               </button>
@@ -1286,7 +1487,11 @@ export default function SettingsChannelsPage() {
                   <select
                     style={fieldStyle()}
                     value={igSelectedPageId}
-                    onChange={(e) => setIgSelectedPageId(e.target.value)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setIgSelectedPageId(v);
+                      trackOnceSafe("instagram_select_page", { page_id: String(v || "") });
+                    }}
                   >
                     <option value="">Selecione…</option>
                     {igPages.map((p) => (
@@ -1374,7 +1579,7 @@ export default function SettingsChannelsPage() {
                   <input style={fieldStyle()} value={webchatDraft.widgetKey || ""} readOnly />
                   <button
                     className="settings-primary-btn"
-                    onClick={() => copy(webchatDraft.widgetKey || "")}
+                    onClick={() => copy(webchatDraft.widgetKey || "", { action: "copy_widget_key" })}
                     disabled={!webchatDraft.widgetKey}
                   >
                     Copiar
@@ -1522,7 +1727,13 @@ export default function SettingsChannelsPage() {
               />
 
               <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                <button className="settings-primary-btn" onClick={() => copy(embedSnippet)}>
+                <button
+                  className="settings-primary-btn"
+                  onClick={() => {
+                    trackOnceSafe("webchat_copy_embed", { source: snippet ? "backend_snippet" : "fallback_snippet" });
+                    copy(embedSnippet, { action: "copy_embed_snippet" });
+                  }}
+                >
                   Copiar embed
                 </button>
                 <button
