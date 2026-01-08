@@ -1,5 +1,7 @@
 // frontend/src/App.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import { BrowserRouter } from "react-router-dom";
+
 import LoginPage from "./pages/LoginPage.jsx";
 import { mpIdentify, mpTrack, mpReset } from "./lib/mixpanel";
 
@@ -38,6 +40,9 @@ import SettingsChannelsPage from "./pages/settings/SettingsChannelsPage.jsx";
 
 // Criar Senha (Público)
 import CreatePasswordPage from "./pages/auth/CreatePasswordPage.jsx";
+
+// ✅ Admin Routes (NOVO)
+import AdminRoutes from "./routes/adminRoutes.jsx";
 
 /* ==========================================================
    CSS (ORDEM CORRETA)
@@ -88,7 +93,8 @@ import {
   Users,
   Building2,
   UserCircle,
-  LifeBuoy
+  LifeBuoy,
+  Shield
 } from "lucide-react";
 
 const AUTH_TOKEN_KEY = "gpLabsAuthToken";
@@ -99,8 +105,7 @@ const SIDEBAR_LS_COLLAPSED = "gp.sidebar.collapsed";
 const SIDEBAR_LS_OPEN = "gp.sidebar.openSection";
 
 // ✅ Help Portal
-const HELP_PORTAL_URL =
-  "https://gplabs.atlassian.net/servicedesk/customer/portals";
+const HELP_PORTAL_URL = "https://gplabs.atlassian.net/servicedesk/customer/portals";
 
 /* ==========================================================
    AUTH HELPERS
@@ -188,10 +193,7 @@ export default function App() {
   }, []);
 
   // ✅ derivado: se não tem token AGORA, não está autenticado (ponto final)
-  const tokenNow = useMemo(
-    () => (getStoredAuthToken() || "").trim(),
-    [authVersion]
-  );
+  const tokenNow = useMemo(() => (getStoredAuthToken() || "").trim(), [authVersion]);
   const isAuthenticated = Boolean(tokenNow);
 
   function handleLogin(payload) {
@@ -214,17 +216,23 @@ export default function App() {
   if (isCreatePasswordRoute) return <CreatePasswordPage />;
   if (!isAuthenticated) return <LoginPage onLogin={handleLogin} />;
 
-  return <PlatformShell onLogout={handleLogout} />;
+  // ✅ BrowserRouter aqui habilita AdminRoutes sem quebrar o shell atual
+  return (
+    <BrowserRouter>
+      <PlatformShell onLogout={handleLogout} />
+    </BrowserRouter>
+  );
 }
 
 /* ==========================================================
-   MENU
+   MENU (BASE)
 ========================================================== */
 const SECTION_ICONS = {
   atendimento: MessageSquare,
   chatbot: Bot,
   campanhas: Megaphone,
-  configuracoes: Settings
+  configuracoes: Settings,
+  admin: Shield
 };
 
 const ITEM_ICONS = {
@@ -243,10 +251,12 @@ const ITEM_ICONS = {
 
   canais: Settings,
   usuarios: Users,
-  config: Settings
+  config: Settings,
+
+  tenants: Building2
 };
 
-const MENU = [
+const BASE_MENU = [
   {
     id: "atendimento",
     label: "Atendimento",
@@ -260,7 +270,6 @@ const MENU = [
     id: "chatbot",
     label: "Chatbot",
     items: [
-      // OBS: id "historico" existe em 2 seções — ok pq você usa (main+sub)
       { id: "historico", label: "Histórico de Chats" },
       { id: "config", label: "Configurações" }
     ]
@@ -332,12 +341,15 @@ function PlatformShell({ onLogout }) {
   // ✅ Usuário logado
   const [authUser, setAuthUser] = useState(() => getStoredAuthUser());
 
+  // ✅ controla refresh do path (Admin usa URL)
+  const [routeVersion, setRouteVersion] = useState(0);
+
   useEffect(() => {
     function sync() {
       const u = getStoredAuthUser();
       setAuthUser(u);
 
-      // identify sempre que sincronizar (não quebra se disabled)
+      // identify sempre que sincronizar
       if (u) mpIdentify(u);
 
       const t = (getStoredAuthToken() || "").trim();
@@ -354,12 +366,37 @@ function PlatformShell({ onLogout }) {
     };
   }, [onLogout]);
 
+  useEffect(() => {
+    function onPop() {
+      setRouteVersion((v) => v + 1);
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   const userDisplayName =
     (authUser?.name && String(authUser.name).trim()) ||
     (authUser?.email && String(authUser.email).trim()) ||
     "Usuário";
 
   const userEmail = (authUser?.email && String(authUser.email).trim()) || "";
+
+  // ✅ Admin visibility
+  const isSuperAdmin = authUser?.isSuperAdmin === true;
+
+  // ✅ menu final (Admin só aparece pro Super Admin)
+  const MENU = useMemo(() => {
+    if (!isSuperAdmin) return BASE_MENU;
+
+    return [
+      ...BASE_MENU,
+      {
+        id: "admin",
+        label: "Administração",
+        items: [{ id: "tenants", label: "Empresas" }]
+      }
+    ];
+  }, [isSuperAdmin]);
 
   // dropdowns header
   const [isCompanyOpen, setIsCompanyOpen] = useState(false);
@@ -378,20 +415,39 @@ function PlatformShell({ onLogout }) {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
+  // ✅ admin route detector
+  const isAdminRoute = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const p = window.location.pathname || "/";
+    return p.startsWith("/admin");
+  }, [routeVersion]);
+
   // ✅ page_view (centralizado)
   const lastPageRef = useRef("");
   useEffect(() => {
-    const page = `${mainSectionLabel(mainSection)} > ${subSectionLabel(subSection)}`;
-    const key = `${mainSection}:${subSection}`;
+    const page = isAdminRoute
+      ? `Admin > ${window.location.pathname}`
+      : `${mainSectionLabel(mainSection)} > ${subSectionLabel(subSection)}`;
+
+    const key = isAdminRoute ? `admin:${window.location.pathname}` : `${mainSection}:${subSection}`;
     if (lastPageRef.current === key) return;
     lastPageRef.current = key;
 
     mpTrack("page_view", {
       page,
-      main: mainSection,
-      sub: subSection
+      main: isAdminRoute ? "admin" : mainSection,
+      sub: isAdminRoute ? window.location.pathname : subSection
     });
-  }, [mainSection, subSection]);
+  }, [mainSection, subSection, isAdminRoute, routeVersion]);
+
+  function navigateTo(path) {
+    try {
+      window.history.pushState({}, "", path);
+      setRouteVersion((v) => v + 1);
+    } catch {
+      window.location.href = path;
+    }
+  }
 
   function handleHeaderClick(sectionId) {
     if (collapsed) {
@@ -428,15 +484,34 @@ function PlatformShell({ onLogout }) {
       collapsed
     });
 
+    // ✅ Admin usa URL (React Router)
+    if (sectionId === "admin") {
+      setOpenSection(sectionId);
+      // rota principal
+      if (itemId === "tenants") {
+        navigateTo("/admin/tenants");
+        return;
+      }
+      navigateTo("/admin/tenants");
+      return;
+    }
+
+    // ✅ resto continua como está (state-based)
     setMainSection(sectionId);
     setSubSection(itemId);
     setOpenSection(sectionId);
+
+    // se estava no admin, volta para raiz (opcional)
+    if (isAdminRoute) navigateTo("/");
   }
 
   function goTo(main, sub) {
     setMainSection(main);
     setSubSection(sub);
     setOpenSection(main);
+
+    // se estiver em rota admin, volta
+    if (isAdminRoute) navigateTo("/");
   }
 
   return (
@@ -496,9 +571,7 @@ function PlatformShell({ onLogout }) {
             target="_blank"
             rel="noreferrer"
             title="Central de Ajuda"
-            onClick={() =>
-              mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })
-            }
+            onClick={() => mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })}
           >
             <LifeBuoy size={16} />
             {!collapsed && <span className="gp-help-text">Ajuda</span>}
@@ -526,9 +599,7 @@ function PlatformShell({ onLogout }) {
 
                 <div className="gp-dd-item is-muted">
                   {userDisplayName}
-                  <div className="gp-dd-sub">
-                    {userEmail ? userEmail : "Perfil do usuário"}
-                  </div>
+                  <div className="gp-dd-sub">{userEmail ? userEmail : "Perfil do usuário"}</div>
                 </div>
 
                 <div className="gp-dd-sep" />
@@ -557,7 +628,6 @@ function PlatformShell({ onLogout }) {
           </div>
         </div>
 
-        {/* se teu CSS já esconde, ok manter; senão pode remover */}
         <div className="gp-header-accent" />
       </header>
 
@@ -580,16 +650,14 @@ function PlatformShell({ onLogout }) {
 
           {MENU.map((section) => {
             const isOpen = openSection === section.id;
-            const isActive = mainSection === section.id;
+            const isActive = isAdminRoute ? section.id === "admin" : mainSection === section.id;
             const SectionIcon = SECTION_ICONS[section.id] || Layers;
 
             return (
               <div className="sidebar-section" key={section.id}>
                 <button
                   type="button"
-                  className={
-                    "sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")
-                  }
+                  className={"sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")}
                   onClick={() => handleHeaderClick(section.id)}
                   title={collapsed ? section.label : undefined}
                 >
@@ -611,17 +679,17 @@ function PlatformShell({ onLogout }) {
                 {!collapsed && isOpen && (
                   <div className="sidebar-subitems">
                     {section.items.map((item) => {
-                      const isItemActive =
-                        mainSection === section.id && subSection === item.id;
+                      const isItemActive = isAdminRoute
+                        ? section.id === "admin" && window.location.pathname.startsWith("/admin")
+                        : mainSection === section.id && subSection === item.id;
+
                       const ItemIcon = ITEM_ICONS[item.id] || Layers;
 
                       return (
                         <button
                           type="button"
                           key={item.id}
-                          className={
-                            "sidebar-link" + (isItemActive ? " sidebar-link-active" : "")
-                          }
+                          className={"sidebar-link" + (isItemActive ? " sidebar-link-active" : "")}
                           onClick={() => handleItemClick(section.id, item.id)}
                         >
                           <span className="sb-sub-ic">
@@ -640,7 +708,13 @@ function PlatformShell({ onLogout }) {
 
         {/* MAIN */}
         <main className="app-main">
-          <SectionRenderer main={mainSection} sub={subSection} goTo={goTo} />
+          {isAdminRoute ? (
+            <div className="page-full">
+              <AdminRoutes />
+            </div>
+          ) : (
+            <SectionRenderer main={mainSection} sub={subSection} goTo={goTo} />
+          )}
         </main>
       </div>
     </div>
@@ -759,9 +833,7 @@ function SectionRenderer({ main, sub, goTo }) {
         </div>
       );
 
-    return (
-      <Placeholder title={`Campanhas · ${subSectionLabel(sub)}`} text="Seção em construção." />
-    );
+    return <Placeholder title={`Campanhas · ${subSectionLabel(sub)}`} text="Seção em construção." />;
   }
 
   if (main === "configuracoes") {
@@ -809,6 +881,7 @@ function mainSectionLabel(main) {
   if (main === "chatbot") return "Chatbot";
   if (main === "campanhas") return "Campanhas";
   if (main === "configuracoes") return "Configurações";
+  if (main === "admin") return "Administração";
   return "Plataforma";
 }
 
@@ -842,6 +915,8 @@ function subSectionLabel(sub) {
       return "Usuários";
     case "config":
       return "Configurações";
+    case "tenants":
+      return "Empresas";
     default:
       return "";
   }

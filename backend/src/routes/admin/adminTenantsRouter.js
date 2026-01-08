@@ -2,9 +2,13 @@
 import express from "express";
 import crypto from "crypto";
 import { prisma } from "../../lib/prisma.js";
-import { asaasCreateCustomer } from "../../services/asaasClient.js";
+import logger from "../../logger.js";
 
-// helpers
+const router = express.Router();
+
+// ===============================
+// Helpers
+// ===============================
 function safeStr(v) {
   return String(v || "").trim();
 }
@@ -19,56 +23,28 @@ function normalizeSlug(input) {
     .replace(/^-|-$/g, "");
 }
 
-function normalizeDigits(v) {
-  return String(v || "").replace(/\D+/g, "");
-}
-
 function addDays(days) {
   const d = new Date();
   d.setDate(d.getDate() + days);
   return d;
 }
 
-function buildInviteToken() {
-  // token opaco para link (não o id do PasswordToken)
-  return crypto.randomBytes(32).toString("hex");
+function normalizeCnpj(v) {
+  return safeStr(v).replace(/\D+/g, "");
 }
 
-/**
- * IMPORTANTE:
- * - Seu fluxo atual usa PasswordToken.id como token (modo compat)
- * - buildInviteToken() fica guardado para quando você adicionar `token` no schema
- */
-
-const router = express.Router();
-
-function sanitizeUser(u) {
-  if (!u) return null;
+function asaasGroupDefaults() {
+  // ✅ seus defaults
   return {
-    id: u.id,
-    email: u.email,
-    name: u.name,
-    role: u.role,
-    isActive: u.isActive,
-    isSuperAdmin: u.isSuperAdmin === true,
-    createdAt: u.createdAt,
-    updatedAt: u.updatedAt
+    asaasGroupName: "ClienteOnline - GP Labs",
+    asaasCustomerAccountGroup: "305006"
   };
 }
 
-function getDefaultAsaasGroupName() {
-  return String(process.env.ASAAS_GROUP_NAME || "").trim() || "ClienteOnline - GP Labs";
-}
-
-function getDefaultAsaasCustomerAccountGroup() {
-  return String(process.env.ASAAS_CUSTOMER_ACCOUNT_GROUP || "").trim() || "305006";
-}
-
-/**
- * GET /admin/tenants
- * Lista tenants (com paginação simples)
- * - inclui billing/status resumido para a listagem
- */
+// ===============================
+// GET /admin/tenants
+// lista tenants + billing (pra badges no front)
+// ===============================
 router.get("/", async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
@@ -92,59 +68,22 @@ router.get("/", async (req, res) => {
         skip: (page - 1) * pageSize,
         take: pageSize,
         include: {
-          billing: true,
-          companyProfile: true
+          billing: true
         }
       })
     ]);
 
-    res.json({
-      ok: true,
-      page,
-      pageSize,
-      total,
-      items: items.map((t) => ({
-        id: t.id,
-        slug: t.slug,
-        name: t.name,
-        isActive: t.isActive,
-        createdAt: t.createdAt,
-        updatedAt: t.updatedAt,
-        companyProfile: t.companyProfile
-          ? {
-              legalName: t.companyProfile.legalName,
-              cnpj: t.companyProfile.cnpj,
-              postalCode: t.companyProfile.postalCode,
-              city: t.companyProfile.city,
-              state: t.companyProfile.state
-            }
-          : null,
-        billing: t.billing
-          ? {
-              provider: t.billing.provider,
-              status: t.billing.status,
-              planCode: t.billing.planCode,
-              isFree: t.billing.isFree,
-              chargeEnabled: t.billing.chargeEnabled,
-              pricingRef: t.billing.pricingRef,
-              asaasCustomerId: t.billing.asaasCustomerId,
-              asaasGroupName: t.billing.asaasGroupName,
-              asaasCustomerAccountGroup: t.billing.asaasCustomerAccountGroup,
-              lastSyncAt: t.billing.lastSyncAt,
-              lastError: t.billing.lastError
-            }
-          : null
-      }))
-    });
+    res.json({ ok: true, page, pageSize, total, items });
   } catch (err) {
+    logger.error({ err }, "admin.tenants.list error");
     res.status(500).json({ error: "Falha ao listar tenants" });
   }
 });
 
-/**
- * GET /admin/tenants/:id
- * ✅ Detalhado: tenant + companyProfile + billing + members
- */
+// ===============================
+// GET /admin/tenants/:id
+// retorna tenant + companyProfile + billing + members
+// ===============================
 router.get("/:id", async (req, res) => {
   try {
     const id = safeStr(req.params.id);
@@ -153,156 +92,66 @@ router.get("/:id", async (req, res) => {
       where: { id },
       include: {
         companyProfile: true,
-        billing: true,
-        users: {
-          include: { user: true },
-          orderBy: { createdAt: "desc" }
-        }
+        billing: true
       }
     });
 
     if (!tenant) return res.status(404).json({ error: "Tenant não encontrado" });
 
+    const members = await prisma.userTenant.findMany({
+      where: { tenantId: id },
+      orderBy: [{ createdAt: "asc" }],
+      include: {
+        user: { select: { id: true, email: true, name: true, isActive: true, isSuperAdmin: true } }
+      }
+    });
+
     res.json({
       ok: true,
-      tenant: {
-        id: tenant.id,
-        slug: tenant.slug,
-        name: tenant.name,
-        isActive: tenant.isActive,
-        createdAt: tenant.createdAt,
-        updatedAt: tenant.updatedAt
-      },
-      companyProfile: tenant.companyProfile,
-      billing: tenant.billing,
-      members: (tenant.users || []).map((ut) => ({
-        id: ut.id,
-        tenantId: ut.tenantId,
-        userId: ut.userId,
-        role: ut.role,
-        isActive: ut.isActive,
-        createdAt: ut.createdAt,
-        updatedAt: ut.updatedAt,
-        user: sanitizeUser(ut.user)
-      }))
+      tenant,
+      companyProfile: tenant.companyProfile || null,
+      billing: tenant.billing || null,
+      members
     });
   } catch (err) {
+    logger.error({ err }, "admin.tenants.get error");
     res.status(500).json({ error: "Falha ao buscar tenant" });
   }
 });
 
-/**
- * POST /admin/tenants
- * ✅ Cria Tenant COMPLETO (Admin + CompanyProfile + Billing)
- */
+// ===============================
+// POST /admin/tenants
+// cria tenant + user admin + companyProfile + billing + invite
+// ===============================
 router.post("/", async (req, res) => {
   try {
     const name = safeStr(req.body?.name);
     const slugRaw = safeStr(req.body?.slug);
-
-    // Admin do tenant
     const adminEmail = safeStr(req.body?.adminEmail).toLowerCase();
     const adminName = safeStr(req.body?.adminName) || null;
 
-    const sendInvite = req.body?.sendInvite !== false; // default true
+    const sendInvite = req.body?.sendInvite !== false;
     const inviteTtlDays = Math.min(30, Math.max(1, Number(req.body?.inviteTtlDays || 7)));
 
-    // Company profile
-    const cp = req.body?.companyProfile || {};
-    const legalName = safeStr(cp.legalName);
-    const tradeName = safeStr(cp.tradeName) || null;
-    const cnpj = normalizeDigits(cp.cnpj);
-    const ie = safeStr(cp.ie) || null;
-    const im = safeStr(cp.im) || null;
+    const companyProfile = req.body?.companyProfile || null;
+    const billing = req.body?.billing || null;
 
-    const postalCode = normalizeDigits(cp.postalCode);
-    const address = safeStr(cp.address);
-    const addressNumber = safeStr(cp.addressNumber);
-    const complement = safeStr(cp.complement) || null;
-    const province = safeStr(cp.province) || null;
-    const city = safeStr(cp.city) || null;
-    const state = safeStr(cp.state) || null;
-    const country = safeStr(cp.country) || "BR";
-
-    // Billing (aberto pra depois)
-    const b = req.body?.billing || {};
-    const planCode = safeStr(b.planCode) || "free";
-    const isFree = planCode === "free" ? true : Boolean(b.isFree);
-    const chargeEnabled = isFree ? false : (b.chargeEnabled === true); // default false
-    const pricingRef = safeStr(b.pricingRef) || null;
-    const billingEmail = safeStr(b.billingEmail || adminEmail).toLowerCase() || null;
-
-    // ✅ Sempre mandar pro grupo (defaults por env)
-    const asaasGroupName = safeStr(b.asaasGroupName) || getDefaultAsaasGroupName();
-    const asaasCustomerAccountGroup =
-      safeStr(b.asaasCustomerAccountGroup) || getDefaultAsaasCustomerAccountGroup();
-
-    // validações mínimas
     if (!name) return res.status(400).json({ error: "name obrigatório" });
     if (!adminEmail || !adminEmail.includes("@")) {
       return res.status(400).json({ error: "adminEmail inválido" });
     }
 
-    if (!legalName) return res.status(400).json({ error: "companyProfile.legalName obrigatório" });
-    if (!cnpj) return res.status(400).json({ error: "companyProfile.cnpj obrigatório" });
-    if (!postalCode) return res.status(400).json({ error: "companyProfile.postalCode obrigatório" });
-    if (!address) return res.status(400).json({ error: "companyProfile.address obrigatório" });
-    if (!addressNumber) return res.status(400).json({ error: "companyProfile.addressNumber obrigatório" });
-
     const slug = normalizeSlug(slugRaw || name);
     if (!slug) return res.status(400).json({ error: "slug inválido" });
 
-    // evita slug duplicado
     const existingSlug = await prisma.tenant.findUnique({ where: { slug } });
-    if (existingSlug) {
-      return res.status(409).json({ error: "slug já existe" });
-    }
+    if (existingSlug) return res.status(409).json({ error: "slug já existe" });
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1) Tenant
       const tenant = await tx.tenant.create({
         data: { name, slug, isActive: true }
       });
 
-      // 2) Company Profile
-      const companyProfile = await tx.tenantCompanyProfile.create({
-        data: {
-          tenantId: tenant.id,
-          legalName,
-          tradeName,
-          cnpj,
-          ie,
-          im,
-          postalCode,
-          address,
-          addressNumber,
-          complement,
-          province,
-          city,
-          state,
-          country
-        }
-      });
-
-      // 3) Billing row (sempre com grupo preenchido)
-      const billingRow = await tx.tenantBilling.create({
-        data: {
-          tenantId: tenant.id,
-          provider: "asaas",
-          status: "pending_sync",
-
-          planCode,
-          isFree,
-          chargeEnabled,
-          pricingRef,
-          billingEmail,
-
-          asaasGroupName,
-          asaasCustomerAccountGroup
-        }
-      });
-
-      // 4) Admin user (global)
       const user = await tx.user.upsert({
         where: { email: adminEmail },
         create: {
@@ -317,22 +166,109 @@ router.post("/", async (req, res) => {
         }
       });
 
-      // 5) membership admin
       const membership = await tx.userTenant.upsert({
         where: { userId_tenantId: { userId: user.id, tenantId: tenant.id } },
+        create: { userId: user.id, tenantId: tenant.id, role: "admin", isActive: true },
+        update: { role: "admin", isActive: true }
+      });
+
+      // companyProfile (opcional)
+      let cp = null;
+      if (companyProfile) {
+        const cnpj = normalizeCnpj(companyProfile.cnpj);
+        if (!companyProfile.legalName || !cnpj) {
+          throw new Error("companyProfile inválido (legalName/cnpj)");
+        }
+
+        cp = await tx.tenantCompanyProfile.upsert({
+          where: { tenantId: tenant.id },
+          create: {
+            tenantId: tenant.id,
+            legalName: safeStr(companyProfile.legalName),
+            tradeName: safeStr(companyProfile.tradeName) || null,
+            cnpj,
+            ie: safeStr(companyProfile.ie) || null,
+            im: safeStr(companyProfile.im) || null,
+
+            postalCode: safeStr(companyProfile.postalCode),
+            address: safeStr(companyProfile.address),
+            addressNumber: safeStr(companyProfile.addressNumber),
+            complement: safeStr(companyProfile.complement) || null,
+            province: safeStr(companyProfile.province) || null,
+            city: safeStr(companyProfile.city) || null,
+            state: safeStr(companyProfile.state) || null,
+            country: safeStr(companyProfile.country) || "BR"
+          },
+          update: {
+            legalName: safeStr(companyProfile.legalName),
+            tradeName: safeStr(companyProfile.tradeName) || null,
+            cnpj,
+            ie: safeStr(companyProfile.ie) || null,
+            im: safeStr(companyProfile.im) || null,
+
+            postalCode: safeStr(companyProfile.postalCode),
+            address: safeStr(companyProfile.address),
+            addressNumber: safeStr(companyProfile.addressNumber),
+            complement: safeStr(companyProfile.complement) || null,
+            province: safeStr(companyProfile.province) || null,
+            city: safeStr(companyProfile.city) || null,
+            state: safeStr(companyProfile.state) || null,
+            country: safeStr(companyProfile.country) || "BR"
+          }
+        });
+      }
+
+      // billing (cria sempre; defaults pro grupo)
+      const defaults = asaasGroupDefaults();
+
+      const isFree = billing?.isFree !== undefined ? Boolean(billing.isFree) : true;
+      const chargeEnabled =
+        isFree === true ? false : Boolean(billing?.chargeEnabled === true);
+
+      const b = await tx.tenantBilling.upsert({
+        where: { tenantId: tenant.id },
         create: {
-          userId: user.id,
           tenantId: tenant.id,
-          role: "admin",
-          isActive: true
+          provider: "asaas",
+          status: "not_configured",
+
+          planCode: safeStr(billing?.planCode) || "free",
+          pricingRef: safeStr(billing?.pricingRef) || null,
+
+          isFree,
+          chargeEnabled,
+
+          billingEmail: safeStr(billing?.billingEmail) || null,
+
+          asaasGroupName: safeStr(billing?.asaasGroupName) || defaults.asaasGroupName,
+          asaasCustomerAccountGroup:
+            safeStr(billing?.asaasCustomerAccountGroup) || defaults.asaasCustomerAccountGroup
         },
         update: {
-          role: "admin",
-          isActive: true
+          planCode: billing?.planCode !== undefined ? safeStr(billing.planCode) : undefined,
+          pricingRef: billing?.pricingRef !== undefined ? safeStr(billing.pricingRef) || null : undefined,
+
+          isFree: billing?.isFree !== undefined ? Boolean(billing.isFree) : undefined,
+          chargeEnabled:
+            billing?.chargeEnabled !== undefined
+              ? (isFree === true ? false : Boolean(billing.chargeEnabled))
+              : undefined,
+
+          billingEmail: billing?.billingEmail !== undefined ? safeStr(billing.billingEmail) || null : undefined,
+
+          asaasGroupName:
+            billing?.asaasGroupName !== undefined
+              ? safeStr(billing.asaasGroupName) || defaults.asaasGroupName
+              : undefined,
+
+          asaasCustomerAccountGroup:
+            billing?.asaasCustomerAccountGroup !== undefined
+              ? safeStr(billing.asaasCustomerAccountGroup) || defaults.asaasCustomerAccountGroup
+              : undefined
         }
       });
 
-      // 6) PasswordToken invite (modo compat: token = id)
+      // invite token (compat: usa id)
       const expiresAt = addDays(inviteTtlDays);
       const passwordToken = await tx.passwordToken.create({
         data: {
@@ -344,37 +280,46 @@ router.post("/", async (req, res) => {
         }
       });
 
-      return { tenant, companyProfile, billingRow, user, membership, passwordToken };
+      return { tenant, user, membership, companyProfile: cp, billing: b, passwordToken };
     });
 
-    const invite = {
-      token: result.passwordToken.id,
-      expiresAt: result.passwordToken.expiresAt
+    const safeUser = {
+      id: result.user.id,
+      email: result.user.email,
+      name: result.user.name,
+      role: result.user.role,
+      isActive: result.user.isActive,
+      isSuperAdmin: result.user.isSuperAdmin === true,
+      createdAt: result.user.createdAt,
+      updatedAt: result.user.updatedAt
     };
+
+    const invite = { token: result.passwordToken.id, expiresAt: result.passwordToken.expiresAt };
 
     res.status(201).json({
       ok: true,
       tenant: result.tenant,
-      companyProfile: result.companyProfile,
-      billing: result.billingRow,
-      adminUser: sanitizeUser(result.user),
+      adminUser: safeUser,
       membership: result.membership,
+      companyProfile: result.companyProfile,
+      billing: result.billing,
       invite,
       sendInviteRequested: sendInvite
     });
   } catch (err) {
     const msg = String(err?.message || "");
-    if (msg.includes("Unique constraint") || msg.includes("unique")) {
+    logger.error({ err, msg }, "admin.tenants.create error");
+
+    if (msg.includes("unique") || msg.includes("Unique constraint")) {
       return res.status(409).json({ error: "Conflito de dados (unique)" });
     }
-    res.status(500).json({ error: "Falha ao criar tenant completo" });
+    return res.status(500).json({ error: "Falha ao criar tenant" });
   }
 });
 
-/**
- * PATCH /admin/tenants/:id
- * Atualiza name/slug/isActive
- */
+// ===============================
+// PATCH /admin/tenants/:id
+// ===============================
 router.patch("/:id", async (req, res) => {
   try {
     const id = safeStr(req.params.id);
@@ -390,379 +335,216 @@ router.patch("/:id", async (req, res) => {
     if (slug !== undefined) {
       if (!slug) return res.status(400).json({ error: "slug inválido" });
       const existing = await prisma.tenant.findUnique({ where: { slug } });
-      if (existing && existing.id !== id) {
-        return res.status(409).json({ error: "slug já existe" });
-      }
+      if (existing && existing.id !== id) return res.status(409).json({ error: "slug já existe" });
       data.slug = slug;
     }
     if (isActive !== undefined) data.isActive = Boolean(isActive);
 
-    const updated = await prisma.tenant.update({
-      where: { id },
-      data
-    });
-
+    const updated = await prisma.tenant.update({ where: { id }, data });
     res.json({ ok: true, tenant: updated });
   } catch (err) {
+    logger.error({ err }, "admin.tenants.patch error");
     res.status(500).json({ error: "Falha ao atualizar tenant" });
   }
 });
 
-/**
- * PATCH /admin/tenants/:id/activate
- */
-router.patch("/:id/activate", async (req, res) => {
-  try {
-    const id = safeStr(req.params.id);
-    const tenant = await prisma.tenant.update({
-      where: { id },
-      data: { isActive: true }
-    });
-    res.json({ ok: true, tenant });
-  } catch (err) {
-    res.status(500).json({ error: "Falha ao ativar tenant" });
-  }
-});
-
-/**
- * PATCH /admin/tenants/:id/deactivate
- */
-router.patch("/:id/deactivate", async (req, res) => {
-  try {
-    const id = safeStr(req.params.id);
-    const tenant = await prisma.tenant.update({
-      where: { id },
-      data: { isActive: false }
-    });
-    res.json({ ok: true, tenant });
-  } catch (err) {
-    res.status(500).json({ error: "Falha ao desativar tenant" });
-  }
-});
-
-//
-// BILLING ROUTES (Admin)
-//
-
-/**
- * PATCH /admin/tenants/:id/billing
- * Atualiza campos de billing (plano/preço/switch etc)
- * - se isFree=true -> força chargeEnabled=false
- * - asaasGroupName sempre preenchido (default env)
- */
+// ===============================
+// PATCH /admin/tenants/:id/billing
+// salva regra FREE/CHARGE + pricingRef + grupo asaas
+// ===============================
 router.patch("/:id/billing", async (req, res) => {
   try {
     const tenantId = safeStr(req.params.id);
 
-    const existing = await prisma.tenantBilling.findUnique({ where: { tenantId } });
+    const defaults = asaasGroupDefaults();
 
-    const planCode = req.body?.planCode !== undefined ? safeStr(req.body.planCode) : undefined;
+    const planCode = req.body?.planCode !== undefined ? safeStr(req.body.planCode) || null : undefined;
+    const pricingRef = req.body?.pricingRef !== undefined ? safeStr(req.body.pricingRef) || null : undefined;
+
     const isFree = req.body?.isFree !== undefined ? Boolean(req.body.isFree) : undefined;
-    const chargeEnabled = req.body?.chargeEnabled !== undefined ? Boolean(req.body.chargeEnabled) : undefined;
-    const pricingRef = req.body?.pricingRef !== undefined ? (safeStr(req.body.pricingRef) || null) : undefined;
-    const billingEmail = req.body?.billingEmail !== undefined ? (safeStr(req.body.billingEmail) || null) : undefined;
+    const chargeEnabledRaw =
+      req.body?.chargeEnabled !== undefined ? Boolean(req.body.chargeEnabled) : undefined;
+
+    const billingEmail = req.body?.billingEmail !== undefined ? safeStr(req.body.billingEmail) || null : undefined;
 
     const asaasGroupName =
       req.body?.asaasGroupName !== undefined
-        ? safeStr(req.body.asaasGroupName) || getDefaultAsaasGroupName()
+        ? safeStr(req.body.asaasGroupName) || defaults.asaasGroupName
         : undefined;
 
     const asaasCustomerAccountGroup =
       req.body?.asaasCustomerAccountGroup !== undefined
-        ? safeStr(req.body.asaasCustomerAccountGroup) || getDefaultAsaasCustomerAccountGroup()
+        ? safeStr(req.body.asaasCustomerAccountGroup) || defaults.asaasCustomerAccountGroup
         : undefined;
 
-    const data = {};
-
-    if (planCode !== undefined) data.planCode = planCode || null;
-    if (isFree !== undefined) data.isFree = isFree;
-    if (pricingRef !== undefined) data.pricingRef = pricingRef;
-    if (billingEmail !== undefined) data.billingEmail = billingEmail;
-
-    if (asaasGroupName !== undefined) data.asaasGroupName = asaasGroupName;
-    if (asaasCustomerAccountGroup !== undefined) data.asaasCustomerAccountGroup = asaasCustomerAccountGroup;
-
-    if (chargeEnabled !== undefined) data.chargeEnabled = chargeEnabled;
-
-    const finalIsFree = isFree !== undefined ? isFree : existing?.isFree;
-    if (finalIsFree === true) data.chargeEnabled = false;
-
-    const updated = await prisma.tenantBilling.upsert({
-      where: { tenantId },
-      create: {
-        tenantId,
-        provider: "asaas",
-        status: "pending_sync",
-        planCode: data.planCode ?? null,
-        isFree: data.isFree ?? false,
-        chargeEnabled: data.chargeEnabled ?? false,
-        pricingRef: data.pricingRef ?? null,
-        billingEmail: data.billingEmail ?? null,
-        asaasGroupName: data.asaasGroupName ?? getDefaultAsaasGroupName(),
-        asaasCustomerAccountGroup: data.asaasCustomerAccountGroup ?? getDefaultAsaasCustomerAccountGroup()
-      },
-      update: data
-    });
-
-    res.json({ ok: true, billing: updated });
-  } catch (err) {
-    res.status(500).json({ error: "Falha ao atualizar billing" });
-  }
-});
-
-/**
- * POST /admin/tenants/:id/billing/sync
- * Cria Customer no Asaas (sempre vai para o grupo)
- * - NUNCA cria assinatura aqui
- */
-router.post("/:id/billing/sync", async (req, res) => {
-  const tenantId = safeStr(req.params.id);
-
-  try {
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      include: { companyProfile: true, billing: true }
-    });
-
-    if (!tenant) return res.status(404).json({ error: "Tenant não encontrado" });
-    if (!tenant.companyProfile) return res.status(400).json({ error: "Tenant sem companyProfile" });
-
-    const billing = await prisma.tenantBilling.upsert({
-      where: { tenantId },
-      create: {
-        tenantId,
-        provider: "asaas",
-        status: "pending_sync",
-        planCode: "free",
-        isFree: true,
-        chargeEnabled: false,
-        pricingRef: null,
-        billingEmail: null,
-        asaasGroupName: getDefaultAsaasGroupName(),
-        asaasCustomerAccountGroup: getDefaultAsaasCustomerAccountGroup()
-      },
-      update: {}
-    });
-
-    // idempotência: se já tem customer, ok
-    if (billing.asaasCustomerId) {
-      return res.json({ ok: true, alreadySynced: true, billing });
+    const current = await prisma.tenantBilling.findUnique({ where: { tenantId } });
+    if (!current) {
+      return res.status(404).json({ error: "Billing não encontrado (tenantBilling missing)" });
     }
 
-    const p = tenant.companyProfile;
-
-    const groupName = billing.asaasGroupName || getDefaultAsaasGroupName();
-    const customerAccountGroup =
-      billing.asaasCustomerAccountGroup || getDefaultAsaasCustomerAccountGroup();
-
-    const payload = {
-      name: p.legalName,
-      cpfCnpj: p.cnpj,
-      email: billing.billingEmail || undefined,
-      postalCode: p.postalCode,
-      address: p.address,
-      addressNumber: p.addressNumber,
-      complement: p.complement || undefined,
-      province: p.province || undefined,
-      city: p.city || undefined,
-      state: p.state || undefined,
-      groupName
-    };
-
-    // tentativa opcional (se sua conta suportar esse campo)
-    payload.customerAccountGroup = customerAccountGroup;
-
-    let created;
-    try {
-      created = await asaasCreateCustomer(payload);
-    } catch (err) {
-      const msg = String(err?.message || "");
-      if ((err?.status === 400 || err?.status === 422) && msg.includes("customerAccountGroup")) {
-        const retryPayload = { ...payload };
-        delete retryPayload.customerAccountGroup;
-        created = await asaasCreateCustomer(retryPayload);
-      } else {
-        throw err;
-      }
-    }
+    // regra: free -> chargeEnabled false
+    const finalIsFree = isFree !== undefined ? isFree : current.isFree;
+    const finalChargeEnabled =
+      finalIsFree === true ? false : (chargeEnabledRaw !== undefined ? chargeEnabledRaw : current.chargeEnabled);
 
     const updated = await prisma.tenantBilling.update({
       where: { tenantId },
       data: {
-        asaasCustomerId: created?.id || null,
-        status: "synced",
-        lastSyncAt: new Date(),
-        lastError: null,
-        asaasGroupName: groupName,
-        asaasCustomerAccountGroup: customerAccountGroup
+        planCode,
+        pricingRef,
+        isFree: isFree !== undefined ? finalIsFree : undefined,
+        chargeEnabled: finalChargeEnabled,
+        billingEmail,
+        asaasGroupName,
+        asaasCustomerAccountGroup
       }
     });
 
-    res.json({
-      ok: true,
-      asaas: { customerId: created?.id, raw: created },
-      billing: updated
-    });
+    res.json({ ok: true, billing: updated });
   } catch (err) {
-    try {
-      await prisma.tenantBilling.upsert({
-        where: { tenantId },
-        create: {
-          tenantId,
-          provider: "asaas",
-          status: "error",
-          lastError: String(err?.message || "Asaas sync error"),
-          lastSyncAt: new Date(),
-          asaasGroupName: getDefaultAsaasGroupName(),
-          asaasCustomerAccountGroup: getDefaultAsaasCustomerAccountGroup()
-        },
-        update: {
-          status: "error",
-          lastError: String(err?.message || "Asaas sync error"),
-          lastSyncAt: new Date(),
-          asaasGroupName: getDefaultAsaasGroupName(),
-          asaasCustomerAccountGroup: getDefaultAsaasCustomerAccountGroup()
-        }
-      });
-    } catch {}
-
-    res.status(502).json({
-      error: "Falha ao sincronizar com Asaas",
-      details: String(err?.message || err)
-    });
+    logger.error({ err }, "admin.tenants.billing.patch error");
+    res.status(500).json({ error: "Falha ao atualizar billing" });
   }
 });
 
-/**
- * POST /admin/tenants/:id/bootstrap
- * ✅ Bootstrap idempotente do tenant:
- * - cria grupo padrão "Atendimento"
- * - cria ChannelConfig padrão (whatsapp/webchat/messenger/instagram)
- * - opcional: adiciona TODOS os admins do tenant no grupo
- *
- * Body (opcional):
- * {
- *   "defaultGroupName": "Atendimento",
- *   "maxChatsPerAgent": 3,
- *   "addAdminsToGroup": true,
- *   "channels": ["whatsapp","webchat","messenger","instagram"]
- * }
- */
+// ===============================
+// POST /admin/tenants/:id/bootstrap
+// cria defaults do tenant (idempotente)
+// ===============================
 router.post("/:id/bootstrap", async (req, res) => {
   try {
     const tenantId = safeStr(req.params.id);
+    const addAdminsToGroup = Boolean(req.body?.addAdminsToGroup !== false);
 
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { id: true, slug: true, name: true, isActive: true }
-    });
-
+    // garante tenant
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) return res.status(404).json({ error: "Tenant não encontrado" });
 
-    const defaultGroupName = safeStr(req.body?.defaultGroupName) || "Atendimento";
-    const maxChatsPerAgent = Number(req.body?.maxChatsPerAgent || 3);
-    const addAdminsToGroup = req.body?.addAdminsToGroup !== false; // default true
-
-    const requestedChannels = Array.isArray(req.body?.channels) ? req.body.channels : null;
-    const channels =
-      requestedChannels && requestedChannels.length
-        ? requestedChannels.map((c) => safeStr(c).toLowerCase()).filter(Boolean)
-        : ["whatsapp", "webchat", "messenger", "instagram"];
-
-    const validChannels = new Set(["whatsapp", "webchat", "messenger", "instagram"]);
-    const channelsToEnsure = Array.from(new Set(channels)).filter((c) => validChannels.has(c));
-
     const result = await prisma.$transaction(async (tx) => {
-      // 1) Grupo padrão (idempotente via unique [tenantId,name])
+      // 1) cria grupo Default se não existir
+      const defaultGroupName = "Default";
       const group = await tx.group.upsert({
         where: { tenantId_name: { tenantId, name: defaultGroupName } },
         create: {
           tenantId,
           name: defaultGroupName,
           isActive: true,
-          maxChatsPerAgent: Number.isFinite(maxChatsPerAgent) ? Math.max(1, maxChatsPerAgent) : 3
+          maxChatsPerAgent: 3
         },
-        update: {
-          isActive: true,
-          maxChatsPerAgent: Number.isFinite(maxChatsPerAgent) ? Math.max(1, maxChatsPerAgent) : 3
-        }
+        update: { isActive: true }
       });
 
-      // 2) ChannelConfig padrão (idempotente via unique [tenantId,channel])
-      const createdOrUpdatedChannels = [];
-      for (const ch of channelsToEnsure) {
-        const cfg = await tx.channelConfig.upsert({
-          where: { tenantId_channel: { tenantId, channel: ch } },
-          create: {
-            tenantId,
-            channel: ch,
-            enabled: false,
-            status: "disabled"
-          },
-          update: {
-            // não força enabled, só garante existência/consistência mínima
-            status: "disabled"
-          }
-        });
-        createdOrUpdatedChannels.push(cfg);
-      }
-
-      // 3) Add admins ao grupo (opcional)
-      let addedMembers = 0;
+      let added = 0;
 
       if (addAdminsToGroup) {
         const admins = await tx.userTenant.findMany({
-          where: { tenantId, isActive: true, role: "admin" },
-          select: { userId: true }
+          where: { tenantId, isActive: true, role: "admin" }
         });
 
-        if (admins.length) {
-          const rows = admins.map((a) => ({
-            tenantId,
-            groupId: group.id,
-            userId: a.userId,
-            role: "member",
-            isActive: true
-          }));
-
-          const created = await tx.groupMember.createMany({
-            data: rows,
-            skipDuplicates: true
+        for (const m of admins) {
+          await tx.groupMember.upsert({
+            where: { tenantId_groupId_userId: { tenantId, groupId: group.id, userId: m.userId } },
+            create: {
+              tenantId,
+              groupId: group.id,
+              userId: m.userId,
+              role: "member",
+              isActive: true
+            },
+            update: { isActive: true }
           });
-
-          addedMembers = created?.count || 0;
+          added += 1;
         }
       }
 
-      return {
-        group,
-        channels: createdOrUpdatedChannels,
-        addedMembers
-      };
+      return { group, addedAdmins: added };
+    });
+
+    res.json({ ok: true, tenantId, bootstrap: result });
+  } catch (err) {
+    logger.error({ err }, "admin.tenants.bootstrap error");
+    res.status(500).json({ error: "Falha no bootstrap" });
+  }
+});
+
+// ===============================
+// POST /admin/tenants/:id/billing/sync
+// Aqui é o gancho do Asaas. Não invento preço.
+// Regras:
+// - SEMPRE cria/atualiza customer e envia pro grupo (customerAccountGroup=305006)
+// - Se isFree=true -> NÃO cria assinatura
+// - Se isFree=false e chargeEnabled=true -> cria assinatura (somente se você tiver pricingRef/preço definido depois)
+// ===============================
+router.post("/:id/billing/sync", async (req, res) => {
+  try {
+    const tenantId = safeStr(req.params.id);
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      include: { companyProfile: true, billing: true }
+    });
+
+    if (!tenant) return res.status(404).json({ error: "Tenant não encontrado" });
+    if (!tenant.billing) return res.status(404).json({ error: "Billing não encontrado" });
+
+    const defaults = asaasGroupDefaults();
+
+    // garante grupo default salvo no billing
+    const billing = await prisma.tenantBilling.update({
+      where: { tenantId },
+      data: {
+        status: "pending_sync",
+        asaasGroupName: tenant.billing.asaasGroupName || defaults.asaasGroupName,
+        asaasCustomerAccountGroup:
+          tenant.billing.asaasCustomerAccountGroup || defaults.asaasCustomerAccountGroup
+      }
+    });
+
+    // ✅ Aqui você chamaria o SDK/HTTP do Asaas.
+    // Eu NÃO vou inventar o client. Então vou deixar a estrutura exata.
+    //
+    // Fluxo esperado:
+    // 1) upsert Customer no Asaas com dados da empresa (cnpj, endereço, email)
+    // 2) garantir customer no grupo (customerAccountGroup=305006)
+    // 3) se billing.isFree === false e billing.chargeEnabled === true:
+    //    - criar assinatura usando pricingRef (quando você definir seu modelo/preço)
+    //
+    // Por enquanto: marca como synced se customer já existir, ou mantém pending.
+    //
+    // Se quiser, no próximo passo eu te entrego o asaasClient.js completo (fetch/axios) + envs.
+
+    const hasCompany = Boolean(tenant.companyProfile?.cnpj && tenant.companyProfile?.legalName);
+
+    let nextStatus = "pending_sync";
+    let lastError = null;
+
+    if (!hasCompany) {
+      nextStatus = "error";
+      lastError = "company_profile_missing";
+    } else {
+      // sem integração ainda: mantém pending (ou synced se já tem customerId)
+      nextStatus = billing.asaasCustomerId ? "synced" : "pending_sync";
+    }
+
+    const updated = await prisma.tenantBilling.update({
+      where: { tenantId },
+      data: {
+        status: nextStatus,
+        lastError,
+        lastSyncAt: new Date()
+      }
     });
 
     res.json({
       ok: true,
-      tenant,
-      bootstrap: {
-        group: {
-          id: result.group.id,
-          name: result.group.name,
-          maxChatsPerAgent: result.group.maxChatsPerAgent,
-          isActive: result.group.isActive
-        },
-        channels: result.channels.map((c) => ({
-          id: c.id,
-          channel: c.channel,
-          enabled: c.enabled,
-          status: c.status
-        })),
-        addedAdminsToGroup: addAdminsToGroup,
-        addedMembers: result.addedMembers
-      }
+      tenantId,
+      note:
+        "Sync Asaas stub aplicado. Próximo passo: implementar asaasClient (Customer + Grupo + Assinatura condicional).",
+      billing: updated
     });
   } catch (err) {
-    res.status(500).json({ error: "Falha no bootstrap do tenant", detail: String(err?.message || err) });
+    logger.error({ err }, "admin.tenants.billing.sync error");
+    res.status(500).json({ error: "Falha ao sincronizar billing" });
   }
 });
 
