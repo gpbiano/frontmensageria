@@ -12,6 +12,9 @@ import { resolveTenant } from "./middleware/resolveTenant.js";
 import { requireTenant } from "./middleware/requireTenant.js";
 import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
 
+import adminRouter from "./routes/admin/index.js";
+import { requireSuperAdmin } from "./middleware/requireSuperAdmin.js";
+
 // ===============================
 // PATHS + ENV LOAD
 // ===============================
@@ -284,6 +287,8 @@ app.get("/health", async (_req, res) => {
 // Auth
 app.use("/", authRouter);
 app.use("/auth", passwordRouter);
+
+app.use("/admin", requireAuth, requireSuperAdmin, adminRouter);
 
 // Webchat público
 app.use("/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
