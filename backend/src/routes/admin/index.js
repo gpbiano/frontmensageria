@@ -1,17 +1,27 @@
-// backend/src/routes/admin/index.js
 import express from "express";
-import tenantsAdminRouter from "./adminTenantsRouter.js";
+
+import adminTenantsRouter from "./adminTenantsRouter.js";
 import usersAdminRouter from "./usersAdminRouter.js";
 import membershipsAdminRouter from "./membershipsAdminRouter.js";
+import bootstrapAdminRouter from "./bootstrapAdminRouter.js";
 
 const router = express.Router();
 
-router.get("/health", (req, res) => {
-  res.json({ ok: true, module: "admin" });
+// health check
+router.get("/health", (_req, res) => {
+  res.json({ ok: true, scope: "admin" });
 });
 
-router.use("/tenants", admimTenantsRouter);
+// tenants (empresas)
+router.use("/tenants", adminTenantsRouter);
+
+// users
 router.use("/users", usersAdminRouter);
-router.use("/tenants/:tenantId/members", membershipsAdminRouter);
+
+// memberships
+router.use("/memberships", membershipsAdminRouter);
+
+// bootstrap
+router.use("/bootstrap", bootstrapAdminRouter);
 
 export default router;
