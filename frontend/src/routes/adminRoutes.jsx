@@ -11,11 +11,12 @@ import TenantDetailPage from "../pages/admin/TenantDetailPage.jsx";
 export default function AdminRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<AdminPage />}>
+      {/* ✅ TUDO ABSOLUTO EM /admin */}
+      <Route path="/admin" element={<AdminPage />}>
         {/* default */}
-        <Route index element={<Navigate to="cadastros" replace />} />
+        <Route index element={<Navigate to="/admin/cadastros" replace />} />
 
-        {/* placeholders */}
+        {/* páginas */}
         <Route path="dashboard" element={<div style={{ padding: 10 }}>Em breve</div>} />
         <Route path="financeiro" element={<div style={{ padding: 10 }}>Em breve</div>} />
         <Route path="monitor" element={<div style={{ padding: 10 }}>Em breve</div>} />
@@ -26,13 +27,16 @@ export default function AdminRoutes() {
         <Route path="cadastros/:id" element={<TenantDetailPage />} />
 
         {/* compat antigo */}
-        <Route path="tenants" element={<Navigate to="../cadastros" replace />} />
-        <Route path="tenants/new" element={<Navigate to="../cadastros/new" replace />} />
-        <Route path="tenants/:id" element={<Navigate to="../cadastros/:id" replace />} />
+        <Route path="tenants" element={<Navigate to="/admin/cadastros" replace />} />
+        <Route path="tenants/new" element={<Navigate to="/admin/cadastros/new" replace />} />
+        <Route path="tenants/:id" element={<Navigate to="/admin/cadastros/:id" replace />} />
 
         {/* fallback */}
-        <Route path="*" element={<Navigate to="cadastros" replace />} />
+        <Route path="*" element={<Navigate to="/admin/cadastros" replace />} />
       </Route>
+
+      {/* ✅ Se alguém cair em /admin/qualquercoisa fora do bloco acima */}
+      <Route path="/admin/*" element={<Navigate to="/admin/cadastros" replace />} />
     </Routes>
   );
 }
