@@ -57,17 +57,11 @@ function sanitizeUser(u) {
 }
 
 function getDefaultAsaasGroupName() {
-  return (
-    String(process.env.ASAAS_GROUP_NAME || "").trim() ||
-    "ClienteOnline - GP Labs"
-  );
+  return String(process.env.ASAAS_GROUP_NAME || "").trim() || "ClienteOnline - GP Labs";
 }
 
 function getDefaultAsaasCustomerAccountGroup() {
-  return (
-    String(process.env.ASAAS_CUSTOMER_ACCOUNT_GROUP || "").trim() ||
-    "305006"
-  );
+  return String(process.env.ASAAS_CUSTOMER_ACCOUNT_GROUP || "").trim() || "305006";
 }
 
 /**
@@ -200,39 +194,6 @@ router.get("/:id", async (req, res) => {
 /**
  * POST /admin/tenants
  * ✅ Cria Tenant COMPLETO (Admin + CompanyProfile + Billing)
- *
- * Body:
- * {
- *   "name": "Empresa X",
- *   "slug": "empresa-x" (opcional),
- *   "adminEmail": "admin@empresa.com",
- *   "adminName": "Admin Empresa" (opcional),
- *
- *   "companyProfile": {
- *     "legalName": "...", "tradeName": "...", "cnpj": "...",
- *     "ie": "...", "im": "...",
- *     "postalCode": "...", "address": "...", "addressNumber": "...",
- *     "complement": "...", "province": "...", "city": "...", "state": "...", "country": "BR"
- *   },
- *
- *   "billing": {
- *     "planCode": "free|pro|...",
- *     "isFree": true|false,
- *     "chargeEnabled": true|false,
- *     "pricingRef": "R$199/mês|ASAAS_PLAN_X|...",
- *     "billingEmail": "financeiro@...",
- *     "asaasGroupName": "ClienteOnline - GP Labs",
- *     "asaasCustomerAccountGroup": "305006"
- *   },
- *
- *   "sendInvite": true (opcional),
- *   "inviteTtlDays": 7 (opcional)
- * }
- *
- * Retorna:
- * - tenant + companyProfile + billing
- * - adminUser (sem passwordHash)
- * - invite: { token, expiresAt } (modo compat: token = passwordToken.id)
  */
 router.post("/", async (req, res) => {
   try {
@@ -272,9 +233,7 @@ router.post("/", async (req, res) => {
     const billingEmail = safeStr(b.billingEmail || adminEmail).toLowerCase() || null;
 
     // ✅ Sempre mandar pro grupo (defaults por env)
-    const asaasGroupName =
-      safeStr(b.asaasGroupName) || getDefaultAsaasGroupName();
-
+    const asaasGroupName = safeStr(b.asaasGroupName) || getDefaultAsaasGroupName();
     const asaasCustomerAccountGroup =
       safeStr(b.asaasCustomerAccountGroup) || getDefaultAsaasCustomerAccountGroup();
 
@@ -488,8 +447,8 @@ router.patch("/:id/deactivate", async (req, res) => {
 /**
  * PATCH /admin/tenants/:id/billing
  * Atualiza campos de billing (plano/preço/switch etc)
- * - mantém regra: se isFree=true -> força chargeEnabled=false
- * - mantém regra: asaasGroupName sempre preenchido (default env)
+ * - se isFree=true -> força chargeEnabled=false
+ * - asaasGroupName sempre preenchido (default env)
  */
 router.patch("/:id/billing", async (req, res) => {
   try {
@@ -505,12 +464,12 @@ router.patch("/:id/billing", async (req, res) => {
 
     const asaasGroupName =
       req.body?.asaasGroupName !== undefined
-        ? (safeStr(req.body.asaasGroupName) || getDefaultAsaasGroupName())
+        ? safeStr(req.body.asaasGroupName) || getDefaultAsaasGroupName()
         : undefined;
 
     const asaasCustomerAccountGroup =
       req.body?.asaasCustomerAccountGroup !== undefined
-        ? (safeStr(req.body.asaasCustomerAccountGroup) || getDefaultAsaasCustomerAccountGroup())
+        ? safeStr(req.body.asaasCustomerAccountGroup) || getDefaultAsaasCustomerAccountGroup()
         : undefined;
 
     const data = {};
@@ -523,10 +482,8 @@ router.patch("/:id/billing", async (req, res) => {
     if (asaasGroupName !== undefined) data.asaasGroupName = asaasGroupName;
     if (asaasCustomerAccountGroup !== undefined) data.asaasCustomerAccountGroup = asaasCustomerAccountGroup;
 
-    // chargeEnabled depende de isFree (prioridade total)
     if (chargeEnabled !== undefined) data.chargeEnabled = chargeEnabled;
 
-    // Se isFree=true, força chargeEnabled=false
     const finalIsFree = isFree !== undefined ? isFree : existing?.isFree;
     if (finalIsFree === true) data.chargeEnabled = false;
 
@@ -556,7 +513,7 @@ router.patch("/:id/billing", async (req, res) => {
 /**
  * POST /admin/tenants/:id/billing/sync
  * Cria Customer no Asaas (sempre vai para o grupo)
- * - NUNCA cria assinatura aqui (independente de free/pago)
+ * - NUNCA cria assinatura aqui
  */
 router.post("/:id/billing/sync", async (req, res) => {
   const tenantId = safeStr(req.params.id);
@@ -595,7 +552,8 @@ router.post("/:id/billing/sync", async (req, res) => {
     const p = tenant.companyProfile;
 
     const groupName = billing.asaasGroupName || getDefaultAsaasGroupName();
-    const customerAccountGroup = billing.asaasCustomerAccountGroup || getDefaultAsaasCustomerAccountGroup();
+    const customerAccountGroup =
+      billing.asaasCustomerAccountGroup || getDefaultAsaasCustomerAccountGroup();
 
     const payload = {
       name: p.legalName,
@@ -608,8 +566,6 @@ router.post("/:id/billing/sync", async (req, res) => {
       province: p.province || undefined,
       city: p.city || undefined,
       state: p.state || undefined,
-
-      // ✅ sempre no grupo
       groupName
     };
 
@@ -621,7 +577,6 @@ router.post("/:id/billing/sync", async (req, res) => {
       created = await asaasCreateCustomer(payload);
     } catch (err) {
       const msg = String(err?.message || "");
-      // fallback: remove campo não reconhecido
       if ((err?.status === 400 || err?.status === 422) && msg.includes("customerAccountGroup")) {
         const retryPayload = { ...payload };
         delete retryPayload.customerAccountGroup;
@@ -638,7 +593,6 @@ router.post("/:id/billing/sync", async (req, res) => {
         status: "synced",
         lastSyncAt: new Date(),
         lastError: null,
-        // garante persistência do grupo
         asaasGroupName: groupName,
         asaasCustomerAccountGroup: customerAccountGroup
       }
@@ -650,7 +604,6 @@ router.post("/:id/billing/sync", async (req, res) => {
       billing: updated
     });
   } catch (err) {
-    // registra erro no billing sem quebrar a plataforma
     try {
       await prisma.tenantBilling.upsert({
         where: { tenantId },
@@ -677,6 +630,139 @@ router.post("/:id/billing/sync", async (req, res) => {
       error: "Falha ao sincronizar com Asaas",
       details: String(err?.message || err)
     });
+  }
+});
+
+/**
+ * POST /admin/tenants/:id/bootstrap
+ * ✅ Bootstrap idempotente do tenant:
+ * - cria grupo padrão "Atendimento"
+ * - cria ChannelConfig padrão (whatsapp/webchat/messenger/instagram)
+ * - opcional: adiciona TODOS os admins do tenant no grupo
+ *
+ * Body (opcional):
+ * {
+ *   "defaultGroupName": "Atendimento",
+ *   "maxChatsPerAgent": 3,
+ *   "addAdminsToGroup": true,
+ *   "channels": ["whatsapp","webchat","messenger","instagram"]
+ * }
+ */
+router.post("/:id/bootstrap", async (req, res) => {
+  try {
+    const tenantId = safeStr(req.params.id);
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, slug: true, name: true, isActive: true }
+    });
+
+    if (!tenant) return res.status(404).json({ error: "Tenant não encontrado" });
+
+    const defaultGroupName = safeStr(req.body?.defaultGroupName) || "Atendimento";
+    const maxChatsPerAgent = Number(req.body?.maxChatsPerAgent || 3);
+    const addAdminsToGroup = req.body?.addAdminsToGroup !== false; // default true
+
+    const requestedChannels = Array.isArray(req.body?.channels) ? req.body.channels : null;
+    const channels =
+      requestedChannels && requestedChannels.length
+        ? requestedChannels.map((c) => safeStr(c).toLowerCase()).filter(Boolean)
+        : ["whatsapp", "webchat", "messenger", "instagram"];
+
+    const validChannels = new Set(["whatsapp", "webchat", "messenger", "instagram"]);
+    const channelsToEnsure = Array.from(new Set(channels)).filter((c) => validChannels.has(c));
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 1) Grupo padrão (idempotente via unique [tenantId,name])
+      const group = await tx.group.upsert({
+        where: { tenantId_name: { tenantId, name: defaultGroupName } },
+        create: {
+          tenantId,
+          name: defaultGroupName,
+          isActive: true,
+          maxChatsPerAgent: Number.isFinite(maxChatsPerAgent) ? Math.max(1, maxChatsPerAgent) : 3
+        },
+        update: {
+          isActive: true,
+          maxChatsPerAgent: Number.isFinite(maxChatsPerAgent) ? Math.max(1, maxChatsPerAgent) : 3
+        }
+      });
+
+      // 2) ChannelConfig padrão (idempotente via unique [tenantId,channel])
+      const createdOrUpdatedChannels = [];
+      for (const ch of channelsToEnsure) {
+        const cfg = await tx.channelConfig.upsert({
+          where: { tenantId_channel: { tenantId, channel: ch } },
+          create: {
+            tenantId,
+            channel: ch,
+            enabled: false,
+            status: "disabled"
+          },
+          update: {
+            // não força enabled, só garante existência/consistência mínima
+            status: "disabled"
+          }
+        });
+        createdOrUpdatedChannels.push(cfg);
+      }
+
+      // 3) Add admins ao grupo (opcional)
+      let addedMembers = 0;
+
+      if (addAdminsToGroup) {
+        const admins = await tx.userTenant.findMany({
+          where: { tenantId, isActive: true, role: "admin" },
+          select: { userId: true }
+        });
+
+        if (admins.length) {
+          const rows = admins.map((a) => ({
+            tenantId,
+            groupId: group.id,
+            userId: a.userId,
+            role: "member",
+            isActive: true
+          }));
+
+          const created = await tx.groupMember.createMany({
+            data: rows,
+            skipDuplicates: true
+          });
+
+          addedMembers = created?.count || 0;
+        }
+      }
+
+      return {
+        group,
+        channels: createdOrUpdatedChannels,
+        addedMembers
+      };
+    });
+
+    res.json({
+      ok: true,
+      tenant,
+      bootstrap: {
+        group: {
+          id: result.group.id,
+          name: result.group.name,
+          maxChatsPerAgent: result.group.maxChatsPerAgent,
+          isActive: result.group.isActive
+        },
+        channels: result.channels.map((c) => ({
+          id: c.id,
+          channel: c.channel,
+          enabled: c.enabled,
+          status: c.status
+        })),
+        addedAdminsToGroup: addAdminsToGroup,
+        addedMembers: result.addedMembers
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Falha no bootstrap do tenant", detail: String(err?.message || err) });
   }
 });
 
