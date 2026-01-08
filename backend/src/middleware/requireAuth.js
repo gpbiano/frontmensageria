@@ -25,12 +25,16 @@ export function requireAuth(req, res, next) {
     const decoded = jwt.verify(token, getJwtSecret());
     if (!decoded?.id) return res.status(401).json({ error: "Token inválido." });
 
+    // ✅ mantenho compat + adiciono isSuperAdmin quando existir no token
     req.user = {
       id: String(decoded.id),
       email: decoded.email ? String(decoded.email) : null,
       role: decoded.role ? String(decoded.role) : null,
       tenantId: decoded.tenantId ? String(decoded.tenantId) : null,
-      tenantSlug: decoded.tenantSlug ? String(decoded.tenantSlug) : null
+      tenantSlug: decoded.tenantSlug ? String(decoded.tenantSlug) : null,
+
+      // opcional: só vem se você colocar no JWT no login
+      isSuperAdmin: decoded.isSuperAdmin === true
     };
 
     return next();
@@ -110,4 +114,46 @@ export function requireRole(...allowed) {
 
     return next();
   };
+}
+
+/**
+ * ✅ requireSuperAdmin
+ * Protege rotas /admin/*
+ *
+ * Importante:
+ * - Se o login ainda NÃO inclui isSuperAdmin no JWT,
+ *   este middleware faz fallback no banco (User.isSuperAdmin).
+ * - Se você já coloca isSuperAdmin no JWT, ele usa o valor do token
+ *   e não precisa bater no banco.
+ */
+export async function requireSuperAdmin(req, res, next) {
+  try {
+    const userId = String(req.user?.id || "").trim();
+    if (!userId) return res.status(401).json({ error: "Não autenticado." });
+
+    // 1) rápido: veio no token
+    if (req.user?.isSuperAdmin === true) return next();
+
+    // 2) fallback: consulta no banco (seguro)
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, isSuperAdmin: true, isActive: true }
+    });
+
+    if (!user || user.isActive === false) {
+      return res.status(401).json({ error: "Não autenticado." });
+    }
+
+    if (user.isSuperAdmin !== true) {
+      return res.status(403).json({ error: "Acesso restrito (Super Admin)" });
+    }
+
+    // opcional: cache no req.user para a request atual
+    req.user.isSuperAdmin = true;
+
+    return next();
+  } catch (err) {
+    logger.error({ err }, "❌ requireSuperAdmin error");
+    return res.status(500).json({ error: "internal_error" });
+  }
 }

@@ -10,10 +10,10 @@ import pinoHttp from "pino-http";
 // Middlewares
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { requireTenant } from "./middleware/requireTenant.js";
-import { requireAuth, enforceTokenTenant } from "./middleware/requireAuth.js";
+import { requireAuth, enforceTokenTenant, requireSuperAdmin } from "./middleware/requireAuth.js";
 
+// Routers
 import adminRouter from "./routes/admin/index.js";
-import { requireSuperAdmin } from "./middleware/requireSuperAdmin.js";
 
 // ===============================
 // PATHS + ENV LOAD
@@ -63,7 +63,7 @@ try {
 }
 
 // ===============================
-// ROUTERS
+// ROUTERS (lazy imports)
 // ===============================
 const { default: authRouter } = await import("./auth/authRouter.js");
 const { default: passwordRouter } = await import("./auth/passwordRouter.js");
@@ -96,7 +96,7 @@ const { default: smsCampaignsRouter } = await import("./outbound/smsCampaignsRou
 // Reports / Analytics
 const { default: reportsRouter } = await import("./routes/reports.js");
 
-// Channels
+// Channels / Webhooks
 const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
 const { default: instagramWebhookRouter } = await import("./routes/webhooks/instagramWebhookRouter.js");
@@ -139,7 +139,10 @@ function buildAllowedOrigins() {
     "http://localhost:3000"
   ];
   if (!raw) return defaults;
-  const extra = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const extra = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
   return Array.from(new Set([...defaults, ...extra]));
 }
 
@@ -220,7 +223,11 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/webhook/messenger",
   "/webhook/instagram",
   "/webchat",
-  "/br/webchat"
+  "/br/webchat",
+
+  // ✅ admin precisa estar aqui para não exigir tenant antes do requireAuth
+  "/admin",
+  "/admin/health"
 ];
 
 app.use(
@@ -288,6 +295,7 @@ app.get("/health", async (_req, res) => {
 app.use("/", authRouter);
 app.use("/auth", passwordRouter);
 
+// ✅ Admin (sem tenant): protegido por auth + superAdmin
 app.use("/admin", requireAuth, requireSuperAdmin, adminRouter);
 
 // Webchat público
@@ -313,7 +321,7 @@ app.use(
 );
 
 // ===============================
-// 🔒 PROTECTED MIDDLEWARE
+// 🔒 PROTECTED MIDDLEWARE (tenant routes)
 // ===============================
 app.use(requireAuth);
 app.use(enforceTokenTenant);
