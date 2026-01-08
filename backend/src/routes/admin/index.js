@@ -1,6 +1,6 @@
 // backend/src/routes/admin/index.js
 import express from "express";
-import tenantsAdminRouter from "./tenantsAdminRouter.js";
+import tenantsAdminRouter from "./adminTenantsRouter.js";
 import usersAdminRouter from "./usersAdminRouter.js";
 import membershipsAdminRouter from "./membershipsAdminRouter.js";
 

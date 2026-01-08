@@ -18,11 +18,13 @@ export default function TenantCreatePage() {
   const canSubmit = useMemo(() => {
     const n = name.trim();
     const e = adminEmail.trim().toLowerCase();
-    return Boolean(n && e.includes("@") && !loading);
-  }, [name, adminEmail, loading]);
+    return Boolean(n && e.includes("@"));
+  }, [name, adminEmail]);
 
   async function submit(e) {
     e.preventDefault();
+    if (loading) return;
+
     setErr("");
 
     const cleanName = name.trim();
@@ -55,8 +57,9 @@ export default function TenantCreatePage() {
       else nav("/admin/cadastros");
     } catch (e2) {
       const msg =
-        e2?.response?.data?.error ||
+        e2?.response?.data?.detail ||
         e2?.response?.data?.message ||
+        e2?.response?.data?.error ||
         e2?.message ||
         "Falha ao criar.";
       setErr(String(msg));
@@ -71,7 +74,11 @@ export default function TenantCreatePage() {
         <h1 className="admin-h1">Novo Tenant</h1>
 
         <div className="admin-actions">
-          <button className="admin-link" type="button" onClick={() => nav("/admin/cadastros")}>
+          <button
+            className="admin-link"
+            type="button"
+            onClick={() => nav("/admin/cadastros")}
+          >
             Voltar
           </button>
         </div>
@@ -128,7 +135,7 @@ export default function TenantCreatePage() {
         </div>
 
         <div className="full admin-row">
-          <button className="admin-primary" disabled={!canSubmit} type="submit">
+          <button className="admin-primary" disabled={!canSubmit || loading} type="submit">
             {loading ? "Criando..." : "Criar"}
           </button>
         </div>

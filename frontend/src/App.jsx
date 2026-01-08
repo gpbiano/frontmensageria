@@ -142,7 +142,6 @@ function clearStoredAuth() {
   sessionStorage.removeItem(AUTH_TOKEN_KEY);
   sessionStorage.removeItem(AUTH_USER_KEY);
 
-  // ✅ dispara evento (mesma aba)
   window.dispatchEvent(new Event("gp-auth-changed"));
 }
 
@@ -192,23 +191,16 @@ export default function App() {
     };
   }, []);
 
-  // ✅ derivado: se não tem token AGORA, não está autenticado (ponto final)
   const tokenNow = useMemo(() => (getStoredAuthToken() || "").trim(), [authVersion]);
   const isAuthenticated = Boolean(tokenNow);
 
   function handleLogin(payload) {
-    // ✅ LoginPage salva token; aqui só força refresh do estado
     window.dispatchEvent(new Event("gp-auth-changed"));
-
-    // extra: garante identify (se LoginPage não conseguir por algum motivo)
     if (payload?.user) mpIdentify(payload.user);
   }
 
   function handleLogout(payload = {}) {
-    // ✅ Track + reset ANTES de limpar storage
-    mpTrack("auth_logout", {
-      source: payload?.source || "user_menu"
-    });
+    mpTrack("auth_logout", { source: payload?.source || "user_menu" });
     mpReset();
     clearStoredAuth();
   }
@@ -216,7 +208,6 @@ export default function App() {
   if (isCreatePasswordRoute) return <CreatePasswordPage />;
   if (!isAuthenticated) return <LoginPage onLogin={handleLogin} />;
 
-  // ✅ BrowserRouter aqui habilita AdminRoutes sem quebrar o shell atual
   return (
     <BrowserRouter>
       <PlatformShell onLogout={handleLogout} />
@@ -225,7 +216,7 @@ export default function App() {
 }
 
 /* ==========================================================
-   MENU (BASE)
+   MENU
 ========================================================== */
 const SECTION_ICONS = {
   atendimento: MessageSquare,
@@ -253,7 +244,10 @@ const ITEM_ICONS = {
   usuarios: Users,
   config: Settings,
 
-  tenants: Building2
+  dashboard: BarChart3,
+  cadastros: Building2,
+  financeiro: FileText,
+  monitor: Layers
 };
 
 const BASE_MENU = [
@@ -349,7 +343,6 @@ function PlatformShell({ onLogout }) {
       const u = getStoredAuthUser();
       setAuthUser(u);
 
-      // identify sempre que sincronizar
       if (u) mpIdentify(u);
 
       const t = (getStoredAuthToken() || "").trim();
@@ -393,7 +386,12 @@ function PlatformShell({ onLogout }) {
       {
         id: "admin",
         label: "Administração",
-        items: [{ id: "tenants", label: "Empresas" }]
+        items: [
+          { id: "dashboard", label: "Dashboard" },
+          { id: "cadastros", label: "Cadastros" },
+          { id: "financeiro", label: "Financeiro" },
+          { id: "monitor", label: "Monitor" }
+        ]
       }
     ];
   }, [isSuperAdmin]);
@@ -422,14 +420,29 @@ function PlatformShell({ onLogout }) {
     return p.startsWith("/admin");
   }, [routeVersion]);
 
-  // ✅ page_view (centralizado)
+  // ✅ resolve qual item admin está ativo pela URL
+  const activeAdminItem = useMemo(() => {
+    if (!isAdminRoute) return "";
+    const p = window.location.pathname || "";
+    if (p.startsWith("/admin/cadastros")) return "cadastros";
+    if (p.startsWith("/admin/tenants")) return "cadastros"; // compat (rota antiga)
+    if (p.startsWith("/admin/financeiro")) return "financeiro";
+    if (p.startsWith("/admin/monitor")) return "monitor";
+    if (p.startsWith("/admin/dashboard")) return "dashboard";
+    return "cadastros";
+  }, [isAdminRoute, routeVersion]);
+
+  // ✅ page_view
   const lastPageRef = useRef("");
   useEffect(() => {
     const page = isAdminRoute
       ? `Admin > ${window.location.pathname}`
       : `${mainSectionLabel(mainSection)} > ${subSectionLabel(subSection)}`;
 
-    const key = isAdminRoute ? `admin:${window.location.pathname}` : `${mainSection}:${subSection}`;
+    const key = isAdminRoute
+      ? `admin:${window.location.pathname}`
+      : `${mainSection}:${subSection}`;
+
     if (lastPageRef.current === key) return;
     lastPageRef.current = key;
 
@@ -484,24 +497,23 @@ function PlatformShell({ onLogout }) {
       collapsed
     });
 
-    // ✅ Admin usa URL (React Router)
+    // ✅ Admin usa URL
     if (sectionId === "admin") {
       setOpenSection(sectionId);
-      // rota principal
-      if (itemId === "tenants") {
-        navigateTo("/admin/tenants");
-        return;
-      }
-      navigateTo("/admin/tenants");
-      return;
+
+      if (itemId === "dashboard") return navigateTo("/admin/dashboard");
+      if (itemId === "cadastros") return navigateTo("/admin/cadastros");
+      if (itemId === "financeiro") return navigateTo("/admin/financeiro");
+      if (itemId === "monitor") return navigateTo("/admin/monitor");
+
+      return navigateTo("/admin/cadastros");
     }
 
-    // ✅ resto continua como está (state-based)
+    // ✅ resto continua state-based
     setMainSection(sectionId);
     setSubSection(itemId);
     setOpenSection(sectionId);
 
-    // se estava no admin, volta para raiz (opcional)
     if (isAdminRoute) navigateTo("/");
   }
 
@@ -509,8 +521,6 @@ function PlatformShell({ onLogout }) {
     setMainSection(main);
     setSubSection(sub);
     setOpenSection(main);
-
-    // se estiver em rota admin, volta
     if (isAdminRoute) navigateTo("/");
   }
 
@@ -571,7 +581,9 @@ function PlatformShell({ onLogout }) {
             target="_blank"
             rel="noreferrer"
             title="Central de Ajuda"
-            onClick={() => mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })}
+            onClick={() =>
+              mpTrack("help_click", { location: "header", url: HELP_PORTAL_URL })
+            }
           >
             <LifeBuoy size={16} />
             {!collapsed && <span className="gp-help-text">Ajuda</span>}
@@ -599,7 +611,9 @@ function PlatformShell({ onLogout }) {
 
                 <div className="gp-dd-item is-muted">
                   {userDisplayName}
-                  <div className="gp-dd-sub">{userEmail ? userEmail : "Perfil do usuário"}</div>
+                  <div className="gp-dd-sub">
+                    {userEmail ? userEmail : "Perfil do usuário"}
+                  </div>
                 </div>
 
                 <div className="gp-dd-sep" />
@@ -657,7 +671,9 @@ function PlatformShell({ onLogout }) {
               <div className="sidebar-section" key={section.id}>
                 <button
                   type="button"
-                  className={"sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")}
+                  className={
+                    "sidebar-item-header" + (isActive ? " sidebar-item-header-active" : "")
+                  }
                   onClick={() => handleHeaderClick(section.id)}
                   title={collapsed ? section.label : undefined}
                 >
@@ -679,9 +695,10 @@ function PlatformShell({ onLogout }) {
                 {!collapsed && isOpen && (
                   <div className="sidebar-subitems">
                     {section.items.map((item) => {
-                      const isItemActive = isAdminRoute
-                        ? section.id === "admin" && window.location.pathname.startsWith("/admin")
-                        : mainSection === section.id && subSection === item.id;
+                      const isItemActive =
+                        section.id === "admin"
+                          ? isAdminRoute && activeAdminItem === item.id
+                          : mainSection === section.id && subSection === item.id;
 
                       const ItemIcon = ITEM_ICONS[item.id] || Layers;
 
@@ -915,8 +932,14 @@ function subSectionLabel(sub) {
       return "Usuários";
     case "config":
       return "Configurações";
-    case "tenants":
-      return "Empresas";
+    case "dashboard":
+      return "Dashboard";
+    case "cadastros":
+      return "Cadastros";
+    case "financeiro":
+      return "Financeiro";
+    case "monitor":
+      return "Monitor";
     default:
       return "";
   }

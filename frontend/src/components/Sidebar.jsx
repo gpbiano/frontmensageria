@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import {
   Home,
   Users,
@@ -7,6 +8,11 @@ import {
   Bot,
   BarChart3,
   Settings,
+  Shield,
+  LayoutDashboard,
+  FolderPlus,
+  BadgeDollarSign,
+  Monitor,
   ChevronLeft,
   ChevronRight,
   ChevronDown
@@ -25,6 +31,9 @@ export default function Sidebar({
   setMainSection,
   setSubSection
 }) {
+  const nav = useNavigate();
+  const location = useLocation();
+
   const [collapsed, setCollapsed] = useState(
     localStorage.getItem(LS_COLLAPSED) === "true"
   );
@@ -39,6 +48,17 @@ export default function Sidebar({
   useEffect(() => {
     localStorage.setItem(LS_OPEN, openSection);
   }, [openSection]);
+
+  // ✅ Se estiver em /admin, marca a seção como "admin" (pra ficar destacado)
+  useEffect(() => {
+    const p = String(location?.pathname || "");
+    if (p.startsWith("/admin")) {
+      setMainSection?.("admin");
+      setSubSection?.("cadastros"); // default visual
+      setOpenSection("admin");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location?.pathname]);
 
   const sections = useMemo(
     () => [
@@ -102,6 +122,19 @@ export default function Sidebar({
           { key: "usuarios", label: "Usuários" },
           { key: "grupos", label: "Grupos" }
         ]
+      },
+
+      // ✅ NOVO: ADMINISTRAÇÃO (rotas /admin/*)
+      {
+        key: "admin",
+        label: "Administração",
+        icon: Shield,
+        items: [
+          { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, path: "/admin" },
+          { key: "cadastros", label: "Cadastros", icon: FolderPlus, path: "/admin/cadastros", enabled: true },
+          { key: "financeiro", label: "Financeiro", icon: BadgeDollarSign, path: "/admin/financeiro", enabled: false },
+          { key: "monitor", label: "Monitor", icon: Monitor, path: "/admin/monitor", enabled: false }
+        ]
       }
     ],
     []
@@ -111,6 +144,21 @@ export default function Sidebar({
     setMainSection(sectionKey);
     setSubSection(itemKey);
     setOpenSection(sectionKey);
+
+    // ✅ Se for admin, navega por URL
+    if (sectionKey === "admin") {
+      const sec = sections.find((s) => s.key === "admin");
+      const it = sec?.items?.find((x) => x.key === itemKey);
+
+      if (!it) return;
+
+      if (it.enabled === false) {
+        alert("Em breve 🙂");
+        return;
+      }
+
+      nav(it.path || "/admin");
+    }
   }
 
   function toggleSection(key) {
@@ -122,7 +170,6 @@ export default function Sidebar({
       {/* Brand */}
       <div className="gp-sidebar__brand">
         <div className="gp-logo-badge" title="GP Labs">
-          {/* Troque por <img src="/logo-gp.svg" .../> quando quiser */}
           <span className="gp-logo-text">GP</span>
         </div>
 
@@ -148,25 +195,19 @@ export default function Sidebar({
         {sections.map((sec) => {
           const Icon = sec.icon;
           const isOpen = openSection === sec.key;
-
-          // item ativo
           const isActiveSection = mainSection === sec.key;
 
           return (
             <div key={sec.key} className="gp-nav__section">
               <button
                 type="button"
-                className={cx(
-                  "gp-nav__sectionBtn",
-                  isActiveSection && "is-active"
-                )}
+                className={cx("gp-nav__sectionBtn", isActiveSection && "is-active")}
                 onClick={() => {
                   if (collapsed) {
                     // colapsado: navega direto pro primeiro item
                     goTo(sec.key, sec.items[0]?.key || sec.key);
                     return;
                   }
-                  // aberto: abre/fecha e também pode navegar pro primeiro item
                   toggleSection(sec.key);
                 }}
                 title={collapsed ? sec.label : undefined}
@@ -188,8 +229,7 @@ export default function Sidebar({
               {!collapsed && isOpen && (
                 <div className="gp-nav__items">
                   {sec.items.map((it) => {
-                    const active =
-                      mainSection === sec.key && subSection === it.key;
+                    const active = mainSection === sec.key && subSection === it.key;
 
                     return (
                       <button
@@ -197,6 +237,7 @@ export default function Sidebar({
                         type="button"
                         className={cx("gp-nav__item", active && "is-active")}
                         onClick={() => goTo(sec.key, it.key)}
+                        title={sec.key === "admin" && it.enabled === false ? "Em breve" : undefined}
                       >
                         {it.label}
                       </button>
