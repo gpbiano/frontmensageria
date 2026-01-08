@@ -1,0 +1,187 @@
+/* frontend/src/styles/admin.css */
+.admin-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: calc(100vh - 40px);
+  gap: 18px;
+  padding: 18px;
+}
+
+.admin-menu {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 14px;
+  background: rgba(0,0,0,0.10);
+}
+
+.admin-title {
+  font-size: 22px;
+  font-weight: 800;
+  text-align: center;
+  padding: 12px 10px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  margin-bottom: 14px;
+}
+
+.admin-btn {
+  width: 100%;
+  font-size: 22px;
+  padding: 14px 14px;
+  border-radius: 10px;
+  border: 2px solid rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.08);
+  cursor: pointer;
+  margin-bottom: 14px;
+  transition: transform 0.05s ease, background 0.15s ease;
+}
+
+.admin-btn:hover {
+  background: rgba(255,255,255,0.12);
+}
+
+.admin-btn:active {
+  transform: scale(0.99);
+}
+
+.admin-btn.active {
+  background: rgba(255,255,255,0.18);
+  border-color: rgba(255,255,255,0.35);
+}
+
+.admin-content {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 16px;
+  background: rgba(0,0,0,0.06);
+}
+
+.admin-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.admin-h1 {
+  font-size: 20px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.admin-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.admin-input {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(0,0,0,0.20);
+  color: inherit;
+  min-width: 260px;
+}
+
+.admin-primary {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.14);
+  cursor: pointer;
+}
+
+.admin-primary:hover {
+  background: rgba(255,255,255,0.18);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+  text-align: left;
+  font-size: 14px;
+}
+
+.admin-table th {
+  font-size: 12px;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.admin-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.08);
+}
+
+.admin-danger {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,100,100,0.35);
+  background: rgba(255,100,100,0.14);
+  cursor: pointer;
+}
+
+.admin-danger:hover {
+  background: rgba(255,100,100,0.20);
+}
+
+.admin-link {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.10);
+  cursor: pointer;
+}
+
+.admin-link:hover {
+  background: rgba(255,255,255,0.14);
+}
+
+.admin-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.admin-form .full {
+  grid-column: 1 / -1;
+}
+
+.admin-label {
+  font-size: 12px;
+  opacity: 0.8 (0.8);
+  margin-bottom: 6px;
+  display: block;
+}
+
+.admin-field {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(0,0,0,0.20);
+  color: inherit;
+}
+
+.admin-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+}

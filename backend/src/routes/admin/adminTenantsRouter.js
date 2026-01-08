@@ -1,6 +1,5 @@
 // backend/src/routes/admin/tenantsAdminRouter.js
 import express from "express";
-import crypto from "crypto";
 import { prisma } from "../../lib/prisma.js";
 import logger from "../../logger.js";
 
@@ -25,7 +24,7 @@ function normalizeSlug(input) {
 
 function addDays(days) {
   const d = new Date();
-  d.setDate(d.getDate() + days);
+  d.setDate(d.getDate() + Number(days || 0));
   return d;
 }
 
@@ -38,6 +37,20 @@ function asaasGroupDefaults() {
   return {
     asaasGroupName: "ClienteOnline - GP Labs",
     asaasCustomerAccountGroup: "305006"
+  };
+}
+
+function sanitizeUser(u) {
+  if (!u) return null;
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    role: u.role,
+    isActive: u.isActive,
+    isSuperAdmin: u.isSuperAdmin === true,
+    createdAt: u.createdAt,
+    updatedAt: u.updatedAt
   };
 }
 
@@ -67,9 +80,7 @@ router.get("/", async (req, res) => {
         orderBy: [{ createdAt: "desc" }],
         skip: (page - 1) * pageSize,
         take: pageSize,
-        include: {
-          billing: true
-        }
+        include: { billing: true }
       })
     ]);
 
@@ -122,6 +133,10 @@ router.get("/:id", async (req, res) => {
 // ===============================
 // POST /admin/tenants
 // cria tenant + user admin + companyProfile + billing + invite
+// REGRAS IMPORTANTES (projeto):
+// - 7 dias de trial quando NÃO for free
+// - cobrança só depois (via Asaas / checkout)
+// - bloqueio acontece depois via regra de billing (middleware/webhook/rotina)
 // ===============================
 router.post("/", async (req, res) => {
   try {
@@ -148,10 +163,12 @@ router.post("/", async (req, res) => {
     if (existingSlug) return res.status(409).json({ error: "slug já existe" });
 
     const result = await prisma.$transaction(async (tx) => {
+      // 1) tenant
       const tenant = await tx.tenant.create({
         data: { name, slug, isActive: true }
       });
 
+      // 2) user global
       const user = await tx.user.upsert({
         where: { email: adminEmail },
         create: {
@@ -166,13 +183,14 @@ router.post("/", async (req, res) => {
         }
       });
 
+      // 3) membership no tenant
       const membership = await tx.userTenant.upsert({
         where: { userId_tenantId: { userId: user.id, tenantId: tenant.id } },
         create: { userId: user.id, tenantId: tenant.id, role: "admin", isActive: true },
         update: { role: "admin", isActive: true }
       });
 
-      // companyProfile (opcional)
+      // 4) companyProfile (opcional)
       let cp = null;
       if (companyProfile) {
         const cnpj = normalizeCnpj(companyProfile.cnpj);
@@ -218,35 +236,61 @@ router.post("/", async (req, res) => {
         });
       }
 
-      // billing (cria sempre; defaults pro grupo)
+      // 5) billing (cria sempre; com enums do schema novo)
       const defaults = asaasGroupDefaults();
 
       const isFree = billing?.isFree !== undefined ? Boolean(billing.isFree) : true;
+
+      // regra: free => chargeEnabled false sempre
       const chargeEnabled =
         isFree === true ? false : Boolean(billing?.chargeEnabled === true);
+
+      // trial: somente se não for free
+      const trialEndsAt = isFree ? null : addDays(7);
+
+      // access status:
+      // - free => ACTIVE (não bloqueia)
+      // - paid => TRIALING (7 dias)
+      const accessStatus = isFree ? "ACTIVE" : "TRIALING";
 
       const b = await tx.tenantBilling.upsert({
         where: { tenantId: tenant.id },
         create: {
           tenantId: tenant.id,
           provider: "asaas",
-          status: "not_configured",
 
-          planCode: safeStr(billing?.planCode) || "free",
+          // ✅ enum
+          status: "NOT_CONFIGURED",
+
+          planCode: safeStr(billing?.planCode) || (isFree ? "free" : "starter"),
           pricingRef: safeStr(billing?.pricingRef) || null,
 
           isFree,
           chargeEnabled,
 
+          billingCycle: billing?.billingCycle ? String(billing.billingCycle) : "MONTHLY",
+          preferredMethod: billing?.preferredMethod ? String(billing.preferredMethod) : "UNDEFINED",
+
           billingEmail: safeStr(billing?.billingEmail) || null,
 
           asaasGroupName: safeStr(billing?.asaasGroupName) || defaults.asaasGroupName,
           asaasCustomerAccountGroup:
-            safeStr(billing?.asaasCustomerAccountGroup) || defaults.asaasCustomerAccountGroup
+            safeStr(billing?.asaasCustomerAccountGroup) || defaults.asaasCustomerAccountGroup,
+
+          // ✅ trial + acesso
+          trialEndsAt,
+          accessStatus,
+
+          // regra de atraso (default 30 no schema)
+          graceDaysAfterDue:
+            billing?.graceDaysAfterDue != null
+              ? Math.max(1, Number(billing.graceDaysAfterDue))
+              : undefined
         },
         update: {
-          planCode: billing?.planCode !== undefined ? safeStr(billing.planCode) : undefined,
-          pricingRef: billing?.pricingRef !== undefined ? safeStr(billing.pricingRef) || null : undefined,
+          planCode: billing?.planCode !== undefined ? safeStr(billing.planCode) || null : undefined,
+          pricingRef:
+            billing?.pricingRef !== undefined ? safeStr(billing.pricingRef) || null : undefined,
 
           isFree: billing?.isFree !== undefined ? Boolean(billing.isFree) : undefined,
           chargeEnabled:
@@ -254,7 +298,13 @@ router.post("/", async (req, res) => {
               ? (isFree === true ? false : Boolean(billing.chargeEnabled))
               : undefined,
 
-          billingEmail: billing?.billingEmail !== undefined ? safeStr(billing.billingEmail) || null : undefined,
+          billingCycle:
+            billing?.billingCycle !== undefined ? String(billing.billingCycle) : undefined,
+          preferredMethod:
+            billing?.preferredMethod !== undefined ? String(billing.preferredMethod) : undefined,
+
+          billingEmail:
+            billing?.billingEmail !== undefined ? safeStr(billing.billingEmail) || null : undefined,
 
           asaasGroupName:
             billing?.asaasGroupName !== undefined
@@ -264,11 +314,16 @@ router.post("/", async (req, res) => {
           asaasCustomerAccountGroup:
             billing?.asaasCustomerAccountGroup !== undefined
               ? safeStr(billing.asaasCustomerAccountGroup) || defaults.asaasCustomerAccountGroup
+              : undefined,
+
+          graceDaysAfterDue:
+            billing?.graceDaysAfterDue !== undefined
+              ? Math.max(1, Number(billing.graceDaysAfterDue))
               : undefined
         }
       });
 
-      // invite token (compat: usa id)
+      // 6) invite token (✅ novo schema: usa token opaco)
       const expiresAt = addDays(inviteTtlDays);
       const passwordToken = await tx.passwordToken.create({
         data: {
@@ -277,33 +332,27 @@ router.post("/", async (req, res) => {
           type: "invite",
           expiresAt,
           used: false
+          // token é gerado por default no schema (@default(cuid()))
         }
       });
 
       return { tenant, user, membership, companyProfile: cp, billing: b, passwordToken };
     });
 
-    const safeUser = {
-      id: result.user.id,
-      email: result.user.email,
-      name: result.user.name,
-      role: result.user.role,
-      isActive: result.user.isActive,
-      isSuperAdmin: result.user.isSuperAdmin === true,
-      createdAt: result.user.createdAt,
-      updatedAt: result.user.updatedAt
-    };
-
-    const invite = { token: result.passwordToken.id, expiresAt: result.passwordToken.expiresAt };
-
     res.status(201).json({
       ok: true,
       tenant: result.tenant,
-      adminUser: safeUser,
+      adminUser: sanitizeUser(result.user),
       membership: result.membership,
       companyProfile: result.companyProfile,
       billing: result.billing,
-      invite,
+
+      // ✅ retorna token opaco para link
+      invite: {
+        token: result.passwordToken.token,
+        expiresAt: result.passwordToken.expiresAt
+      },
+
       sendInviteRequested: sendInvite
     });
   } catch (err) {
@@ -350,12 +399,11 @@ router.patch("/:id", async (req, res) => {
 
 // ===============================
 // PATCH /admin/tenants/:id/billing
-// salva regra FREE/CHARGE + pricingRef + grupo asaas
+// salva regra FREE/CHARGE + pricingRef + grupo asaas + ciclo + método preferido
 // ===============================
 router.patch("/:id/billing", async (req, res) => {
   try {
     const tenantId = safeStr(req.params.id);
-
     const defaults = asaasGroupDefaults();
 
     const planCode = req.body?.planCode !== undefined ? safeStr(req.body.planCode) || null : undefined;
@@ -365,7 +413,17 @@ router.patch("/:id/billing", async (req, res) => {
     const chargeEnabledRaw =
       req.body?.chargeEnabled !== undefined ? Boolean(req.body.chargeEnabled) : undefined;
 
-    const billingEmail = req.body?.billingEmail !== undefined ? safeStr(req.body.billingEmail) || null : undefined;
+    const billingCycle =
+      req.body?.billingCycle !== undefined ? String(req.body.billingCycle) : undefined;
+
+    const preferredMethod =
+      req.body?.preferredMethod !== undefined ? String(req.body.preferredMethod) : undefined;
+
+    const billingEmail =
+      req.body?.billingEmail !== undefined ? safeStr(req.body.billingEmail) || null : undefined;
+
+    const graceDaysAfterDue =
+      req.body?.graceDaysAfterDue !== undefined ? Math.max(1, Number(req.body.graceDaysAfterDue)) : undefined;
 
     const asaasGroupName =
       req.body?.asaasGroupName !== undefined
@@ -385,7 +443,9 @@ router.patch("/:id/billing", async (req, res) => {
     // regra: free -> chargeEnabled false
     const finalIsFree = isFree !== undefined ? isFree : current.isFree;
     const finalChargeEnabled =
-      finalIsFree === true ? false : (chargeEnabledRaw !== undefined ? chargeEnabledRaw : current.chargeEnabled);
+      finalIsFree === true
+        ? false
+        : (chargeEnabledRaw !== undefined ? chargeEnabledRaw : current.chargeEnabled);
 
     const updated = await prisma.tenantBilling.update({
       where: { tenantId },
@@ -394,7 +454,10 @@ router.patch("/:id/billing", async (req, res) => {
         pricingRef,
         isFree: isFree !== undefined ? finalIsFree : undefined,
         chargeEnabled: finalChargeEnabled,
+        billingCycle,
+        preferredMethod,
         billingEmail,
+        graceDaysAfterDue,
         asaasGroupName,
         asaasCustomerAccountGroup
       }
@@ -416,12 +479,10 @@ router.post("/:id/bootstrap", async (req, res) => {
     const tenantId = safeStr(req.params.id);
     const addAdminsToGroup = Boolean(req.body?.addAdminsToGroup !== false);
 
-    // garante tenant
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) return res.status(404).json({ error: "Tenant não encontrado" });
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1) cria grupo Default se não existir
       const defaultGroupName = "Default";
       const group = await tx.group.upsert({
         where: { tenantId_name: { tenantId, name: defaultGroupName } },
@@ -469,11 +530,7 @@ router.post("/:id/bootstrap", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants/:id/billing/sync
-// Aqui é o gancho do Asaas. Não invento preço.
-// Regras:
-// - SEMPRE cria/atualiza customer e envia pro grupo (customerAccountGroup=305006)
-// - Se isFree=true -> NÃO cria assinatura
-// - Se isFree=false e chargeEnabled=true -> cria assinatura (somente se você tiver pricingRef/preço definido depois)
+// Stub do Asaas: marca status como PENDING_SYNC/SYNCED/ERROR (enums)
 // ===============================
 router.post("/:id/billing/sync", async (req, res) => {
   try {
@@ -489,41 +546,28 @@ router.post("/:id/billing/sync", async (req, res) => {
 
     const defaults = asaasGroupDefaults();
 
-    // garante grupo default salvo no billing
+    // seta pending (enum)
     const billing = await prisma.tenantBilling.update({
       where: { tenantId },
       data: {
-        status: "pending_sync",
+        status: "PENDING_SYNC",
         asaasGroupName: tenant.billing.asaasGroupName || defaults.asaasGroupName,
         asaasCustomerAccountGroup:
           tenant.billing.asaasCustomerAccountGroup || defaults.asaasCustomerAccountGroup
       }
     });
 
-    // ✅ Aqui você chamaria o SDK/HTTP do Asaas.
-    // Eu NÃO vou inventar o client. Então vou deixar a estrutura exata.
-    //
-    // Fluxo esperado:
-    // 1) upsert Customer no Asaas com dados da empresa (cnpj, endereço, email)
-    // 2) garantir customer no grupo (customerAccountGroup=305006)
-    // 3) se billing.isFree === false e billing.chargeEnabled === true:
-    //    - criar assinatura usando pricingRef (quando você definir seu modelo/preço)
-    //
-    // Por enquanto: marca como synced se customer já existir, ou mantém pending.
-    //
-    // Se quiser, no próximo passo eu te entrego o asaasClient.js completo (fetch/axios) + envs.
-
     const hasCompany = Boolean(tenant.companyProfile?.cnpj && tenant.companyProfile?.legalName);
 
-    let nextStatus = "pending_sync";
+    let nextStatus = "PENDING_SYNC";
     let lastError = null;
 
     if (!hasCompany) {
-      nextStatus = "error";
+      nextStatus = "ERROR";
       lastError = "company_profile_missing";
     } else {
-      // sem integração ainda: mantém pending (ou synced se já tem customerId)
-      nextStatus = billing.asaasCustomerId ? "synced" : "pending_sync";
+      // sem integração ainda: considera synced se já tiver customerId
+      nextStatus = billing.asaasCustomerId ? "SYNCED" : "PENDING_SYNC";
     }
 
     const updated = await prisma.tenantBilling.update({
@@ -547,5 +591,27 @@ router.post("/:id/billing/sync", async (req, res) => {
     res.status(500).json({ error: "Falha ao sincronizar billing" });
   }
 });
+// ===============================
+// DELETE /admin/tenants/:id
+// apaga tenant (cascade no schema)
+// ===============================
+router.delete("/:id", async (req, res) => {
+  try {
+    const id = safeStr(req.params.id);
+
+    // garante tenant
+    const exists = await prisma.tenant.findUnique({ where: { id } });
+    if (!exists) return res.status(404).json({ error: "Tenant não encontrado" });
+
+    // Prisma com onDelete: Cascade nas relações -> remove dependências
+    await prisma.tenant.delete({ where: { id } });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "admin.tenants.delete error");
+    return res.status(500).json({ error: "Falha ao deletar tenant" });
+  }
+});
+
 
 export default router;

@@ -44,7 +44,14 @@ async function fetchJson(url, options = {}) {
     data = {};
   }
 
-  if (!res.ok) throw new Error(data?.error || data?.message || "Erro na API.");
+  if (!res.ok) {
+    const msg = data?.message || data?.error || "Erro na API.";
+    const err = new Error(msg);
+    err.status = res.status;
+    err.payload = data;
+    throw err;
+  }
+
   return data;
 }
 
@@ -241,10 +248,16 @@ export default function LoginPage({ onLogin }) {
           setError(e2?.message || "Falha ao salvar sessão (DEV).");
         }
       } else {
+        const msg =
+          String(err?.message || "").trim() ||
+          err?.payload?.message ||
+          err?.payload?.error ||
+          "Não foi possível entrar.";
+
         setError(
-          err.message?.includes("Failed to fetch")
+          msg.includes("Failed to fetch")
             ? "Não foi possível conectar ao servidor."
-            : err.message || "Não foi possível entrar."
+            : msg
         );
       }
     } finally {
@@ -321,15 +334,7 @@ export default function LoginPage({ onLogin }) {
           </button>
         </form>
 
-        {/* ✅ Termos (texto simples e seguro) */}
-        <div
-          style={{
-            marginTop: 12,
-            fontSize: 12,
-            opacity: 0.75,
-            lineHeight: 1.35
-          }}
-        >
+        <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75, lineHeight: 1.35 }}>
           Ao acessar, você concorda com nossos{" "}
           <a
             href="#"

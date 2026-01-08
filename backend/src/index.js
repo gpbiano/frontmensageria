@@ -11,6 +11,7 @@ import pinoHttp from "pino-http";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { requireTenant } from "./middleware/requireTenant.js";
 import { requireAuth, enforceTokenTenant, requireSuperAdmin } from "./middleware/requireAuth.js";
+import { requireTenantAccess } from "./middleware/requireTenantAccess.js";
 
 // Routers
 import adminRouter from "./routes/admin/index.js";
@@ -100,6 +101,11 @@ const { default: reportsRouter } = await import("./routes/reports.js");
 const { default: whatsappRouter } = await import("./routes/channels/whatsappRouter.js");
 const { default: messengerRouter } = await import("./routes/channels/messengerRouter.js");
 const { default: instagramWebhookRouter } = await import("./routes/webhooks/instagramWebhookRouter.js");
+
+// Billing
+const { default: billingRouter } = await import("./routes/billing/billingRouter.js");
+const { default: asaasWebhookRouter } = await import("./routes/webhooks/asaasWebhookRouter.js");
+const { enforceBillingAccess } = await import("./middleware/enforceBillingAccess.js");
 
 // ===============================
 // APP
@@ -207,6 +213,11 @@ async function webchatTenantFallback(req, res, next) {
   }
 }
 
+function isRawWebhook(req) {
+  const url = String(req.originalUrl || "");
+  return url.startsWith("/webhook/instagram") || url.startsWith("/webhook/asaas");
+}
+
 // ===============================
 // TENANT RESOLUTION (ANTES DE AUTH)
 // ===============================
@@ -219,15 +230,21 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/auth/password",
   "/auth/password/verify",
   "/auth/password/set",
+
   "/webhook/whatsapp",
   "/webhook/messenger",
   "/webhook/instagram",
+  "/webhook/asaas",
+
   "/webchat",
   "/br/webchat",
 
   // ✅ admin precisa estar aqui para não exigir tenant antes do requireAuth
   "/admin",
-  "/admin/health"
+  "/admin/health",
+
+  // ✅ se existir rota pública de pagamento/redirect (opcional)
+  "/billing/pay"
 ];
 
 app.use(
@@ -250,17 +267,14 @@ const jsonParser = express.json({
 
 const urlParser = express.urlencoded({ extended: true });
 
-function skipInstagram(req) {
-  return req.originalUrl?.startsWith("/webhook/instagram");
-}
-
 app.use((req, res, next) => {
-  if (skipInstagram(req)) return next();
+  // webhooks raw não podem passar pelo jsonParser
+  if (isRawWebhook(req)) return next();
   return jsonParser(req, res, next);
 });
 
 app.use((req, res, next) => {
-  if (skipInstagram(req)) return next();
+  if (isRawWebhook(req)) return next();
   return urlParser(req, res, next);
 });
 
@@ -320,6 +334,19 @@ app.use(
   instagramWebhookRouter
 );
 
+// ✅ Asaas: normalmente precisa do rawBody p/ validação (dependendo do teu webhook)
+app.use(
+  "/webhook/asaas",
+  express.raw({
+    type: "*/*",
+    limit: "5mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    }
+  }),
+  asaasWebhookRouter
+);
+
 // ===============================
 // 🔒 PROTECTED MIDDLEWARE (tenant routes)
 // ===============================
@@ -332,7 +359,13 @@ app.use(
   })
 );
 
+// ✅ bloqueio por status (TRIALING/ACTIVE ok; BLOCKED corta)
+app.use(requireTenantAccess);
+
 app.use(requirePrisma);
+
+// ✅ billing gate (ex.: trial expirado, overdue>30 -> bloqueia etc)
+app.use(enforceBillingAccess);
 
 // ===============================
 // 🔒 PROTECTED ROUTES
@@ -364,6 +397,9 @@ app.use("/outbound/campaigns", campaignsRouter);
 app.use("/outbound/optout", optoutRouter);
 app.use("/outbound/sms-campaigns", smsCampaignsRouter);
 app.use("/outbound", outboundRouter);
+
+// Billing (protegido)
+app.use("/billing", billingRouter);
 
 // 404
 app.use((req, res) => {

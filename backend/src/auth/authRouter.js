@@ -1,3 +1,4 @@
+// backend/src/auth/authRouter.js
 import express from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
@@ -6,6 +7,9 @@ import logger from "../logger.js";
 // ✅ Prisma-first
 import prismaMod from "../lib/prisma.js";
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
+
+// ✅ Billing block message (mesma frase do requisito)
+import { BILLING_BLOCK_MESSAGE, _isBlockedByBilling } from "../middleware/enforceBillingAccess.js";
 
 const router = express.Router();
 
@@ -35,9 +39,7 @@ function hashPasswordPBKDF2(password) {
     PBKDF2_KEYLEN,
     PBKDF2_DIGEST
   );
-  return `pbkdf2$${PBKDF2_ITERS}$${salt.toString("base64")}$${hash.toString(
-    "base64"
-  )}`;
+  return `pbkdf2$${PBKDF2_ITERS}$${salt.toString("base64")}$${hash.toString("base64")}`;
 }
 
 function verifyPasswordPBKDF2(password, passwordHash) {
@@ -79,21 +81,19 @@ try {
   logger.warn({ e }, "⚠️ Não consegui importar security/passwords.js");
 }
 
-// ✅ AQUI ESTÁ O FIX: tenta primeiro o LEGADO, depois PBKDF2
+// ✅ tenta primeiro LEGADO, depois PBKDF2
 function verifyAnyPassword(password, passwordHash) {
   const h = String(passwordHash || "").trim();
   if (!h) return false;
 
-  // 1) tenta legacy primeiro (banco atual)
   if (verifyPasswordLegacy) {
     try {
       if (verifyPasswordLegacy(String(password), h)) return true;
     } catch {
-      // segue para PBKDF2
+      // segue
     }
   }
 
-  // 2) fallback PBKDF2 (novo padrão)
   if (h.startsWith("pbkdf2$")) {
     return verifyPasswordPBKDF2(String(password), h);
   }
@@ -156,7 +156,35 @@ async function getTenantsForUser(userId) {
     where: { userId: String(userId), isActive: true },
     select: {
       role: true,
-      tenant: { select: { id: true, slug: true, name: true, isActive: true } }
+      tenant: {
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          isActive: true,
+          billing: {
+            select: {
+              // ✅ essenciais pro bloqueio
+              accessStatus: true,
+              trialEndsAt: true,
+              delinquentSince: true,
+              graceDaysAfterDue: true,
+              blockedAt: true,
+              blockedReason: true,
+
+              // ✅ flags de cobrança
+              isFree: true,
+              chargeEnabled: true,
+              planCode: true,
+
+              // ✅ espelho (opcional, mas útil)
+              status: true,
+              lastPaymentStatus: true,
+              nextChargeDueDate: true
+            }
+          }
+        }
+      }
     }
   });
 
@@ -166,18 +194,23 @@ async function getTenantsForUser(userId) {
       id: String(l.tenant.id),
       slug: String(l.tenant.slug),
       name: String(l.tenant.name),
-      role: l.role
+      role: l.role,
+      billing: l.tenant.billing || null
     }));
 }
 
+function pickFirstAllowedTenant(tenants) {
+  return tenants?.[0] || null;
+}
+
 // ======================================================
-// ✅ POST /login (auto-tenant) — compat email/senha/password + body buffer
+// ✅ POST /login (auto-tenant)
 // ======================================================
 router.post("/login", async (req, res) => {
   try {
-    // ✅ body pode vir como Buffer/string se algum middleware mudou
     let body = req.body;
 
+    // ✅ body pode vir como Buffer/string se algum middleware mudou
     if (Buffer.isBuffer(body)) {
       try {
         body = JSON.parse(body.toString("utf8"));
@@ -194,23 +227,27 @@ router.post("/login", async (req, res) => {
 
     body = body && typeof body === "object" ? body : {};
 
-    // ✅ compatibilidade de campos
-    const email =
-      String(body.email || body.login || body.username || body?.user?.email || body?.data?.email || "")
-        .trim()
-        .toLowerCase();
+    const email = String(
+      body.email ||
+        body.login ||
+        body.username ||
+        body?.user?.email ||
+        body?.data?.email ||
+        ""
+    )
+      .trim()
+      .toLowerCase();
 
-    const password =
-      String(
-        body.password ||
-          body.senha ||
-          body.pass ||
-          body?.user?.password ||
-          body?.user?.senha ||
-          body?.data?.password ||
-          body?.data?.senha ||
-          ""
-      ).trim();
+    const password = String(
+      body.password ||
+        body.senha ||
+        body.pass ||
+        body?.user?.password ||
+        body?.user?.senha ||
+        body?.data?.password ||
+        body?.data?.senha ||
+        ""
+    ).trim();
 
     if (!email || !password) {
       return res.status(400).json({ error: "Informe e-mail e senha." });
@@ -223,9 +260,6 @@ router.post("/login", async (req, res) => {
     }
 
     const hash = String(user.passwordHash || "");
-    const hashPrefix = hash.slice(0, 16);
-    const hashLen = hash.length;
-
     const ok = verifyAnyPassword(password, user.passwordHash);
 
     if (!ok) {
@@ -233,11 +267,12 @@ router.post("/login", async (req, res) => {
         {
           email: user.email,
           userId: user.id,
-          hashPrefix,
-          hashLen,
+          hashPrefix: hash.slice(0, 16),
+          hashLen: hash.length,
           hasLegacyVerifier: !!verifyPasswordLegacy,
           looksPBKDF2: hash.startsWith("pbkdf2$"),
-          looksBcrypt: hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")
+          looksBcrypt:
+            hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")
         },
         "❌ Login: senha não conferiu"
       );
@@ -249,7 +284,18 @@ router.post("/login", async (req, res) => {
       return res.status(403).json({ error: "Usuário sem tenant associado." });
     }
 
-    const chosen = tenants[0];
+    const chosen = pickFirstAllowedTenant(tenants);
+    if (!chosen) {
+      return res.status(403).json({ error: "Usuário sem tenant associado." });
+    }
+
+    // ✅ BLOQUEIO POR BILLING AQUI
+    if (_isBlockedByBilling(chosen.billing)) {
+      return res.status(403).json({
+        error: "account_blocked",
+        message: BILLING_BLOCK_MESSAGE
+      });
+    }
 
     const token = signUserToken({
       user,
@@ -269,7 +315,6 @@ router.post("/login", async (req, res) => {
     return res.status(500).json({ error: "Erro ao fazer login." });
   }
 });
-
 
 // ======================================================
 // ✅ GET /auth/me
@@ -308,15 +353,22 @@ router.post("/auth/select-tenant", async (req, res) => {
     const tenants = await getTenantsForUser(decoded.id);
 
     const chosen =
-      tenants.find((t) => String(t.id) === tid) ||
-      tenants.find((t) => String(t.slug) === tid);
+      tenants.find((t) => String(t.id) === tid) || tenants.find((t) => String(t.slug) === tid);
 
     if (!chosen) {
       return res.status(403).json({ error: "Tenant não permitido." });
     }
 
+    // ✅ BLOQUEIO POR BILLING
+    if (_isBlockedByBilling(chosen.billing)) {
+      return res.status(403).json({
+        error: "account_blocked",
+        message: BILLING_BLOCK_MESSAGE
+      });
+    }
+
     const newToken = signUserToken({
-      user: decoded,
+      user: decoded, // decoded tem id/email/role
       tenantId: chosen.id,
       tenantSlug: chosen.slug
     });
@@ -332,7 +384,8 @@ router.post("/auth/select-tenant", async (req, res) => {
 });
 
 // ======================================================
-// ✅ POST /auth/set-password (salva PBKDF2 daqui pra frente)
+// ✅ POST /auth/set-password (agora usa PasswordToken.token opaco)
+// Body: { token, password }
 // ======================================================
 router.post("/auth/set-password", async (req, res) => {
   try {
@@ -342,17 +395,19 @@ router.post("/auth/set-password", async (req, res) => {
 
     if (!tok) return res.status(400).json({ error: "Token é obrigatório." });
     if (!pwd || pwd.length < 8) {
-      return res
-        .status(400)
-        .json({ error: "A senha deve ter no mínimo 8 caracteres." });
+      return res.status(400).json({ error: "A senha deve ter no mínimo 8 caracteres." });
     }
 
-    const t = await prisma.passwordToken.findFirst({ where: { id: tok } });
+    // ✅ procura pelo campo token (opaco), não por id
+    const t = await prisma.passwordToken.findFirst({
+      where: { token: tok }
+    });
+
     if (!t) return res.status(404).json({ error: "Token não encontrado." });
-    if (t.used === true)
-      return res.status(400).json({ error: "Token já utilizado." });
-    if (t.expiresAt && new Date(t.expiresAt).getTime() < Date.now())
+    if (t.used === true) return res.status(400).json({ error: "Token já utilizado." });
+    if (t.expiresAt && new Date(t.expiresAt).getTime() < Date.now()) {
       return res.status(400).json({ error: "Token expirado." });
+    }
 
     const user = await prisma.user.findFirst({
       where: { id: String(t.userId) },
@@ -360,17 +415,19 @@ router.post("/auth/set-password", async (req, res) => {
     });
 
     if (!user) return res.status(404).json({ error: "Usuário não encontrado." });
-    if (user.isActive === false)
-      return res.status(400).json({ error: "Usuário está inativo." });
+    if (user.isActive === false) return res.status(400).json({ error: "Usuário está inativo." });
 
-    await prisma.user.update({
-      where: { id: String(user.id) },
-      data: { passwordHash: hashPasswordPBKDF2(pwd), updatedAt: new Date() }
-    });
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: String(user.id) },
+        data: { passwordHash: hashPasswordPBKDF2(pwd), updatedAt: new Date() }
+      });
 
-    await prisma.passwordToken.update({
-      where: { id: tok },
-      data: { used: true, usedAt: new Date() }
+      // ✅ marca como usado pelo ID do registro (mais seguro)
+      await tx.passwordToken.update({
+        where: { id: String(t.id) },
+        data: { used: true, usedAt: new Date() }
+      });
     });
 
     logger.info({ userId: user.id, email: user.email }, "🔐 Senha definida");
