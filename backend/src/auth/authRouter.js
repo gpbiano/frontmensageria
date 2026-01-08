@@ -9,7 +9,10 @@ import prismaMod from "../lib/prisma.js";
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 
 // ✅ Billing block message (mesma frase do requisito)
-import { BILLING_BLOCK_MESSAGE, _isBlockedByBilling } from "../middleware/enforceBillingAccess.js";
+import {
+  BILLING_BLOCK_MESSAGE,
+  _isBlockedByBilling
+} from "../middleware/enforceBillingAccess.js";
 
 const router = express.Router();
 
@@ -126,6 +129,10 @@ function signUserToken({ user, tenantId, tenantSlug }) {
       id: user.id,
       email: user.email,
       role: user.role,
+
+      // ✅ importante pro frontend liberar menu de admin
+      isSuperAdmin: user?.isSuperAdmin === true,
+
       tenantId: String(tenantId),
       tenantSlug: tenantSlug ? String(tenantSlug) : undefined
     },
@@ -146,6 +153,10 @@ async function getUserByEmail(email) {
       name: true,
       role: true,
       isActive: true,
+
+      // ✅ SUPER ADMIN
+      isSuperAdmin: true,
+
       passwordHash: true
     }
   });
@@ -303,11 +314,19 @@ router.post("/login", async (req, res) => {
       tenantSlug: chosen.slug
     });
 
-    logger.info({ userId: user.id, email: user.email, tenant: chosen.slug }, "✅ Login realizado");
+    logger.info(
+      {
+        userId: user.id,
+        email: user.email,
+        tenant: chosen.slug,
+        isSuperAdmin: user.isSuperAdmin === true
+      },
+      "✅ Login realizado"
+    );
 
     return res.json({
       token,
-      user: sanitizeUser(user),
+      user: sanitizeUser(user), // ✅ inclui isSuperAdmin (passwordHash sai)
       tenant: { id: chosen.id, slug: chosen.slug, name: chosen.name }
     });
   } catch (err) {
@@ -327,7 +346,12 @@ router.get("/auth/me", async (req, res) => {
     const decoded = verifyToken(token);
 
     return res.json({
-      user: { id: decoded.id, email: decoded.email, role: decoded.role },
+      user: {
+        id: decoded.id,
+        email: decoded.email,
+        role: decoded.role,
+        isSuperAdmin: decoded?.isSuperAdmin === true
+      },
       tenant: { id: decoded.tenantId || null, slug: decoded.tenantSlug || null }
     });
   } catch (err) {
@@ -367,8 +391,14 @@ router.post("/auth/select-tenant", async (req, res) => {
       });
     }
 
+    // ✅ preserva isSuperAdmin do token atual
     const newToken = signUserToken({
-      user: decoded, // decoded tem id/email/role
+      user: {
+        id: decoded.id,
+        email: decoded.email,
+        role: decoded.role,
+        isSuperAdmin: decoded?.isSuperAdmin === true
+      },
       tenantId: chosen.id,
       tenantSlug: chosen.slug
     });
