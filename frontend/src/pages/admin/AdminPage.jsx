@@ -1,56 +1,147 @@
 // frontend/src/pages/admin/AdminPage.jsx
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import "../../styles/admin.css";
 
-function isActivePath(pathname, target) {
-  return pathname.includes(`/admin/${target}`);
+function cx(...arr) {
+  return arr.filter(Boolean).join(" ");
+}
+
+function CardLink({ to, title, subtitle, disabled }) {
+  if (disabled) {
+    return (
+      <div
+        className={cx("admin-card-link", "is-disabled")}
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: 14,
+          padding: 16,
+          background: "#f3f4f6",
+          opacity: 0.7,
+          cursor: "not-allowed",
+          userSelect: "none"
+        }}
+      >
+        <div style={{ fontSize: 18, fontWeight: 700 }}>{title}</div>
+        {subtitle ? (
+          <div style={{ marginTop: 6, fontSize: 13, opacity: 0.75 }}>{subtitle}</div>
+        ) : null}
+        <div style={{ marginTop: 10, fontSize: 12, fontWeight: 700, opacity: 0.8 }}>
+          Em breve
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Link
+      to={to}
+      className="admin-card-link"
+      style={{
+        display: "block",
+        textDecoration: "none",
+        color: "inherit",
+        border: "1px solid #e5e7eb",
+        borderRadius: 14,
+        padding: 16,
+        background: "#f8fafc"
+      }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 700 }}>{title}</div>
+      {subtitle ? (
+        <div style={{ marginTop: 6, fontSize: 13, opacity: 0.75 }}>{subtitle}</div>
+      ) : null}
+      <div style={{ marginTop: 10, fontSize: 12, fontWeight: 700, opacity: 0.7 }}>
+        Abrir →
+      </div>
+    </Link>
+  );
 }
 
 export default function AdminPage() {
-  const nav = useNavigate();
   const loc = useLocation();
+  const path = String(loc.pathname || "");
 
   return (
-    <div className="admin-shell">
-      <aside className="admin-menu">
-        <div className="admin-title">Administração</div>
+    <div style={{ padding: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22 }}>Administração</h1>
+          <div style={{ marginTop: 6, fontSize: 13, opacity: 0.7 }}>
+            Acesso Super Admin • {path}
+          </div>
+        </div>
+      </div>
 
-        <button
-          className={`admin-btn ${isActivePath(loc.pathname, "dashboard") ? "active" : ""}`}
-          onClick={() => nav("/admin/dashboard")}
-          type="button"
+      <div
+        style={{
+          marginTop: 16,
+          display: "grid",
+          gridTemplateColumns: "320px 1fr",
+          gap: 16,
+          alignItems: "start"
+        }}
+      >
+        {/* coluna "menu" da esquerda (cards grandes) */}
+        <div
+          style={{
+            background: "#e5e7eb",
+            borderRadius: 16,
+            padding: 14
+          }}
         >
-          Dashboard
-        </button>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: 800,
+                padding: 14,
+                borderRadius: 14,
+                background: "#eef2f7",
+                border: "1px solid rgba(0,0,0,0.05)"
+              }}
+            >
+              Administração
+            </div>
 
-        <button
-          className={`admin-btn ${isActivePath(loc.pathname, "tenants") ? "active" : ""}`}
-          onClick={() => nav("/admin/tenants")}
-          type="button"
-        >
-          Cadastros
-        </button>
+            <CardLink
+              to="/admin/dashboard"
+              title="Dashboard"
+              subtitle="Resumo (em breve)"
+              disabled={false}
+            />
 
-        <button
-          className={`admin-btn ${isActivePath(loc.pathname, "financeiro") ? "active" : ""}`}
-          onClick={() => nav("/admin/financeiro")}
-          type="button"
-        >
-          Financeiro
-        </button>
+            <CardLink
+              to="/admin/tenants"
+              title="Cadastros"
+              subtitle="Empresas (Tenants) • ver, criar, editar e deletar"
+              disabled={false}
+            />
 
-        <button
-          className={`admin-btn ${isActivePath(loc.pathname, "monitor") ? "active" : ""}`}
-          onClick={() => nav("/admin/monitor")}
-          type="button"
-        >
-          Monitor
-        </button>
-      </aside>
+            <CardLink
+              to="/admin/financeiro"
+              title="Financeiro"
+              subtitle="Billing / Asaas (em breve)"
+              disabled={true}
+            />
 
-      <main className="admin-content">
-        <Outlet />
-      </main>
+            <CardLink
+              to="/admin/monitor"
+              title="Monitor"
+              subtitle="Saúde / logs (em breve)"
+              disabled={true}
+            />
+          </div>
+        </div>
+
+        {/* coluna de conteúdo */}
+        <div
+          style={{
+            background: "#e5e7eb",
+            borderRadius: 16,
+            minHeight: 520
+          }}
+        />
+      </div>
     </div>
   );
 }
