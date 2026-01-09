@@ -2,6 +2,8 @@
 import express from "express";
 import { prisma } from "../../lib/prisma.js";
 import logger from "../../logger.js";
+import { asaasCreateCustomer, asaasCreateSubscription, asaasConfig } from "../../services/asaasClient.js";
+import { sendEmailResend } from "../../services/mailer.js";
 
 const router = express.Router();
 
@@ -54,7 +56,6 @@ function sanitizeUser(u) {
 }
 
 function getAppWebUrl() {
-  // coloque no .env: APP_WEB_URL=https://app.seudominio.com
   return (
     safeStr(process.env.APP_WEB_URL) ||
     safeStr(process.env.FRONTEND_URL) ||
@@ -64,173 +65,18 @@ function getAppWebUrl() {
 }
 
 function getInvitePath() {
-  // ajuste conforme sua tela de convite / criar senha
-  // ex: /create-password (ou /auth/create-password) etc.
-  return safeStr(process.env.INVITE_PATH) || "/auth/invite";
+  // ✅ ajuste p/ sua rota real do CreatePasswordPage
+  // ex: "/auth/create-password"
+  return safeStr(process.env.INVITE_PATH) || "/auth/create-password";
 }
 
 function buildInviteUrl(token) {
   const base = getAppWebUrl();
   const path = getInvitePath();
-
   if (!base) return "";
   const u = new URL(path, base);
   u.searchParams.set("token", String(token || ""));
   return u.toString();
-}
-
-// ===============================
-// SMTP (invite / boas-vindas)
-// ===============================
-async function sendInviteEmailIfConfigured({ to, tenantName, token, expiresAt }) {
-  const SMTP_HOST = safeStr(process.env.SMTP_HOST);
-  const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-  const SMTP_USER = safeStr(process.env.SMTP_USER);
-  const SMTP_PASS = safeStr(process.env.SMTP_PASS);
-  const SMTP_SECURE = String(process.env.SMTP_SECURE || "").toLowerCase() === "true";
-  const SMTP_FROM = safeStr(process.env.SMTP_FROM) || safeStr(process.env.MAIL_FROM) || "";
-
-  if (!SMTP_HOST || !SMTP_FROM) {
-    logger.warn(
-      { SMTP_HOST: Boolean(SMTP_HOST), SMTP_FROM: Boolean(SMTP_FROM) },
-      "invite email: SMTP não configurado (pulando envio)"
-    );
-    return { sent: false, reason: "smtp_not_configured" };
-  }
-
-  let nodemailer;
-  try {
-    const mod = await import("nodemailer");
-    nodemailer = mod?.default || mod;
-  } catch (err) {
-    logger.warn({ err }, "invite email: nodemailer não disponível (pulando envio)");
-    return { sent: false, reason: "nodemailer_missing" };
-  }
-
-  const transport = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_SECURE,
-    auth: SMTP_USER && SMTP_PASS ? { user: SMTP_USER, pass: SMTP_PASS } : undefined
-  });
-
-  const inviteUrl = buildInviteUrl(token);
-
-  const subject = `Bem-vindo ao GP Labs — Crie sua senha`;
-  const exp = expiresAt ? new Date(expiresAt).toLocaleString("pt-BR") : "";
-
-  const html = `
-  <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height:1.4">
-    <h2 style="margin:0 0 12px">Bem-vindo ao GP Labs</h2>
-    <p style="margin:0 0 10px">
-      Você foi adicionado como <b>Admin</b> da empresa <b>${String(tenantName || "sua empresa")}</b>.
-    </p>
-    <p style="margin:0 0 14px">Clique no botão abaixo para criar sua senha e acessar a plataforma.</p>
-
-    ${
-      inviteUrl
-        ? `<p style="margin:16px 0">
-            <a href="${inviteUrl}" style="display:inline-block;padding:12px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">
-              Criar senha
-            </a>
-          </p>
-          <p style="margin:0 0 10px;color:#475569;font-size:12px">
-            Se o botão não funcionar, copie e cole este link no navegador:<br/>
-            <span style="word-break:break-all">${inviteUrl}</span>
-          </p>`
-        : `<p style="margin:0 0 10px;color:#b45309">
-            Link de convite não configurado no servidor (APP_WEB_URL). Token: <b>${String(token || "")}</b>
-          </p>`
-    }
-
-    ${exp ? `<p style="margin:10px 0 0;color:#475569;font-size:12px">Este convite expira em: ${exp}</p>` : ""}
-
-    <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0"/>
-    <p style="margin:0;color:#64748b;font-size:12px">
-      Se você não esperava este convite, ignore este e-mail.
-    </p>
-  </div>
-  `;
-
-  try {
-    await transport.sendMail({
-      from: SMTP_FROM,
-      to,
-      subject,
-      html
-    });
-
-    return { sent: true, inviteUrl };
-  } catch (err) {
-    logger.error({ err }, "invite email: falha ao enviar");
-    return { sent: false, reason: "send_failed" };
-  }
-}
-
-// ===============================
-// ASAAS (Customer) - integrado aqui (sem criar arquivo novo)
-// ===============================
-function getAsaasConfig() {
-  const apiKey = safeStr(process.env.ASAAS_API_KEY);
-  const baseUrl = safeStr(process.env.ASAAS_BASE_URL) || "https://api.asaas.com/v3";
-  return { apiKey, baseUrl };
-}
-
-async function asaasCreateCustomerIfConfigured({ tenantId, companyProfile, adminEmail }) {
-  const { apiKey, baseUrl } = getAsaasConfig();
-
-  if (!apiKey) {
-    return { ok: false, skipped: true, reason: "asaas_not_configured" };
-  }
-
-  const legalName = safeStr(companyProfile?.legalName);
-  const cpfCnpj = normalizeCnpj(companyProfile?.cnpj);
-
-  if (!legalName || !cpfCnpj) {
-    return { ok: false, skipped: true, reason: "company_profile_missing" };
-  }
-
-  // Node >=18 tem fetch. Se teu runtime for antigo, me avisa que eu troco pra axios/node-fetch.
-  const payload = {
-    name: legalName,
-    email: safeStr(adminEmail) || undefined,
-    cpfCnpj
-  };
-
-  const url = `${baseUrl.replace(/\/+$/, "")}/customers`;
-
-  try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        access_token: apiKey
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await resp.json().catch(() => ({}));
-
-    if (!resp.ok) {
-      return {
-        ok: false,
-        skipped: false,
-        reason: "asaas_error",
-        status: resp.status,
-        data
-      };
-    }
-
-    // esperado: { id: "cus_..." }
-    if (!data?.id) {
-      return { ok: false, skipped: false, reason: "asaas_invalid_response", data };
-    }
-
-    return { ok: true, customerId: data.id, data };
-  } catch (err) {
-    logger.error({ err, tenantId }, "asaasCreateCustomerIfConfigured exception");
-    return { ok: false, skipped: false, reason: "asaas_exception" };
-  }
 }
 
 async function hasDefaultGroup(tenantId) {
@@ -238,6 +84,29 @@ async function hasDefaultGroup(tenantId) {
     where: { tenantId: String(tenantId), name: "Default" }
   });
   return n > 0;
+}
+
+function cycleToAsaasCycle(cycle) {
+  const c = String(cycle || "MONTHLY").toUpperCase();
+  if (c === "MONTHLY") return "MONTHLY";
+  if (c === "QUARTERLY") return "QUARTERLY";
+  if (c === "YEARLY") return "YEARLY";
+  return "MONTHLY";
+}
+
+function preferredToBillingType(preferredMethod) {
+  const m = String(preferredMethod || "UNDEFINED").toUpperCase();
+  if (m === "BOLETO") return "BOLETO";
+  if (m === "PIX") return "PIX";
+  if (m === "CREDIT_CARD") return "CREDIT_CARD";
+  return "UNDEFINED";
+}
+
+function todayPlus(days) {
+  const d = addDays(days);
+  // yyyy-mm-dd
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // ===============================
@@ -319,7 +188,9 @@ router.get("/:id", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants
-// ✅ cria + tenta ASAAS customer (se companyProfile ok) + envia e-mail (se SMTP ok)
+// ✅ cria tenant + billing + token
+// ✅ se NÃO for free: cria customer+subscription no Asaas e bloqueia acesso até pagar
+// ✅ se for free: manda invite email já
 // ===============================
 router.post("/", async (req, res) => {
   try {
@@ -334,8 +205,7 @@ router.post("/", async (req, res) => {
     const companyProfile = req.body?.companyProfile || null;
     const billing = req.body?.billing || null;
 
-    const isActiveRequested =
-      req.body?.isActive !== undefined ? Boolean(req.body.isActive) : true;
+    const isActiveRequested = req.body?.isActive !== undefined ? Boolean(req.body.isActive) : true;
 
     if (!name) return res.status(400).json({ error: "name obrigatório" });
     if (!adminEmail || !adminEmail.includes("@")) {
@@ -347,6 +217,19 @@ router.post("/", async (req, res) => {
 
     const existingSlug = await prisma.tenant.findUnique({ where: { slug } });
     if (existingSlug) return res.status(409).json({ error: "slug já existe" });
+
+    const defaults = asaasGroupDefaults();
+
+    // regra: free default
+    const isFree = billing?.isFree !== undefined ? Boolean(billing.isFree) : true;
+
+    // regra: free => chargeEnabled false sempre
+    const chargeEnabled = isFree === true ? false : Boolean(billing?.chargeEnabled === true);
+
+    // ✅ NOVA REGRA: paid => só acessa depois pagar
+    // free => ACTIVE
+    // paid => PENDING_PAYMENT
+    const accessStatus = isFree ? "ACTIVE" : "PENDING_PAYMENT";
 
     const result = await prisma.$transaction(async (tx) => {
       // 1) tenant
@@ -369,7 +252,7 @@ router.post("/", async (req, res) => {
         }
       });
 
-      // 3) membership no tenant
+      // 3) membership
       const membership = await tx.userTenant.upsert({
         where: { userId_tenantId: { userId: user.id, tenantId: tenant.id } },
         create: { userId: user.id, tenantId: tenant.id, role: "admin", isActive: true },
@@ -381,7 +264,9 @@ router.post("/", async (req, res) => {
       if (companyProfile) {
         const cnpj = normalizeCnpj(companyProfile.cnpj);
         if (!companyProfile.legalName || !cnpj) {
-          throw new Error("companyProfile inválido (legalName/cnpj)");
+          const e = new Error("companyProfile inválido (legalName/cnpj)");
+          e.code = "COMPANY_INVALID";
+          throw e;
         }
 
         cp = await tx.tenantCompanyProfile.upsert({
@@ -423,19 +308,14 @@ router.post("/", async (req, res) => {
       }
 
       // 5) billing (cria sempre)
-      const defaults = asaasGroupDefaults();
-
-      const isFree = billing?.isFree !== undefined ? Boolean(billing.isFree) : true;
-      const chargeEnabled = isFree === true ? false : Boolean(billing?.chargeEnabled === true);
-      const trialEndsAt = isFree ? null : addDays(7);
-      const accessStatus = isFree ? "ACTIVE" : "TRIALING";
-
       const b = await tx.tenantBilling.upsert({
         where: { tenantId: tenant.id },
         create: {
           tenantId: tenant.id,
           provider: "asaas",
-          status: "NOT_CONFIGURED",
+
+          // status interno da integração
+          status: isFree ? "SYNCED" : "PENDING_SYNC",
 
           planCode: safeStr(billing?.planCode) || (isFree ? "free" : "starter"),
           pricingRef: safeStr(billing?.pricingRef) || null,
@@ -445,14 +325,13 @@ router.post("/", async (req, res) => {
 
           billingCycle: billing?.billingCycle ? String(billing.billingCycle) : "MONTHLY",
           preferredMethod: billing?.preferredMethod ? String(billing.preferredMethod) : "UNDEFINED",
-
           billingEmail: safeStr(billing?.billingEmail) || null,
 
           asaasGroupName: safeStr(billing?.asaasGroupName) || defaults.asaasGroupName,
           asaasCustomerAccountGroup:
             safeStr(billing?.asaasCustomerAccountGroup) || defaults.asaasCustomerAccountGroup,
 
-          trialEndsAt,
+          // ✅ regra nova (acesso)
           accessStatus,
 
           graceDaysAfterDue:
@@ -460,45 +339,10 @@ router.post("/", async (req, res) => {
               ? Math.max(1, Number(billing.graceDaysAfterDue))
               : undefined
         },
-        update: {
-          planCode: billing?.planCode !== undefined ? safeStr(billing.planCode) || null : undefined,
-          pricingRef:
-            billing?.pricingRef !== undefined ? safeStr(billing.pricingRef) || null : undefined,
-
-          isFree: billing?.isFree !== undefined ? Boolean(billing.isFree) : undefined,
-          chargeEnabled:
-            billing?.chargeEnabled !== undefined
-              ? isFree === true
-                ? false
-                : Boolean(billing.chargeEnabled)
-              : undefined,
-
-          billingCycle:
-            billing?.billingCycle !== undefined ? String(billing.billingCycle) : undefined,
-          preferredMethod:
-            billing?.preferredMethod !== undefined ? String(billing.preferredMethod) : undefined,
-
-          billingEmail:
-            billing?.billingEmail !== undefined ? safeStr(billing.billingEmail) || null : undefined,
-
-          asaasGroupName:
-            billing?.asaasGroupName !== undefined
-              ? safeStr(billing.asaasGroupName) || defaults.asaasGroupName
-              : undefined,
-
-          asaasCustomerAccountGroup:
-            billing?.asaasCustomerAccountGroup !== undefined
-              ? safeStr(billing.asaasCustomerAccountGroup) || defaults.asaasCustomerAccountGroup
-              : undefined,
-
-          graceDaysAfterDue:
-            billing?.graceDaysAfterDue !== undefined
-              ? Math.max(1, Number(billing.graceDaysAfterDue))
-              : undefined
-        }
+        update: {}
       });
 
-      // 6) invite token
+      // 6) token de invite (sempre cria, mas e-mail pode ser só após pagamento)
       const expiresAt = addDays(inviteTtlDays);
       const passwordToken = await tx.passwordToken.create({
         data: {
@@ -513,64 +357,114 @@ router.post("/", async (req, res) => {
       return { tenant, user, membership, companyProfile: cp, billing: b, passwordToken };
     });
 
-    // ✅ ASAAS: tenta criar customer se tiver companyProfile ok (fora da transação)
-    let asaas = { ok: false, skipped: true, reason: "not_run" };
-    try {
-      asaas = await asaasCreateCustomerIfConfigured({
-        tenantId: result.tenant.id,
-        companyProfile: result.companyProfile,
-        adminEmail
-      });
+    // ✅ se paid: cria customer/subscription no Asaas (fora da transação)
+    let asaas = { ok: false, reason: "skipped" };
+    if (!isFree) {
+      const cp = result.companyProfile;
 
-      if (asaas?.ok && asaas?.customerId) {
+      // pra criar cliente no Asaas, precisamos de legalName + cnpj
+      if (!cp?.legalName || !cp?.cnpj) {
+        asaas = {
+          ok: false,
+          reason: "company_profile_missing",
+          note: "Para criar assinatura no Asaas, preencha Razão Social + CNPJ no Perfil da Empresa."
+        };
+
+        // mantém bloqueado
         await prisma.tenantBilling.update({
           where: { tenantId: result.tenant.id },
-          data: {
-            asaasCustomerId: asaas.customerId,
-            status: "SYNCED",
-            lastError: null,
-            lastSyncAt: new Date()
-          }
+          data: { status: "ERROR", lastError: "company_profile_missing" }
         });
-      } else if (asaas?.skipped) {
-        // não faz nada
       } else {
-        await prisma.tenantBilling.update({
-          where: { tenantId: result.tenant.id },
-          data: {
-            status: "ERROR",
-            lastError: asaas?.reason || "asaas_error",
-            lastSyncAt: new Date()
-          }
-        });
-      }
-    } catch (err) {
-      logger.error({ err }, "asaas create customer failed (outer catch)");
-      await prisma.tenantBilling.update({
-        where: { tenantId: result.tenant.id },
-        data: {
-          status: "ERROR",
-          lastError: "asaas_exception",
-          lastSyncAt: new Date()
+        try {
+          // 1) cria customer
+          const customer = await asaasCreateCustomer({
+            name: cp.tradeName || cp.legalName,
+            cpfCnpj: cp.cnpj,
+            email: adminEmail,
+            postalCode: cp.postalCode,
+            address: cp.address,
+            addressNumber: cp.addressNumber,
+            complement: cp.complement,
+            province: cp.province,
+            city: cp.city,
+            state: cp.state
+          });
+
+          // 2) cria subscription (mensal/trimestral/anual)
+          // ⚠️ valor: como você não mandou tabela de preço aqui, vou usar:
+          // - se billing.pricingRef vier numérico, usamos como value
+          // - senão, value = 0 e você ajusta (ou mapeia planCode->value)
+          const rawValue = Number(String(result.billing?.pricingRef || "").replace(",", "."));
+          const value = Number.isFinite(rawValue) && rawValue > 0 ? rawValue : 0;
+
+          const sub = await asaasCreateSubscription({
+            customer: customer.id,
+            billingType: preferredToBillingType(result.billing?.preferredMethod),
+            cycle: cycleToAsaasCycle(result.billing?.billingCycle),
+            value,
+            nextDueDate: todayPlus(1),
+            description: `Assinatura ${result.billing?.planCode || "plano"} - ${result.tenant.name}`,
+            externalReference: `tenant:${result.tenant.id}`
+          });
+
+          await prisma.tenantBilling.update({
+            where: { tenantId: result.tenant.id },
+            data: {
+              asaasCustomerId: customer.id,
+              asaasSubscriptionId: sub.id,
+              status: "PENDING_PAYMENT",
+              lastError: null,
+              lastSyncAt: new Date()
+            }
+          });
+
+          asaas = {
+            ok: true,
+            env: asaasConfig.env,
+            customerId: customer.id,
+            subscriptionId: sub.id,
+            note:
+              value > 0
+                ? "Assinatura criada. A primeira cobrança será gerada pelo Asaas."
+                : "Assinatura criada com value=0. Ajuste o mapeamento de preço (pricingRef/planCode) para gerar cobrança."
+          };
+        } catch (err) {
+          logger.error({ err }, "asaas: falha ao criar customer/subscription");
+          await prisma.tenantBilling.update({
+            where: { tenantId: result.tenant.id },
+            data: { status: "ERROR", lastError: "asaas_create_failed" }
+          });
+
+          asaas = { ok: false, reason: "asaas_create_failed" };
         }
-      });
-      asaas = { ok: false, skipped: false, reason: "asaas_exception" };
+      }
     }
 
-    // ✅ E-mail: fora da transação
-    const inviteMail = sendInvite
-      ? await sendInviteEmailIfConfigured({
-          to: adminEmail,
-          tenantName: result.tenant?.name,
-          token: result.passwordToken.token,
-          expiresAt: result.passwordToken.expiresAt
-        })
-      : { sent: false, reason: "sendInvite_false" };
-
-    // ✅ refetch billing pra devolver atualizado (com asaasCustomerId/status)
-    const billingFresh = await prisma.tenantBilling.findUnique({
-      where: { tenantId: result.tenant.id }
-    });
+    // ✅ convite por e-mail:
+    // - free: envia agora
+    // - paid: RECOMENDO enviar só após PAYMENT_RECEIVED (webhook) pra cumprir a regra.
+    let inviteEmail = { sent: false, reason: "not_sent" };
+    if (sendInvite && isFree) {
+      const inviteUrl = buildInviteUrl(result.passwordToken.token);
+      inviteEmail = await sendEmailResend({
+        to: adminEmail,
+        subject: "Bem-vindo ao GP Labs — Crie sua senha",
+        html: `
+          <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height:1.4">
+            <h2 style="margin:0 0 12px">Bem-vindo ao GP Labs</h2>
+            <p style="margin:0 0 10px">Você foi adicionado como <b>Admin</b> da empresa <b>${result.tenant.name}</b>.</p>
+            <p style="margin:0 0 14px">Clique para criar sua senha:</p>
+            <p style="margin:16px 0">
+              <a href="${inviteUrl}" style="display:inline-block;padding:12px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">
+                Criar senha
+              </a>
+            </p>
+            <p style="margin:0;color:#64748b;font-size:12px">Se não esperava este convite, ignore.</p>
+          </div>
+        `
+      });
+    }
 
     res.status(201).json({
       ok: true,
@@ -578,7 +472,7 @@ router.post("/", async (req, res) => {
       adminUser: sanitizeUser(result.user),
       membership: result.membership,
       companyProfile: result.companyProfile,
-      billing: billingFresh,
+      billing: await prisma.tenantBilling.findUnique({ where: { tenantId: result.tenant.id } }),
 
       invite: {
         token: result.passwordToken.token,
@@ -587,14 +481,14 @@ router.post("/", async (req, res) => {
       },
 
       sendInviteRequested: sendInvite,
-      inviteEmail: inviteMail,
+      inviteEmail,
       asaas
     });
   } catch (err) {
     const msg = String(err?.message || "");
     logger.error({ err, msg }, "admin.tenants.create error");
 
-    if (msg.includes("companyProfile inválido")) {
+    if (err?.code === "COMPANY_INVALID" || msg.includes("companyProfile inválido")) {
       return res.status(400).json({ error: msg });
     }
     if (msg.includes("unique") || msg.includes("Unique constraint")) {
@@ -647,17 +541,12 @@ router.patch("/:id/billing", async (req, res) => {
     const pricingRef = req.body?.pricingRef !== undefined ? safeStr(req.body.pricingRef) || null : undefined;
 
     const isFree = req.body?.isFree !== undefined ? Boolean(req.body.isFree) : undefined;
-    const chargeEnabledRaw =
-      req.body?.chargeEnabled !== undefined ? Boolean(req.body.chargeEnabled) : undefined;
+    const chargeEnabledRaw = req.body?.chargeEnabled !== undefined ? Boolean(req.body.chargeEnabled) : undefined;
 
-    const billingCycle =
-      req.body?.billingCycle !== undefined ? String(req.body.billingCycle) : undefined;
+    const billingCycle = req.body?.billingCycle !== undefined ? String(req.body.billingCycle) : undefined;
+    const preferredMethod = req.body?.preferredMethod !== undefined ? String(req.body.preferredMethod) : undefined;
 
-    const preferredMethod =
-      req.body?.preferredMethod !== undefined ? String(req.body.preferredMethod) : undefined;
-
-    const billingEmail =
-      req.body?.billingEmail !== undefined ? safeStr(req.body.billingEmail) || null : undefined;
+    const billingEmail = req.body?.billingEmail !== undefined ? safeStr(req.body.billingEmail) || null : undefined;
 
     const graceDaysAfterDue =
       req.body?.graceDaysAfterDue !== undefined ? Math.max(1, Number(req.body.graceDaysAfterDue)) : undefined;
@@ -673,17 +562,15 @@ router.patch("/:id/billing", async (req, res) => {
         : undefined;
 
     const current = await prisma.tenantBilling.findUnique({ where: { tenantId } });
-    if (!current) {
-      return res.status(404).json({ error: "Billing não encontrado (tenantBilling missing)" });
-    }
+    if (!current) return res.status(404).json({ error: "Billing não encontrado (tenantBilling missing)" });
 
     const finalIsFree = isFree !== undefined ? isFree : current.isFree;
     const finalChargeEnabled =
-      finalIsFree === true
-        ? false
-        : chargeEnabledRaw !== undefined
-          ? chargeEnabledRaw
-          : current.chargeEnabled;
+      finalIsFree === true ? false : (chargeEnabledRaw !== undefined ? chargeEnabledRaw : current.chargeEnabled);
+
+    // ✅ se virar paid, força bloquear até pagar
+    const nextAccessStatus =
+      finalIsFree === true ? "ACTIVE" : (current.accessStatus === "ACTIVE" ? "ACTIVE" : "PENDING_PAYMENT");
 
     const updated = await prisma.tenantBilling.update({
       where: { tenantId },
@@ -697,7 +584,8 @@ router.patch("/:id/billing", async (req, res) => {
         billingEmail,
         graceDaysAfterDue,
         asaasGroupName,
-        asaasCustomerAccountGroup
+        asaasCustomerAccountGroup,
+        accessStatus: nextAccessStatus
       }
     });
 
@@ -710,7 +598,7 @@ router.patch("/:id/billing", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants/:id/bootstrap
-// ✅ idempotente (não faz nada se Default já existe)
+// (igual ao teu — já com early-return se Default existir)
 // ===============================
 router.post("/:id/bootstrap", async (req, res) => {
   try {
@@ -731,14 +619,8 @@ router.post("/:id/bootstrap", async (req, res) => {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const defaultGroupName = "Default";
       const group = await tx.group.create({
-        data: {
-          tenantId,
-          name: defaultGroupName,
-          isActive: true,
-          maxChatsPerAgent: 3
-        }
+        data: { tenantId, name: "Default", isActive: true, maxChatsPerAgent: 3 }
       });
 
       let added = 0;
@@ -751,13 +633,7 @@ router.post("/:id/bootstrap", async (req, res) => {
         for (const m of admins) {
           await tx.groupMember.upsert({
             where: { tenantId_groupId_userId: { tenantId, groupId: group.id, userId: m.userId } },
-            create: {
-              tenantId,
-              groupId: group.id,
-              userId: m.userId,
-              role: "member",
-              isActive: true
-            },
+            create: { tenantId, groupId: group.id, userId: m.userId, role: "member", isActive: true },
             update: { isActive: true }
           });
           added += 1;
@@ -776,7 +652,7 @@ router.post("/:id/bootstrap", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants/:id/billing/sync
-// (continua como stub)
+// (mantive stub)
 // ===============================
 router.post("/:id/billing/sync", async (req, res) => {
   try {
@@ -797,8 +673,7 @@ router.post("/:id/billing/sync", async (req, res) => {
       data: {
         status: "PENDING_SYNC",
         asaasGroupName: tenant.billing.asaasGroupName || defaults.asaasGroupName,
-        asaasCustomerAccountGroup:
-          tenant.billing.asaasCustomerAccountGroup || defaults.asaasCustomerAccountGroup
+        asaasCustomerAccountGroup: tenant.billing.asaasCustomerAccountGroup || defaults.asaasCustomerAccountGroup
       }
     });
 
@@ -816,18 +691,13 @@ router.post("/:id/billing/sync", async (req, res) => {
 
     const updated = await prisma.tenantBilling.update({
       where: { tenantId },
-      data: {
-        status: nextStatus,
-        lastError,
-        lastSyncAt: new Date()
-      }
+      data: { status: nextStatus, lastError, lastSyncAt: new Date() }
     });
 
     res.json({
       ok: true,
       tenantId,
-      note:
-        "Sync Asaas stub aplicado. Próximo passo: implementar assinatura/cobrança automática se necessário.",
+      note: "Sync stub aplicado.",
       billing: updated
     });
   } catch (err) {
