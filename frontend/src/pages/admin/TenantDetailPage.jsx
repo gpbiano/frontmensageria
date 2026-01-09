@@ -1,14 +1,23 @@
 // frontend/src/pages/admin/TenantDetailPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { fetchTenantAdmin, updateTenantAdmin, deleteTenantAdmin } from "../../api/admin.js";
+import {
+  fetchTenantAdmin,
+  updateTenantAdmin,
+  updateTenantBillingAdmin,
+  syncTenantBillingAdmin,
+  bootstrapTenantAdmin,
+  deleteTenantAdmin
+} from "../../api/admin.js";
 import "../../styles/admin.css";
 
+function safeTrim(s) {
+  return String(s || "").trim();
+}
 function onlyDigits(s) {
   const v = String(s || "").replace(/\D+/g, "");
   return v || "";
 }
-
 function toIsoLocalInput(v) {
   if (!v) return "";
   const d = new Date(v);
@@ -18,18 +27,12 @@ function toIsoLocalInput(v) {
     d.getMinutes()
   )}`;
 }
-
 function fromIsoLocalInput(v) {
   if (!v) return null;
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
 }
-
-function safeTrim(s) {
-  return String(s || "").trim();
-}
-
 function trimOrNull(s) {
   const v = safeTrim(s);
   return v ? v : null;
@@ -42,19 +45,28 @@ export default function TenantDetailPage() {
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [booting, setBooting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const [err, setErr] = useState("");
   const [okMsg, setOkMsg] = useState("");
 
+  // ✅ backend deve retornar hasDefaultGroup
+  const [hasDefaultGroup, setHasDefaultGroup] = useState(false);
+
   // =============================
-  // Form (editável)
+  // Form state (tenant)
   // =============================
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [isActive, setIsActive] = useState(true);
 
-  // CompanyProfile (opcional)
+  // =============================
+  // CompanyProfile (read-only no teu backend via PATCH /admin/tenants/:id)
+  // GET traz, mas o PATCH não atualiza companyProfile.
+  // Então aqui exibimos como READ-ONLY pra não enganar o superAdmin.
+  // =============================
   const [legalName, setLegalName] = useState("");
   const [tradeName, setTradeName] = useState("");
   const [cnpj, setCnpj] = useState("");
@@ -70,26 +82,31 @@ export default function TenantDetailPage() {
   const [state, setState] = useState("");
   const [country, setCountry] = useState("BR");
 
-  // Billing (opcional)
+  // =============================
+  // Billing (editável via PATCH /admin/tenants/:id/billing)
+  // =============================
   const [planCode, setPlanCode] = useState("free");
+  const [pricingRef, setPricingRef] = useState("");
   const [isFree, setIsFree] = useState(true);
   const [chargeEnabled, setChargeEnabled] = useState(false);
   const [billingCycle, setBillingCycle] = useState("MONTHLY");
   const [preferredMethod, setPreferredMethod] = useState("UNDEFINED");
   const [billingEmail, setBillingEmail] = useState("");
-  const [trialEndsAt, setTrialEndsAt] = useState("");
   const [graceDaysAfterDue, setGraceDaysAfterDue] = useState(30);
 
-  // =============================
-  // Regras internas / automático (read-only)
-  // =============================
+  // espelho billing (read-only)
+  const [provider, setProvider] = useState("");
+  const [billingStatus, setBillingStatus] = useState("");
   const [accessStatus, setAccessStatus] = useState("");
+  const [trialEndsAt, setTrialEndsAt] = useState("");
   const [lastPaymentStatus, setLastPaymentStatus] = useState("");
   const [lastInvoiceUrl, setLastInvoiceUrl] = useState("");
   const [lastBankSlipUrl, setLastBankSlipUrl] = useState("");
   const [lastPixQrCode, setLastPixQrCode] = useState("");
   const [lastPixPayload, setLastPixPayload] = useState("");
   const [nextChargeDueDate, setNextChargeDueDate] = useState("");
+  const [lastError, setLastError] = useState("");
+  const [lastSyncAt, setLastSyncAt] = useState("");
 
   const payUrl = useMemo(() => {
     return String(lastInvoiceUrl || "").trim() || String(lastBankSlipUrl || "").trim() || "";
@@ -100,6 +117,7 @@ export default function TenantDetailPage() {
       setErr("ID inválido.");
       return;
     }
+
     setErr("");
     setOkMsg("");
     setLoading(true);
@@ -107,18 +125,22 @@ export default function TenantDetailPage() {
     try {
       const resp = await fetchTenantAdmin(id);
       const data = resp?.data || resp || {};
-      const t = data?.tenant || data;
+
+      const t = data?.tenant || data || {};
+      const cp = data?.companyProfile || t?.companyProfile || null;
+      const b = data?.billing || t?.billing || null;
 
       setName(String(t?.name || ""));
       setSlug(String(t?.slug || ""));
       setIsActive(t?.isActive !== false);
 
-      const cp = t?.companyProfile || t?.company || t?.profile || null;
+      // ✅ companyProfile exibimos read-only (PATCH do teu router não atualiza cp)
       setLegalName(String(cp?.legalName || ""));
       setTradeName(String(cp?.tradeName || ""));
       setCnpj(String(cp?.cnpj || ""));
       setIe(String(cp?.ie || ""));
       setIm(String(cp?.im || ""));
+
       setPostalCode(String(cp?.postalCode || ""));
       setAddress(String(cp?.address || ""));
       setAddressNumber(String(cp?.addressNumber || ""));
@@ -128,25 +150,38 @@ export default function TenantDetailPage() {
       setState(String(cp?.state || ""));
       setCountry(String(cp?.country || "BR"));
 
-      const b = t?.billing || null;
+      // ✅ billing editável
       setPlanCode(String(b?.planCode || "free"));
+      setPricingRef(String(b?.pricingRef || ""));
       setIsFree(Boolean(b?.isFree ?? true));
       setChargeEnabled(Boolean(b?.chargeEnabled ?? false));
       setBillingCycle(String(b?.billingCycle || "MONTHLY"));
       setPreferredMethod(String(b?.preferredMethod || "UNDEFINED"));
       setBillingEmail(String(b?.billingEmail || ""));
-      setTrialEndsAt(toIsoLocalInput(b?.trialEndsAt));
       setGraceDaysAfterDue(Number(b?.graceDaysAfterDue || 30));
 
+      // espelho
+      setProvider(String(b?.provider || ""));
+      setBillingStatus(String(b?.status || ""));
       setAccessStatus(String(b?.accessStatus || ""));
+      setTrialEndsAt(toIsoLocalInput(b?.trialEndsAt));
       setLastPaymentStatus(String(b?.lastPaymentStatus || ""));
       setLastInvoiceUrl(String(b?.lastInvoiceUrl || ""));
       setLastBankSlipUrl(String(b?.lastBankSlipUrl || ""));
       setLastPixQrCode(String(b?.lastPixQrCode || ""));
       setLastPixPayload(String(b?.lastPixPayload || ""));
       setNextChargeDueDate(String(b?.nextChargeDueDate || ""));
+      setLastError(String(b?.lastError || ""));
+      setLastSyncAt(String(b?.lastSyncAt || ""));
+
+      // ✅ novo campo do backend (pra desabilitar botão)
+      setHasDefaultGroup(Boolean(data?.hasDefaultGroup));
     } catch (e) {
-      const msg = e?.response?.data?.error || e?.response?.data?.message || e?.message || "Falha ao carregar.";
+      const msg =
+        e?.response?.data?.error ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Falha ao carregar.";
       setErr(String(msg));
     } finally {
       setLoading(false);
@@ -164,139 +199,168 @@ export default function TenantDetailPage() {
     return Boolean(n && s && !saving && !loading && !deleting);
   }, [name, slug, saving, loading, deleting]);
 
-  function buildPayload() {
-    return {
-      tenant: {
-        name: safeTrim(name),
-        slug: safeTrim(slug),
-        isActive: Boolean(isActive)
-      },
-
-      // ✅ opcional: manda null quando vazio (não obriga preenchimento)
-      companyProfile: {
-        legalName: trimOrNull(legalName),
-        tradeName: trimOrNull(tradeName),
-        cnpj: onlyDigits(cnpj) || null,
-        ie: trimOrNull(ie),
-        im: trimOrNull(im),
-
-        postalCode: onlyDigits(postalCode) || null,
-        address: trimOrNull(address),
-        addressNumber: trimOrNull(addressNumber),
-        complement: trimOrNull(complement),
-        province: trimOrNull(province),
-        city: trimOrNull(city),
-        state: trimOrNull(state),
-        country: safeTrim(country || "BR") || "BR"
-      },
-
-      billing: {
-        planCode: safeTrim(planCode || "free") || "free",
-        isFree: Boolean(isFree),
-        chargeEnabled: Boolean(chargeEnabled),
-        billingCycle: String(billingCycle || "MONTHLY"),
-        preferredMethod: String(preferredMethod || "UNDEFINED"),
-        billingEmail: trimOrNull(billingEmail),
-        trialEndsAt: fromIsoLocalInput(trialEndsAt),
-        graceDaysAfterDue: Number(graceDaysAfterDue || 30)
-      }
-    };
-  }
-
-  async function save(e) {
+  async function saveAll(e) {
     e?.preventDefault?.();
     setErr("");
     setOkMsg("");
     setSaving(true);
 
     try {
-      await updateTenantAdmin(id, buildPayload());
+      // 1) tenant patch (router aceita: name/slug/isActive)
+      const tenantPayload = {
+        name: safeTrim(name),
+        slug: safeTrim(slug),
+        isActive: Boolean(isActive)
+      };
+      await updateTenantAdmin(id, tenantPayload);
+
+      // 2) billing patch (router aceita: vários campos)
+      // regra do backend: isFree true => chargeEnabled false (vamos respeitar já no front)
+      const finalIsFree = Boolean(isFree);
+      const finalChargeEnabled = finalIsFree ? false : Boolean(chargeEnabled);
+
+      const billingPayload = {
+        planCode: safeTrim(planCode) || null,
+        pricingRef: safeTrim(pricingRef) || null,
+        isFree: finalIsFree,
+        chargeEnabled: finalChargeEnabled,
+        billingCycle: String(billingCycle || "MONTHLY"),
+        preferredMethod: String(preferredMethod || "UNDEFINED"),
+        billingEmail: trimOrNull(billingEmail),
+        graceDaysAfterDue: Math.max(1, Number(graceDaysAfterDue || 30))
+      };
+
+      await updateTenantBillingAdmin(id, billingPayload);
+
       setOkMsg("Salvo com sucesso.");
       await load();
     } catch (e2) {
-      const msg = e2?.response?.data?.error || e2?.response?.data?.message || e2?.message || "Falha ao salvar.";
+      const msg =
+        e2?.response?.data?.error ||
+        e2?.response?.data?.message ||
+        e2?.message ||
+        "Falha ao salvar.";
       setErr(String(msg));
     } finally {
       setSaving(false);
     }
   }
 
-  async function disableTenant() {
-    // ✅ botão explícito "Desativar" pra evitar erro de operação
-    if (!id) return;
+  async function runBootstrap() {
     setErr("");
     setOkMsg("");
-
-    const ok = window.confirm(
-      "Deseja DESATIVAR este tenant?\n\nIsso bloqueia o acesso do cliente ao sistema (sem apagar dados)."
-    );
-    if (!ok) return;
-
-    setSaving(true);
+    setBooting(true);
     try {
-      const payload = buildPayload();
-      payload.tenant.isActive = false;
-      await updateTenantAdmin(id, payload);
-      setOkMsg("Tenant desativado com sucesso.");
-      await load();
-    } catch (e2) {
-      const msg = e2?.response?.data?.error || e2?.response?.data?.message || e2?.message || "Falha ao desativar.";
+      const resp = await bootstrapTenantAdmin(id, { addAdminsToGroup: true });
+      const data = resp?.data || resp || {};
+      const added = data?.bootstrap?.addedAdmins ?? 0;
+
+      setOkMsg(`Estrutura inicial criada/validada. Admins adicionados: ${added}`);
+      setHasDefaultGroup(true); // ✅ desabilita imediatamente no front
+    } catch (e) {
+      const msg =
+        e?.response?.data?.error ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Falha ao criar estrutura inicial.";
       setErr(String(msg));
     } finally {
-      setSaving(false);
+      setBooting(false);
     }
   }
 
-  async function onDelete() {
-    if (!id) return;
+  async function runSyncBilling() {
+    setErr("");
+    setOkMsg("");
+    setSyncing(true);
+    try {
+      const resp = await syncTenantBillingAdmin(id);
+      const data = resp?.data || resp || {};
+      const st = data?.billing?.status || "OK";
+      setOkMsg(`Sincronização disparada. Status: ${st}`);
+      await load();
+    } catch (e) {
+      const msg =
+        e?.response?.data?.error ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Falha ao sincronizar billing.";
+      setErr(String(msg));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function doDeleteTenant() {
+    const sure = window.confirm(
+      "Tem certeza que deseja APAGAR esta empresa?\n\nEssa ação é irreversível e removerá dados relacionados (cascade)."
+    );
+    if (!sure) return;
 
     setErr("");
     setOkMsg("");
-
-    const confirm1 = window.confirm(
-      "Tem certeza que deseja APAGAR esta empresa (tenant)?\n\n⚠️ Isso pode remover dados e acessos. Essa ação pode ser irreversível."
-    );
-    if (!confirm1) return;
-
-    const phrase = safeTrim(slug);
-    const typed = window.prompt(`Para confirmar, digite o SLUG do tenant:\n\n${phrase}`, "");
-    if (safeTrim(typed) !== phrase) {
-      setErr("Confirmação inválida. Operação cancelada.");
-      return;
-    }
-
     setDeleting(true);
+
     try {
       await deleteTenantAdmin(id);
       nav("/admin/cadastros");
-    } catch (e2) {
-      const msg = e2?.response?.data?.error || e2?.response?.data?.message || e2?.message || "Falha ao apagar.";
+    } catch (e) {
+      const msg =
+        e?.response?.data?.error ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Falha ao deletar.";
       setErr(String(msg));
     } finally {
       setDeleting(false);
     }
   }
 
+  const statusBadgeClass = useMemo(() => {
+    // tentativa de mapear accessStatus pra cores
+    const s = String(accessStatus || "").toUpperCase();
+    if (s === "ACTIVE") return "success";
+    if (s === "TRIALING") return "warning";
+    if (s === "BLOCKED" || s === "SUSPENDED") return "danger";
+    return "";
+  }, [accessStatus]);
+
   return (
     <div>
       <div className="admin-header-row">
-        <h1 className="admin-h1">Editar Empresa</h1>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <h1 className="admin-h1" style={{ margin: 0 }}>
+            Editar Empresa
+          </h1>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span className="admin-badge">
+              <strong style={{ fontWeight: 800 }}>Tenant:</strong> {id}
+            </span>
+
+            {accessStatus && (
+              <span className={`admin-badge ${statusBadgeClass}`}>
+                <strong style={{ fontWeight: 800 }}>Acesso:</strong> {accessStatus}
+              </span>
+            )}
+
+            {billingStatus && (
+              <span className="admin-badge">
+                <strong style={{ fontWeight: 800 }}>Billing:</strong> {billingStatus}
+              </span>
+            )}
+
+            {isActive === false && <span className="admin-badge danger">Inativo</span>}
+          </div>
+        </div>
 
         <div className="admin-actions">
-          <button className="admin-link" type="button" onClick={() => nav("/admin/cadastros")} disabled={saving || deleting}>
+          <button className="admin-link" type="button" onClick={() => nav("/admin/cadastros")} disabled={loading || saving}>
             Voltar
           </button>
 
-          <button className="admin-link" type="button" onClick={load} disabled={loading || saving || deleting}>
-            Recarregar
-          </button>
-
-          <button className="admin-primary" type="button" onClick={save} disabled={!canSave}>
+          <button className="admin-primary" type="button" onClick={saveAll} disabled={!canSave}>
             {saving ? "Salvando..." : "Salvar"}
-          </button>
-
-          <button className="admin-danger" type="button" onClick={onDelete} disabled={deleting || saving || loading}>
-            {deleting ? "Apagando..." : "Apagar"}
           </button>
         </div>
       </div>
@@ -304,19 +368,21 @@ export default function TenantDetailPage() {
       {loading && <div style={{ marginBottom: 12, opacity: 0.8 }}>Carregando...</div>}
 
       {err && (
-        <div style={{ marginBottom: 12 }} className="admin-badge">
+        <div style={{ marginBottom: 12 }} className="admin-badge danger">
           {err}
         </div>
       )}
 
       {okMsg && (
-        <div style={{ marginBottom: 12 }} className="admin-badge" role="status">
+        <div style={{ marginBottom: 12 }} className="admin-badge success" role="status">
           {okMsg}
         </div>
       )}
 
-      <form className="admin-form" onSubmit={save}>
-        {/* DADOS BÁSICOS */}
+      <form className="admin-form" onSubmit={saveAll}>
+        {/* =============================
+            DADOS BÁSICOS
+        ============================== */}
         <div className="admin-section-title">Dados do tenant</div>
 
         <div className="admin-grid-2">
@@ -336,98 +402,95 @@ export default function TenantDetailPage() {
             Ativo
           </label>
           <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
-
-          <button
-            className="admin-link"
-            type="button"
-            onClick={disableTenant}
-            disabled={saving || loading || deleting || !isActive}
-            title="Desativa sem apagar dados"
-            style={{ marginLeft: 8 }}
-          >
-            Desativar
-          </button>
-
-          <span style={{ marginLeft: 8, fontSize: 12, opacity: 0.75 }}>
-            {isActive ? "Ativo (cliente consegue acessar)" : "Desativado (acesso bloqueado)"}
+          <span style={{ fontSize: 12, opacity: 0.75 }}>
+            {isActive ? "Cliente habilitado" : "Cliente desativado"}
           </span>
         </div>
 
-        {/* PERFIL DA EMPRESA (OPCIONAL) */}
-        <div className="admin-section-title">Perfil da empresa (opcional)</div>
+        {/* =============================
+            PERFIL DA EMPRESA (READ-ONLY)
+        ============================== */}
+        <div className="admin-section-title">Perfil da empresa (somente leitura)</div>
 
         <div className="admin-grid-2">
           <div>
             <label className="admin-label">Razão Social</label>
-            <input className="admin-field" value={legalName} onChange={(e) => setLegalName(e.target.value)} />
+            <input className="admin-field" value={legalName} readOnly />
           </div>
           <div>
             <label className="admin-label">Nome Fantasia</label>
-            <input className="admin-field" value={tradeName} onChange={(e) => setTradeName(e.target.value)} />
+            <input className="admin-field" value={tradeName} readOnly />
           </div>
         </div>
 
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CNPJ</label>
-            <input className="admin-field" value={cnpj} onChange={(e) => setCnpj(e.target.value)} placeholder="Somente números" />
+            <input className="admin-field" value={onlyDigits(cnpj)} readOnly />
           </div>
           <div>
             <label className="admin-label">IE</label>
-            <input className="admin-field" value={ie} onChange={(e) => setIe(e.target.value)} />
+            <input className="admin-field" value={ie} readOnly />
           </div>
           <div>
             <label className="admin-label">IM</label>
-            <input className="admin-field" value={im} onChange={(e) => setIm(e.target.value)} />
+            <input className="admin-field" value={im} readOnly />
           </div>
         </div>
 
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CEP</label>
-            <input className="admin-field" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} placeholder="Somente números" />
+            <input className="admin-field" value={onlyDigits(postalCode)} readOnly />
           </div>
           <div>
             <label className="admin-label">Número</label>
-            <input className="admin-field" value={addressNumber} onChange={(e) => setAddressNumber(e.target.value)} />
+            <input className="admin-field" value={addressNumber} readOnly />
           </div>
           <div>
             <label className="admin-label">Complemento</label>
-            <input className="admin-field" value={complement} onChange={(e) => setComplement(e.target.value)} />
+            <input className="admin-field" value={complement} readOnly />
           </div>
         </div>
 
         <div className="full">
           <label className="admin-label">Endereço</label>
-          <input className="admin-field" value={address} onChange={(e) => setAddress(e.target.value)} />
+          <input className="admin-field" value={address} readOnly />
         </div>
 
         <div className="admin-grid-4">
           <div>
             <label className="admin-label">Bairro</label>
-            <input className="admin-field" value={province} onChange={(e) => setProvince(e.target.value)} />
+            <input className="admin-field" value={province} readOnly />
           </div>
           <div>
             <label className="admin-label">Cidade</label>
-            <input className="admin-field" value={city} onChange={(e) => setCity(e.target.value)} />
+            <input className="admin-field" value={city} readOnly />
           </div>
           <div>
             <label className="admin-label">UF</label>
-            <input className="admin-field" value={state} onChange={(e) => setState(e.target.value)} />
+            <input className="admin-field" value={state} readOnly />
           </div>
           <div>
             <label className="admin-label">País</label>
-            <input className="admin-field" value={country} onChange={(e) => setCountry(e.target.value)} />
+            <input className="admin-field" value={country} readOnly />
           </div>
         </div>
 
-        {/* BILLING (OPCIONAL) */}
-        <div className="admin-section-title">Billing (opcional)</div>
+        {/* =============================
+            BILLING (EDITÁVEL)
+        ============================== */}
+        <div className="admin-section-title">Billing (Asaas)</div>
 
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">Plano</label>
             <input className="admin-field" value={planCode} onChange={(e) => setPlanCode(e.target.value)} />
+          </div>
+
+          <div>
+            <label className="admin-label">Pricing Ref (opcional)</label>
+            <input className="admin-field" value={pricingRef} onChange={(e) => setPricingRef(e.target.value)} />
           </div>
 
           <div>
@@ -438,9 +501,11 @@ export default function TenantDetailPage() {
               <option value="YEARLY">Anual</option>
             </select>
           </div>
+        </div>
 
+        <div className="admin-grid-3">
           <div>
-            <label className="admin-label">Método</label>
+            <label className="admin-label">Método preferido</label>
             <select className="admin-field" value={preferredMethod} onChange={(e) => setPreferredMethod(e.target.value)}>
               <option value="UNDEFINED">Indefinido</option>
               <option value="BOLETO">Boleto</option>
@@ -448,52 +513,87 @@ export default function TenantDetailPage() {
               <option value="CREDIT_CARD">Cartão</option>
             </select>
           </div>
-        </div>
 
-        <div className="admin-grid-3">
-          <div className="admin-row" style={{ alignItems: "center", gap: 10 }}>
-            <label className="admin-label" style={{ margin: 0 }}>Is Free</label>
-            <input type="checkbox" checked={isFree} onChange={(e) => setIsFree(e.target.checked)} />
-          </div>
-
-          <div className="admin-row" style={{ alignItems: "center", gap: 10 }}>
-            <label className="admin-label" style={{ margin: 0 }}>Cobrança habilitada</label>
-            <input type="checkbox" checked={chargeEnabled} onChange={(e) => setChargeEnabled(e.target.checked)} />
-          </div>
-
-          <div>
-            <label className="admin-label">Grace days</label>
+          <div className="admin-row" style={{ alignItems: "center", gap: 10, marginTop: 0 }}>
+            <label className="admin-label" style={{ margin: 0 }}>
+              Is Free
+            </label>
             <input
-              className="admin-field"
-              type="number"
-              min="0"
-              value={graceDaysAfterDue}
-              onChange={(e) => setGraceDaysAfterDue(Number(e.target.value || 0))}
+              type="checkbox"
+              checked={isFree}
+              onChange={(e) => {
+                const v = e.target.checked;
+                setIsFree(v);
+                if (v) setChargeEnabled(false); // ✅ regra do backend
+              }}
+            />
+          </div>
+
+          <div className="admin-row" style={{ alignItems: "center", gap: 10, marginTop: 0 }}>
+            <label className="admin-label" style={{ margin: 0 }}>
+              Cobrança habilitada
+            </label>
+            <input
+              type="checkbox"
+              checked={chargeEnabled}
+              disabled={isFree === true}
+              onChange={(e) => setChargeEnabled(e.target.checked)}
             />
           </div>
         </div>
 
-        <div className="admin-grid-2">
+        <div className="admin-grid-3">
           <div>
-            <label className="admin-label">E-mail de cobrança</label>
-            <input className="admin-field" value={billingEmail} onChange={(e) => setBillingEmail(e.target.value)} />
+            <label className="admin-label">Grace days (atraso)</label>
+            <input
+              className="admin-field"
+              type="number"
+              min="1"
+              value={graceDaysAfterDue}
+              onChange={(e) => setGraceDaysAfterDue(Number(e.target.value || 30))}
+            />
           </div>
 
-          <div>
-            <label className="admin-label">Trial ends at</label>
-            <input className="admin-field" type="datetime-local" value={trialEndsAt} onChange={(e) => setTrialEndsAt(e.target.value)} />
+          <div className="admin-grid-2" style={{ gridColumn: "span 2", padding: 0 }}>
+            <div>
+              <label className="admin-label">E-mail de cobrança</label>
+              <input
+                className="admin-field"
+                value={billingEmail}
+                onChange={(e) => setBillingEmail(e.target.value)}
+                placeholder="financeiro@empresa.com.br"
+              />
+            </div>
+            <div>
+              <label className="admin-label">Trial ends at (espelho)</label>
+              <input className="admin-field" value={trialEndsAt} readOnly />
+            </div>
           </div>
         </div>
 
-        {/* REGRAS INTERNAS (AUTOMÁTICO) */}
-        <div className="admin-section-title">Regras internas (automático)</div>
+        {/* =============================
+            STATUS (READ-ONLY)
+        ============================== */}
+        <div className="admin-section-title">Status (espelho)</div>
 
         <div className="admin-grid-3">
+          <div>
+            <label className="admin-label">Provider</label>
+            <input className="admin-field" value={provider} readOnly />
+          </div>
+
+          <div>
+            <label className="admin-label">Billing Status</label>
+            <input className="admin-field" value={billingStatus} readOnly />
+          </div>
+
           <div>
             <label className="admin-label">Access Status</label>
             <input className="admin-field" value={accessStatus} readOnly />
           </div>
+        </div>
 
+        <div className="admin-grid-3">
           <div>
             <label className="admin-label">Last Payment Status</label>
             <input className="admin-field" value={lastPaymentStatus} readOnly />
@@ -501,50 +601,52 @@ export default function TenantDetailPage() {
 
           <div>
             <label className="admin-label">Next Charge Due Date</label>
-            <input className="admin-field" value={nextChargeDueDate || ""} readOnly />
+            <input className="admin-field" value={nextChargeDueDate ? String(nextChargeDueDate) : ""} readOnly />
+          </div>
+
+          <div>
+            <label className="admin-label">Last Sync At</label>
+            <input className="admin-field" value={lastSyncAt ? String(lastSyncAt) : ""} readOnly />
           </div>
         </div>
 
-        <div className="admin-grid-2">
-          <div>
-            <label className="admin-label">Invoice URL</label>
-            <input className="admin-field" value={lastInvoiceUrl} readOnly />
-          </div>
-          <div>
-            <label className="admin-label">Boleto URL</label>
-            <input className="admin-field" value={lastBankSlipUrl} readOnly />
-          </div>
-        </div>
-
-        {(lastPixQrCode || lastPixPayload) && (
-          <div className="full" style={{ marginTop: 10 }}>
-            {lastPixQrCode && (
-              <div style={{ marginBottom: 10 }}>
-                <label className="admin-label">PIX QR Code</label>
-                <input className="admin-field" value={lastPixQrCode} readOnly />
-              </div>
-            )}
-            {lastPixPayload && (
-              <div>
-                <label className="admin-label">PIX Payload</label>
-                <input className="admin-field" value={lastPixPayload} readOnly />
-              </div>
-            )}
+        {lastError && (
+          <div className="full">
+            <label className="admin-label">Last Error</label>
+            <input className="admin-field" value={lastError} readOnly />
           </div>
         )}
 
-        {/* Footer */}
-        <div className="full admin-row" style={{ gap: 10 }}>
-          <button className="admin-primary" disabled={!canSave} type="submit">
-            {saving ? "Salvando..." : "Salvar"}
+        {/* =============================
+            AÇÕES ADMINISTRATIVAS
+        ============================== */}
+        <div className="admin-section-title">Ações administrativas</div>
+
+        <div className="full admin-row" style={{ gap: 10, marginTop: 0 }}>
+          <button
+            className="admin-link"
+            type="button"
+            onClick={runBootstrap}
+            disabled={booting || loading || saving || hasDefaultGroup}
+            title={
+              hasDefaultGroup
+                ? "Estrutura inicial já criada (grupo Default já existe)."
+                : "Cria o grupo padrão e adiciona os administradores."
+            }
+          >
+            {hasDefaultGroup ? "Estrutura inicial já criada" : booting ? "Criando..." : "Criar estrutura inicial"}
           </button>
 
-          <button className="admin-link" type="button" onClick={load} disabled={loading || saving || deleting}>
+          <button className="admin-link" type="button" onClick={runSyncBilling} disabled={syncing || loading || saving}>
+            {syncing ? "Sincronizando..." : "Sincronizar billing"}
+          </button>
+
+          <button className="admin-link" type="button" onClick={load} disabled={loading || saving}>
             Recarregar
           </button>
 
           <a
-            className="admin-link"
+            className={"admin-link" + (!payUrl ? " is-disabled" : "")}
             href={payUrl || undefined}
             target={payUrl ? "_blank" : undefined}
             rel={payUrl ? "noreferrer" : undefined}
@@ -555,11 +657,50 @@ export default function TenantDetailPage() {
             style={{
               marginLeft: "auto",
               pointerEvents: payUrl ? "auto" : "none",
-              opacity: payUrl ? 1 : 0.45
+              opacity: payUrl ? 1 : 0.55
             }}
           >
             Pagar
           </a>
+        </div>
+
+        {(lastPixQrCode || lastPixPayload) && (
+          <div className="full" style={{ marginTop: 10 }}>
+            <div className="admin-section-title">PIX</div>
+            {lastPixQrCode && (
+              <div style={{ marginBottom: 8 }}>
+                <label className="admin-label">QR Code</label>
+                <input className="admin-field" value={lastPixQrCode} readOnly />
+              </div>
+            )}
+            {lastPixPayload && (
+              <div>
+                <label className="admin-label">Payload</label>
+                <input className="admin-field" value={lastPixPayload} readOnly />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =============================
+            DANGER ZONE (DELETE)
+        ============================== */}
+        <div className="full admin-danger-zone">
+          <div>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Zona de risco</div>
+            <div className="hint">
+              Apagar a empresa remove dados relacionados (cascade). Use somente quando tiver certeza.
+            </div>
+          </div>
+
+          <button
+            className="admin-danger-solid"
+            type="button"
+            onClick={doDeleteTenant}
+            disabled={deleting || loading || saving}
+          >
+            {deleting ? "Apagando..." : "Apagar empresa"}
+          </button>
         </div>
       </form>
     </div>
