@@ -1,4 +1,4 @@
-// backend/src/routes/admin/tenantsAdminRouter.js
+// backend/src/routes/admin/adminTenantsRouter.js
 import express from "express";
 import fetch from "node-fetch";
 import { prisma } from "../../lib/prisma.js";
@@ -186,15 +186,12 @@ async function sendWelcomeInviteEmail({ to, tenantName, inviteUrl, expiresAt }) 
 
 // ===============================
 // Pricing por valor fixo
-// - aceita "1,00" / "99.90" vindo do front no planCode (se você estiver usando assim)
-// - se não for número, cai no mapa por plano/ciclo
 // ===============================
 function parseFixedValueFromPlanCode(planCodeRaw) {
   const s = safeStr(planCodeRaw);
   if (!s) return null;
 
-  // aceita "1,00" ou "99.90" ou "199"
-  const normalized = s.replace(/\./g, "").replace(",", "."); // "1.234,56" -> "1234.56"
+  const normalized = s.replace(/\./g, "").replace(",", ".");
   if (!/^\d+(\.\d+)?$/.test(normalized)) return null;
 
   const n = Number(normalized);
@@ -202,8 +199,6 @@ function parseFixedValueFromPlanCode(planCodeRaw) {
   return n;
 }
 
-// Você pode sobrescrever via .env com JSON:
-// BILLING_PLAN_PRICES={"starter":{"MONTHLY":99.9,"YEARLY":999},"pro":{"MONTHLY":199.9}}
 function getPlanPriceMap() {
   const raw = safeStr(process.env.BILLING_PLAN_PRICES);
   if (!raw) return null;
@@ -242,7 +237,7 @@ function nextDueDateISO(daysFromNow = 1) {
 }
 
 // ===============================
-// Default group detection (UX bootstrap)
+// Default group detection
 // ===============================
 async function hasDefaultGroup(tenantId) {
   const n = await prisma.group.count({
@@ -330,10 +325,6 @@ router.get("/:id", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants
-// - cria customer + subscription
-// - regra: cliente só acessa após pagar
-//   => paid (isFree=false) nasce BLOCKED com blockedReason awaiting_first_payment
-// - e-mail: você disse que envia no webhook PAID (ok)
 // ===============================
 router.post("/", async (req, res) => {
   try {
@@ -364,12 +355,10 @@ router.post("/", async (req, res) => {
     const now = new Date();
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1) tenant
       const tenant = await tx.tenant.create({
         data: { name, slug, isActive: isActiveRequested }
       });
 
-      // 2) user global
       const user = await tx.user.upsert({
         where: { email: adminEmail },
         create: {
@@ -384,14 +373,12 @@ router.post("/", async (req, res) => {
         }
       });
 
-      // 3) membership
       const membership = await tx.userTenant.upsert({
         where: { userId_tenantId: { userId: user.id, tenantId: tenant.id } },
         create: { userId: user.id, tenantId: tenant.id, role: "admin", isActive: true },
         update: { role: "admin", isActive: true }
       });
 
-      // 4) companyProfile (opcional)
       let cp = null;
       if (companyProfile) {
         const cnpj = normalizeCnpj(companyProfile.cnpj);
@@ -437,20 +424,13 @@ router.post("/", async (req, res) => {
         });
       }
 
-      // 5) billing (cria sempre)
       const defaults = asaasGroupDefaults();
 
       const isFree = billing?.isFree !== undefined ? Boolean(billing.isFree) : true;
-
-      // regra: free => chargeEnabled false sempre
       const chargeEnabled = isFree === true ? false : Boolean(billing?.chargeEnabled === true);
 
-      // trialEndsAt: mantém regra 7 dias (se não-free), mas acesso bloqueado até pagar
       const trialEndsAt = isFree ? null : addDays(7);
 
-      // ✅ REGRA DE ACESSO (SEM QUEBRAR ENUM):
-      // free => ACTIVE
-      // paid => BLOCKED (libera no webhook PAID)
       const accessStatus = isFree ? "ACTIVE" : "BLOCKED";
 
       const b = await tx.tenantBilling.upsert({
@@ -478,7 +458,6 @@ router.post("/", async (req, res) => {
           trialEndsAt,
           accessStatus,
 
-          // ✅ marca bloqueio inicial do "primeiro pagamento"
           blockedAt: isFree ? null : now,
           blockedReason: isFree ? null : "awaiting_first_payment",
 
@@ -490,7 +469,6 @@ router.post("/", async (req, res) => {
         update: {}
       });
 
-      // 6) token (sempre cria; e-mail você envia no webhook PAID)
       const expiresAt = addDays(inviteTtlDays);
       const passwordToken = await tx.passwordToken.create({
         data: {
@@ -505,9 +483,7 @@ router.post("/", async (req, res) => {
       return { tenant, user, membership, companyProfile: cp, billing: b, passwordToken };
     });
 
-    // ======================================================
-    // ASAAS: cria customer + subscription (fora da tx)
-    // ======================================================
+    // ASAAS create (fora tx)
     let asaas = { ok: false, reason: null };
 
     if (result.billing?.isFree === true) {
@@ -545,7 +521,6 @@ router.post("/", async (req, res) => {
 
           const cycle = String(result.billing?.billingCycle || "MONTHLY").toUpperCase();
 
-          // ✅ valor fixo: se planCode vier "1,00" (ou número), usa como value
           const fixedValue = parseFixedValueFromPlanCode(result.billing?.planCode);
           const planCode = fixedValue ? "custom" : (result.billing?.planCode || "starter");
           const value = fixedValue != null ? fixedValue : priceFor(planCode, cycle);
@@ -611,7 +586,6 @@ router.post("/", async (req, res) => {
         expiresAt: result.passwordToken.expiresAt,
         url: buildInviteUrl(result.passwordToken.token) || null
       },
-      // ✅ e-mail vai no webhook PAID (como você pediu)
       inviteEmail: { sent: false, reason: "sent_on_payment_webhook" },
       asaas
     });
@@ -631,13 +605,17 @@ router.post("/", async (req, res) => {
 
 // ===============================
 // PATCH /admin/tenants/:id
+// - agora atualiza tenant + companyProfile (se enviado)
 // ===============================
 router.patch("/:id", async (req, res) => {
   try {
     const id = safeStr(req.params.id);
+
     const name = req.body?.name != null ? safeStr(req.body.name) : undefined;
     const slug = req.body?.slug != null ? normalizeSlug(req.body.slug) : undefined;
     const isActive = req.body?.isActive;
+
+    const companyProfile = req.body?.companyProfile;
 
     const data = {};
     if (name !== undefined) {
@@ -652,8 +630,64 @@ router.patch("/:id", async (req, res) => {
     }
     if (isActive !== undefined) data.isActive = Boolean(isActive);
 
-    const updated = await prisma.tenant.update({ where: { id }, data });
-    res.json({ ok: true, tenant: updated });
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedTenant = await tx.tenant.update({ where: { id }, data });
+
+      let updatedCp = null;
+
+      if (companyProfile && typeof companyProfile === "object") {
+        const patch = {};
+
+        if (companyProfile.legalName !== undefined) patch.legalName = safeStr(companyProfile.legalName);
+        if (companyProfile.tradeName !== undefined) patch.tradeName = safeStr(companyProfile.tradeName) || null;
+        if (companyProfile.cnpj !== undefined) patch.cnpj = normalizeCnpj(companyProfile.cnpj) || "";
+        if (companyProfile.ie !== undefined) patch.ie = safeStr(companyProfile.ie) || null;
+        if (companyProfile.im !== undefined) patch.im = safeStr(companyProfile.im) || null;
+
+        if (companyProfile.postalCode !== undefined) patch.postalCode = safeStr(companyProfile.postalCode) || "";
+        if (companyProfile.address !== undefined) patch.address = safeStr(companyProfile.address) || "";
+        if (companyProfile.addressNumber !== undefined) patch.addressNumber = safeStr(companyProfile.addressNumber) || "";
+        if (companyProfile.complement !== undefined) patch.complement = safeStr(companyProfile.complement) || null;
+        if (companyProfile.province !== undefined) patch.province = safeStr(companyProfile.province) || null;
+        if (companyProfile.city !== undefined) patch.city = safeStr(companyProfile.city) || null;
+        if (companyProfile.state !== undefined) patch.state = safeStr(companyProfile.state) || null;
+        if (companyProfile.country !== undefined) patch.country = safeStr(companyProfile.country) || "BR";
+
+        if (Object.keys(patch).length > 0) {
+          const exists = await tx.tenantCompanyProfile.findUnique({ where: { tenantId: id } });
+
+          if (!exists) {
+            updatedCp = await tx.tenantCompanyProfile.create({
+              data: {
+                tenantId: id,
+                legalName: patch.legalName || "",
+                cnpj: patch.cnpj || "",
+                postalCode: patch.postalCode || "",
+                address: patch.address || "",
+                addressNumber: patch.addressNumber || "",
+                tradeName: patch.tradeName ?? null,
+                ie: patch.ie ?? null,
+                im: patch.im ?? null,
+                complement: patch.complement ?? null,
+                province: patch.province ?? null,
+                city: patch.city ?? null,
+                state: patch.state ?? null,
+                country: patch.country || "BR"
+              }
+            });
+          } else {
+            updatedCp = await tx.tenantCompanyProfile.update({
+              where: { tenantId: id },
+              data: patch
+            });
+          }
+        }
+      }
+
+      return { tenant: updatedTenant, companyProfile: updatedCp };
+    });
+
+    res.json({ ok: true, tenant: result.tenant, companyProfile: result.companyProfile });
   } catch (err) {
     logger.error({ err }, "admin.tenants.patch error");
     res.status(500).json({ error: "Falha ao atualizar tenant" });
@@ -685,7 +719,9 @@ router.patch("/:id/billing", async (req, res) => {
       req.body?.billingEmail !== undefined ? safeStr(req.body.billingEmail) || null : undefined;
 
     const graceDaysAfterDue =
-      req.body?.graceDaysAfterDue !== undefined ? Math.max(1, Number(req.body.graceDaysAfterDue)) : undefined;
+      req.body?.graceDaysAfterDue !== undefined
+        ? Math.max(1, Number(req.body.graceDaysAfterDue))
+        : undefined;
 
     const asaasGroupName =
       req.body?.asaasGroupName !== undefined
@@ -730,6 +766,119 @@ router.patch("/:id/billing", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "admin.tenants.billing.patch error");
     res.status(500).json({ error: "Falha ao atualizar billing" });
+  }
+});
+
+// ===============================
+// POST /admin/tenants/:id/billing/sync
+// - cria customer + subscription no Asaas para tenant existente
+// ===============================
+router.post("/:id/billing/sync", async (req, res) => {
+  try {
+    const tenantId = safeStr(req.params.id);
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      include: { companyProfile: true, billing: true }
+    });
+    if (!tenant) return res.status(404).json({ error: "Tenant não encontrado" });
+
+    const b = tenant.billing;
+    if (!b) return res.status(404).json({ error: "Billing não encontrado (tenantBilling missing)" });
+
+    if (b.isFree === true) {
+      const updated = await prisma.tenantBilling.update({
+        where: { tenantId },
+        data: { status: "SYNCED", lastError: null, lastSyncAt: new Date() }
+      });
+      return res.json({ ok: true, skipped: true, reason: "free_plan", billing: updated });
+    }
+
+    const cp = tenant.companyProfile;
+    if (!cp?.cnpj || !cp?.legalName) {
+      const updated = await prisma.tenantBilling.update({
+        where: { tenantId },
+        data: { status: "ERROR", lastError: "company_profile_missing_for_asaas", lastSyncAt: new Date() }
+      });
+      return res.status(400).json({ error: "company_profile_missing_for_asaas", billing: updated });
+    }
+
+    if (b.asaasCustomerId && b.asaasSubscriptionId) {
+      const updated = await prisma.tenantBilling.update({
+        where: { tenantId },
+        data: { status: "SYNCED", lastError: null, lastSyncAt: new Date() }
+      });
+      return res.json({ ok: true, alreadySynced: true, billing: updated });
+    }
+
+    try {
+      const customer = await asaasCreateCustomer({
+        name: cp.legalName,
+        cpfCnpj: cp.cnpj,
+        email: b.billingEmail || undefined,
+        postalCode: cp.postalCode || undefined,
+        address: cp.address || undefined,
+        addressNumber: cp.addressNumber || undefined,
+        complement: cp.complement || undefined,
+        province: cp.province || undefined,
+        city: cp.city || undefined,
+        state: cp.state || undefined
+      });
+
+      const cycle = String(b.billingCycle || "MONTHLY").toUpperCase();
+
+      const fixedValue = parseFixedValueFromPlanCode(b.planCode);
+      const planCode = fixedValue ? "custom" : (b.planCode || "starter");
+      const value = fixedValue != null ? fixedValue : priceFor(planCode, cycle);
+
+      const subscription = await asaasCreateSubscription({
+        customer: customer.id,
+        billingType: "UNDEFINED",
+        cycle,
+        value,
+        nextDueDate: nextDueDateISO(1),
+        description: `Assinatura GP Labs (${planCode})`,
+        externalReference: `tenant:${tenantId}`
+      });
+
+      const updated = await prisma.tenantBilling.update({
+        where: { tenantId },
+        data: {
+          status: "SYNCED",
+          asaasCustomerId: customer.id,
+          asaasSubscriptionId: subscription.id,
+          lastError: null,
+          lastSyncAt: new Date()
+        }
+      });
+
+      return res.json({
+        ok: true,
+        billing: updated,
+        asaas: {
+          env: asaasConfig?.env,
+          customerId: customer.id,
+          subscriptionId: subscription.id,
+          value
+        }
+      });
+    } catch (err2) {
+      logger.error({ err: err2 }, "admin.tenants.billing.sync error (asaas)");
+
+      const updated = await prisma.tenantBilling.update({
+        where: { tenantId },
+        data: { status: "ERROR", lastError: "asaas_create_failed", lastSyncAt: new Date() }
+      });
+
+      return res.status(500).json({
+        error: "asaas_create_failed",
+        message: String(err2?.message || ""),
+        billing: updated
+      });
+    }
+  } catch (err) {
+    logger.error({ err }, "admin.tenants.billing.sync error");
+    return res.status(500).json({ error: "Falha ao sincronizar billing" });
   }
 });
 

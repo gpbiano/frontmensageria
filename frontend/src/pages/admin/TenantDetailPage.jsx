@@ -27,12 +27,6 @@ function toIsoLocalInput(v) {
     d.getMinutes()
   )}`;
 }
-function fromIsoLocalInput(v) {
-  if (!v) return null;
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-}
 function trimOrNull(s) {
   const v = safeTrim(s);
   return v ? v : null;
@@ -52,7 +46,7 @@ export default function TenantDetailPage() {
   const [err, setErr] = useState("");
   const [okMsg, setOkMsg] = useState("");
 
-  // ✅ backend deve retornar hasDefaultGroup
+  // backend retorna hasDefaultGroup
   const [hasDefaultGroup, setHasDefaultGroup] = useState(false);
 
   // =============================
@@ -63,9 +57,8 @@ export default function TenantDetailPage() {
   const [isActive, setIsActive] = useState(true);
 
   // =============================
-  // CompanyProfile (read-only no teu backend via PATCH /admin/tenants/:id)
-  // GET traz, mas o PATCH não atualiza companyProfile.
-  // Então aqui exibimos como READ-ONLY pra não enganar o superAdmin.
+  // CompanyProfile (AGORA EDITÁVEL)
+  // (com o patch do backend: PATCH /admin/tenants/:id aceita companyProfile)
   // =============================
   const [legalName, setLegalName] = useState("");
   const [tradeName, setTradeName] = useState("");
@@ -112,6 +105,11 @@ export default function TenantDetailPage() {
     return String(lastInvoiceUrl || "").trim() || String(lastBankSlipUrl || "").trim() || "";
   }, [lastInvoiceUrl, lastBankSlipUrl]);
 
+  // regra backend: isFree true => chargeEnabled false
+  useEffect(() => {
+    if (isFree) setChargeEnabled(false);
+  }, [isFree]);
+
   async function load() {
     if (!id) {
       setErr("ID inválido.");
@@ -134,7 +132,7 @@ export default function TenantDetailPage() {
       setSlug(String(t?.slug || ""));
       setIsActive(t?.isActive !== false);
 
-      // ✅ companyProfile exibimos read-only (PATCH do teu router não atualiza cp)
+      // companyProfile (editável)
       setLegalName(String(cp?.legalName || ""));
       setTradeName(String(cp?.tradeName || ""));
       setCnpj(String(cp?.cnpj || ""));
@@ -150,7 +148,7 @@ export default function TenantDetailPage() {
       setState(String(cp?.state || ""));
       setCountry(String(cp?.country || "BR"));
 
-      // ✅ billing editável
+      // billing editável
       setPlanCode(String(b?.planCode || "free"));
       setPricingRef(String(b?.pricingRef || ""));
       setIsFree(Boolean(b?.isFree ?? true));
@@ -174,7 +172,6 @@ export default function TenantDetailPage() {
       setLastError(String(b?.lastError || ""));
       setLastSyncAt(String(b?.lastSyncAt || ""));
 
-      // ✅ novo campo do backend (pra desabilitar botão)
       setHasDefaultGroup(Boolean(data?.hasDefaultGroup));
     } catch (e) {
       const msg =
@@ -199,23 +196,86 @@ export default function TenantDetailPage() {
     return Boolean(n && s && !saving && !loading && !deleting);
   }, [name, slug, saving, loading, deleting]);
 
+  function companyHasAnyField() {
+    return Boolean(
+      safeTrim(legalName) ||
+        safeTrim(tradeName) ||
+        safeTrim(cnpj) ||
+        safeTrim(ie) ||
+        safeTrim(im) ||
+        safeTrim(postalCode) ||
+        safeTrim(address) ||
+        safeTrim(addressNumber) ||
+        safeTrim(complement) ||
+        safeTrim(province) ||
+        safeTrim(city) ||
+        safeTrim(state) ||
+        safeTrim(country)
+    );
+  }
+
+  function validateBeforeSave() {
+    if (!safeTrim(name)) return "Nome do tenant é obrigatório.";
+    if (!safeTrim(slug)) return "Slug é obrigatório.";
+
+    // Se começou a preencher company profile, exige razão + cnpj
+    const hasAny = companyHasAnyField();
+    const cleanCnpj = onlyDigits(cnpj);
+
+    if (hasAny && (!safeTrim(legalName) || !cleanCnpj)) {
+      return "Perfil da empresa: para salvar, informe Razão Social e CNPJ (somente números).";
+    }
+
+    // Se NÃO for free e ainda não tem Asaas ids, faz sentido exigir perfil completo
+    // (senão o Asaas vai falhar; mas você pode salvar e rodar sync depois)
+    return "";
+  }
+
   async function saveAll(e) {
     e?.preventDefault?.();
     setErr("");
     setOkMsg("");
+
+    const valMsg = validateBeforeSave();
+    if (valMsg) {
+      setErr(valMsg);
+      return;
+    }
+
     setSaving(true);
 
     try {
-      // 1) tenant patch (router aceita: name/slug/isActive)
+      // 1) tenant + companyProfile (no mesmo PATCH /admin/tenants/:id)
+      const cleanCnpj = onlyDigits(cnpj);
+      const sendCompany = companyHasAnyField();
+
       const tenantPayload = {
         name: safeTrim(name),
         slug: safeTrim(slug),
-        isActive: Boolean(isActive)
+        isActive: Boolean(isActive),
+        companyProfile: sendCompany
+          ? {
+              legalName: safeTrim(legalName),
+              tradeName: trimOrNull(tradeName),
+              cnpj: cleanCnpj,
+              ie: trimOrNull(ie),
+              im: trimOrNull(im),
+
+              postalCode: trimOrNull(onlyDigits(postalCode)),
+              address: trimOrNull(address),
+              addressNumber: trimOrNull(addressNumber),
+              complement: trimOrNull(complement),
+              province: trimOrNull(province),
+              city: trimOrNull(city),
+              state: trimOrNull(state),
+              country: safeTrim(country || "BR") || "BR"
+            }
+          : null
       };
+
       await updateTenantAdmin(id, tenantPayload);
 
-      // 2) billing patch (router aceita: vários campos)
-      // regra do backend: isFree true => chargeEnabled false (vamos respeitar já no front)
+      // 2) billing patch
       const finalIsFree = Boolean(isFree);
       const finalChargeEnabled = finalIsFree ? false : Boolean(chargeEnabled);
 
@@ -256,7 +316,7 @@ export default function TenantDetailPage() {
       const added = data?.bootstrap?.addedAdmins ?? 0;
 
       setOkMsg(`Estrutura inicial criada/validada. Admins adicionados: ${added}`);
-      setHasDefaultGroup(true); // ✅ desabilita imediatamente no front
+      setHasDefaultGroup(true);
     } catch (e) {
       const msg =
         e?.response?.data?.error ||
@@ -276,7 +336,7 @@ export default function TenantDetailPage() {
     try {
       const resp = await syncTenantBillingAdmin(id);
       const data = resp?.data || resp || {};
-      const st = data?.billing?.status || "OK";
+      const st = data?.billing?.status || data?.status || "OK";
       setOkMsg(`Sincronização disparada. Status: ${st}`);
       await load();
     } catch (e) {
@@ -317,7 +377,6 @@ export default function TenantDetailPage() {
   }
 
   const statusBadgeClass = useMemo(() => {
-    // tentativa de mapear accessStatus pra cores
     const s = String(accessStatus || "").toUpperCase();
     if (s === "ACTIVE") return "success";
     if (s === "TRIALING") return "warning";
@@ -408,72 +467,72 @@ export default function TenantDetailPage() {
         </div>
 
         {/* =============================
-            PERFIL DA EMPRESA (READ-ONLY)
+            PERFIL DA EMPRESA (EDITÁVEL)
         ============================== */}
-        <div className="admin-section-title">Perfil da empresa (somente leitura)</div>
+        <div className="admin-section-title">Perfil da empresa</div>
 
         <div className="admin-grid-2">
           <div>
             <label className="admin-label">Razão Social</label>
-            <input className="admin-field" value={legalName} readOnly />
+            <input className="admin-field" value={legalName} onChange={(e) => setLegalName(e.target.value)} />
           </div>
           <div>
             <label className="admin-label">Nome Fantasia</label>
-            <input className="admin-field" value={tradeName} readOnly />
+            <input className="admin-field" value={tradeName} onChange={(e) => setTradeName(e.target.value)} />
           </div>
         </div>
 
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CNPJ</label>
-            <input className="admin-field" value={onlyDigits(cnpj)} readOnly />
+            <input className="admin-field" value={cnpj} onChange={(e) => setCnpj(e.target.value)} placeholder="Somente números" />
           </div>
           <div>
             <label className="admin-label">IE</label>
-            <input className="admin-field" value={ie} readOnly />
+            <input className="admin-field" value={ie} onChange={(e) => setIe(e.target.value)} />
           </div>
           <div>
             <label className="admin-label">IM</label>
-            <input className="admin-field" value={im} readOnly />
+            <input className="admin-field" value={im} onChange={(e) => setIm(e.target.value)} />
           </div>
         </div>
 
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CEP</label>
-            <input className="admin-field" value={onlyDigits(postalCode)} readOnly />
+            <input className="admin-field" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} placeholder="Somente números" />
           </div>
           <div>
             <label className="admin-label">Número</label>
-            <input className="admin-field" value={addressNumber} readOnly />
+            <input className="admin-field" value={addressNumber} onChange={(e) => setAddressNumber(e.target.value)} />
           </div>
           <div>
             <label className="admin-label">Complemento</label>
-            <input className="admin-field" value={complement} readOnly />
+            <input className="admin-field" value={complement} onChange={(e) => setComplement(e.target.value)} />
           </div>
         </div>
 
         <div className="full">
           <label className="admin-label">Endereço</label>
-          <input className="admin-field" value={address} readOnly />
+          <input className="admin-field" value={address} onChange={(e) => setAddress(e.target.value)} />
         </div>
 
         <div className="admin-grid-4">
           <div>
             <label className="admin-label">Bairro</label>
-            <input className="admin-field" value={province} readOnly />
+            <input className="admin-field" value={province} onChange={(e) => setProvince(e.target.value)} />
           </div>
           <div>
             <label className="admin-label">Cidade</label>
-            <input className="admin-field" value={city} readOnly />
+            <input className="admin-field" value={city} onChange={(e) => setCity(e.target.value)} />
           </div>
           <div>
             <label className="admin-label">UF</label>
-            <input className="admin-field" value={state} readOnly />
+            <input className="admin-field" value={state} onChange={(e) => setState(e.target.value)} />
           </div>
           <div>
             <label className="admin-label">País</label>
-            <input className="admin-field" value={country} readOnly />
+            <input className="admin-field" value={country} onChange={(e) => setCountry(e.target.value)} />
           </div>
         </div>
 
@@ -524,7 +583,7 @@ export default function TenantDetailPage() {
               onChange={(e) => {
                 const v = e.target.checked;
                 setIsFree(v);
-                if (v) setChargeEnabled(false); // ✅ regra do backend
+                if (v) setChargeEnabled(false);
               }}
             />
           </div>
@@ -688,9 +747,7 @@ export default function TenantDetailPage() {
         <div className="full admin-danger-zone">
           <div>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Zona de risco</div>
-            <div className="hint">
-              Apagar a empresa remove dados relacionados (cascade). Use somente quando tiver certeza.
-            </div>
+            <div className="hint">Apagar a empresa remove dados relacionados (cascade). Use somente quando tiver certeza.</div>
           </div>
 
           <button

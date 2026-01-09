@@ -22,12 +22,6 @@ function slugify(raw) {
     .replace(/-{2,}/g, "-")
     .slice(0, 60);
 }
-function fromIsoLocalInput(v) {
-  if (!v) return null;
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-}
 function trimOrNull(s) {
   const v = safeTrim(s);
   return v ? v : null;
@@ -39,29 +33,28 @@ export default function TenantCreatePage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  // sucesso + fallback link
+  // sucesso + fallback token/link
   const [okMsg, setOkMsg] = useState("");
   const [inviteToken, setInviteToken] = useState("");
+  const [inviteUrl, setInviteUrl] = useState("");
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
 
-  // ========= Tenant (router exige flat)
+  // ========= Tenant
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
 
-  // teu POST cria tenant com isActive true fixo
-  // (mantemos pra UX e pra evoluir depois caso você adicione isActive no POST)
+  // teu backend aceita isActive no POST (isActiveRequested)
   const [isActiveUI, setIsActiveUI] = useState(true);
 
-  // ========= Admin inicial (obrigatório)
+  // ========= Admin inicial
   const [adminEmail, setAdminEmail] = useState("");
   const [adminName, setAdminName] = useState("");
 
-  // Invite (✅ travado em TRUE pra garantir boas-vindas)
-  const sendInvite = true;
+  // Invite TTL (backend usa para criar token)
   const [inviteTtlDays, setInviteTtlDays] = useState(7);
 
-  // ========= CompanyProfile (opcional, MAS se enviar exige legalName + cnpj)
+  // ========= CompanyProfile
   const [legalName, setLegalName] = useState("");
   const [tradeName, setTradeName] = useState("");
   const [cnpj, setCnpj] = useState("");
@@ -77,17 +70,17 @@ export default function TenantCreatePage() {
   const [state, setState] = useState("");
   const [country, setCountry] = useState("BR");
 
-  // ========= Billing (opcional)
+  // ========= Billing
   const [planCode, setPlanCode] = useState("free");
+  const [pricingRef, setPricingRef] = useState(""); // backend aceita (opcional)
   const [isFree, setIsFree] = useState(true);
   const [chargeEnabled, setChargeEnabled] = useState(false);
   const [billingCycle, setBillingCycle] = useState("MONTHLY");
   const [preferredMethod, setPreferredMethod] = useState("UNDEFINED");
   const [billingEmail, setBillingEmail] = useState("");
-  const [trialEndsAt, setTrialEndsAt] = useState(""); // backend ignora no POST
   const [graceDaysAfterDue, setGraceDaysAfterDue] = useState(30);
 
-  // ✅ auto slug (useEffect, não useMemo)
+  // ✅ slug automático
   useEffect(() => {
     if (slugTouched) return;
     const s = slugify(name);
@@ -100,45 +93,30 @@ export default function TenantCreatePage() {
     if (isFree) setChargeEnabled(false);
   }, [isFree]);
 
-  // validações alinhadas ao router
-  const requirements = useMemo(() => {
-    const missing = [];
-    const n = safeTrim(name);
-    const s = safeTrim(slug);
-    const e = safeTrim(adminEmail).toLowerCase();
+  // ✅ qualidade de vida: se marcar "não free", sugere plano starter se estiver free
+  useEffect(() => {
+    if (!isFree && safeTrim(planCode).toLowerCase() === "free") setPlanCode("starter");
+    if (isFree && safeTrim(planCode).toLowerCase() !== "free") setPlanCode("free");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFree]);
 
-    if (!n) missing.push("nome");
-    if (!s) missing.push("slug");
-    if (!e || !e.includes("@")) missing.push("admin e-mail");
-
-    const hasAnyCompanyField =
+  const companyHasAnyField = useMemo(() => {
+    return Boolean(
       safeTrim(legalName) ||
-      safeTrim(tradeName) ||
-      safeTrim(cnpj) ||
-      safeTrim(ie) ||
-      safeTrim(im) ||
-      safeTrim(postalCode) ||
-      safeTrim(address) ||
-      safeTrim(addressNumber) ||
-      safeTrim(complement) ||
-      safeTrim(province) ||
-      safeTrim(city) ||
-      safeTrim(state) ||
-      safeTrim(country);
-
-    const cleanCnpj = onlyDigits(cnpj);
-    const companyOk = !hasAnyCompanyField || (safeTrim(legalName) && cleanCnpj);
-
-    return {
-      missing,
-      ok: missing.length === 0 && companyOk,
-      companyOk,
-      hasAnyCompanyField
-    };
+        safeTrim(tradeName) ||
+        safeTrim(cnpj) ||
+        safeTrim(ie) ||
+        safeTrim(im) ||
+        safeTrim(postalCode) ||
+        safeTrim(address) ||
+        safeTrim(addressNumber) ||
+        safeTrim(complement) ||
+        safeTrim(province) ||
+        safeTrim(city) ||
+        safeTrim(state) ||
+        safeTrim(country)
+    );
   }, [
-    name,
-    slug,
-    adminEmail,
     legalName,
     tradeName,
     cnpj,
@@ -154,6 +132,33 @@ export default function TenantCreatePage() {
     country
   ]);
 
+  const requirements = useMemo(() => {
+    const missing = [];
+    const n = safeTrim(name);
+    const s = safeTrim(slug);
+    const e = safeTrim(adminEmail).toLowerCase();
+
+    if (!n) missing.push("nome");
+    if (!s) missing.push("slug");
+    if (!e || !e.includes("@")) missing.push("admin e-mail");
+
+    const cleanCnpj = onlyDigits(cnpj);
+    const companyOk = !companyHasAnyField || (safeTrim(legalName) && cleanCnpj);
+
+    // ✅ se NÃO for free, a criação no Asaas depende do companyProfile
+    // (se criar sem companyProfile, o backend marca billing ERROR company_profile_missing_for_asaas)
+    const paidNeedsCompany = isFree === false;
+    const paidCompanyOk = !paidNeedsCompany || (safeTrim(legalName) && cleanCnpj);
+
+    return {
+      missing,
+      ok: missing.length === 0 && companyOk && paidCompanyOk,
+      companyOk,
+      paidCompanyOk,
+      paidNeedsCompany
+    };
+  }, [name, slug, adminEmail, companyHasAnyField, cnpj, legalName, isFree]);
+
   const canSubmit = requirements.ok && !loading;
 
   async function submit(e) {
@@ -161,6 +166,7 @@ export default function TenantCreatePage() {
     setErr("");
     setOkMsg("");
     setInviteToken("");
+    setInviteUrl("");
     setInviteExpiresAt("");
 
     const cleanName = safeTrim(name);
@@ -172,69 +178,64 @@ export default function TenantCreatePage() {
     if (!cleanSlug) return setErr("Informe o slug.");
     if (!cleanEmail || !cleanEmail.includes("@")) return setErr("Informe um adminEmail válido.");
 
-    // companyProfile: só manda se legalName + cnpj
     const cleanCnpj = onlyDigits(cnpj);
-    const hasAnyCompanyField =
-      safeTrim(legalName) ||
-      safeTrim(tradeName) ||
-      safeTrim(cnpj) ||
-      safeTrim(ie) ||
-      safeTrim(im) ||
-      safeTrim(postalCode) ||
-      safeTrim(address) ||
-      safeTrim(addressNumber) ||
-      safeTrim(complement) ||
-      safeTrim(province) ||
-      safeTrim(city) ||
-      safeTrim(state) ||
-      safeTrim(country);
 
-    if (hasAnyCompanyField && (!safeTrim(legalName) || !cleanCnpj)) {
+    // Se preenchendo companyProfile, exige razão + cnpj
+    if (companyHasAnyField && (!safeTrim(legalName) || !cleanCnpj)) {
       return setErr("Perfil da empresa: para enviar, informe Razão Social e CNPJ (somente números).");
+    }
+
+    // Se for plano pago, exige companyProfile também (pra Asaas funcionar)
+    if (isFree === false && (!safeTrim(legalName) || !cleanCnpj)) {
+      return setErr("Plano pago: informe Razão Social e CNPJ para criar cliente/assinatura no Asaas.");
     }
 
     setLoading(true);
 
     try {
-      // ✅ payload compatível com teu POST /admin/tenants (flat)
       const payload = {
         name: cleanName,
         slug: cleanSlug,
         adminEmail: cleanEmail,
         adminName: cleanAdminName || null,
 
-        // ✅ GARANTIA: sempre pede envio do e-mail de boas-vindas
-        sendInvite: true,
+        // backend aceita
+        isActive: Boolean(isActiveUI),
+
+        // backend usa
         inviteTtlDays: Math.min(30, Math.max(1, Number(inviteTtlDays || 7))),
 
-        companyProfile: hasAnyCompanyField
-          ? {
-              legalName: safeTrim(legalName),
-              tradeName: trimOrNull(tradeName),
-              cnpj: cleanCnpj,
-              ie: trimOrNull(ie),
-              im: trimOrNull(im),
+        // companyProfile só manda se tiver válido
+        companyProfile:
+          (companyHasAnyField || isFree === false) && safeTrim(legalName) && cleanCnpj
+            ? {
+                legalName: safeTrim(legalName),
+                tradeName: trimOrNull(tradeName),
+                cnpj: cleanCnpj,
+                ie: trimOrNull(ie),
+                im: trimOrNull(im),
 
-              postalCode: trimOrNull(onlyDigits(postalCode)),
-              address: trimOrNull(address),
-              addressNumber: trimOrNull(addressNumber),
-              complement: trimOrNull(complement),
-              province: trimOrNull(province),
-              city: trimOrNull(city),
-              state: trimOrNull(state),
-              country: safeTrim(country || "BR") || "BR"
-            }
-          : null,
+                postalCode: trimOrNull(onlyDigits(postalCode)),
+                address: trimOrNull(address),
+                addressNumber: trimOrNull(addressNumber),
+                complement: trimOrNull(complement),
+                province: trimOrNull(province),
+                city: trimOrNull(city),
+                state: trimOrNull(state),
+                country: safeTrim(country || "BR") || "BR"
+              }
+            : null,
 
+        // billing é opcional no router, mas ele cria sempre; mandamos completo pro cenário real
         billing: {
-          planCode: safeTrim(planCode || "free") || "free",
+          planCode: safeTrim(planCode || (isFree ? "free" : "starter")) || (isFree ? "free" : "starter"),
+          pricingRef: trimOrNull(pricingRef),
           isFree: Boolean(isFree),
           chargeEnabled: Boolean(isFree ? false : chargeEnabled),
           billingCycle: String(billingCycle || "MONTHLY"),
           preferredMethod: String(preferredMethod || "UNDEFINED"),
           billingEmail: trimOrNull(billingEmail),
-          trialEndsAt: fromIsoLocalInput(trialEndsAt), // backend ignora hoje
-          graceDaysAfterDue: Number(graceDaysAfterDue || 30)
+          graceDaysAfterDue: Math.max(1, Number(graceDaysAfterDue || 30))
         }
       };
 
@@ -244,26 +245,29 @@ export default function TenantCreatePage() {
       const tenantId = data?.tenant?.id || data?.id || "";
       const token = data?.invite?.token || "";
       const expiresAt = data?.invite?.expiresAt || "";
+      const url = data?.invite?.url || "";
 
-      // ✅ fallback visível pro superAdmin (se SMTP não estiver ok)
       if (token) setInviteToken(String(token));
       if (expiresAt) setInviteExpiresAt(String(expiresAt));
+      if (url) setInviteUrl(String(url));
 
-      setOkMsg(
-        "Empresa criada. O convite para definir senha foi solicitado (e-mail de boas-vindas). " +
-          "Se o e-mail não chegar, copie o token abaixo e envie o link manualmente."
-      );
-
-      // segue fluxo atual
-      if (tenantId) {
-        nav(`/admin/cadastros/${tenantId}`);
+      // mensagem alinhada ao backend atual (inviteEmail sent_on_payment_webhook)
+      // - plano free: acesso ativo e token criado
+      // - plano pago: acesso bloqueado até 1º pagamento; e-mail de boas-vindas é disparado no webhook PAID (fluxo atual)
+      if (isFree) {
+        setOkMsg(
+          "Empresa criada (plano FREE). Token de convite gerado. Você pode copiar o link/token abaixo e enviar para o admin criar a senha."
+        );
       } else {
-        nav("/admin/cadastros");
+        setOkMsg(
+          "Empresa criada (plano PAGO). O acesso fica bloqueado até o primeiro pagamento. " +
+            "Token de convite gerado; o envio de boas-vindas acontece no webhook de pagamento (PAID)."
+        );
       }
 
-      // OBS: teu backend cria tenant sempre ativo.
-      // se isActiveUI false, você desativa depois no detalhe (ou me pede e eu automatizo via PATCH).
-      void isActiveUI;
+      // vai para detalhe (onde você pode editar / sincronizar etc.)
+      if (tenantId) nav(`/admin/cadastros/${tenantId}`);
+      else nav("/admin/cadastros");
     } catch (e2) {
       const status = e2?.response?.status;
       const msg =
@@ -271,8 +275,6 @@ export default function TenantCreatePage() {
         e2?.response?.data?.message ||
         e2?.message ||
         "Falha ao criar.";
-
-      // ajuda a debugar 400
       setErr(status ? `[${status}] ${String(msg)}` : String(msg));
     } finally {
       setLoading(false);
@@ -288,12 +290,11 @@ export default function TenantCreatePage() {
           </h1>
 
           <div style={{ fontSize: 12, opacity: 0.75 }}>
-            Obrigatórios: <strong>nome</strong>, <strong>slug</strong> e <strong>admin e-mail</strong>. •
-            O sistema irá <strong>enviar convite de boas-vindas</strong> para criar senha.
-            {requirements.hasAnyCompanyField && !requirements.companyOk && (
+            Obrigatórios: <strong>nome</strong>, <strong>slug</strong> e <strong>admin e-mail</strong>.
+            {!isFree && (
               <>
                 {" "}
-                • Perfil da empresa: para enviar, informe <strong>Razão Social</strong> + <strong>CNPJ</strong>.
+                • Plano pago exige <strong>Razão Social</strong> + <strong>CNPJ</strong> para criar no Asaas.
               </>
             )}
           </div>
@@ -301,6 +302,12 @@ export default function TenantCreatePage() {
           {!requirements.ok && requirements.missing.length > 0 && (
             <div style={{ fontSize: 12, opacity: 0.75 }}>
               Falta preencher: <strong>{requirements.missing.join(", ")}</strong>
+            </div>
+          )}
+
+          {requirements.paidNeedsCompany && !requirements.paidCompanyOk && (
+            <div style={{ fontSize: 12 }} className="admin-badge danger">
+              Plano pago: preencha Razão Social e CNPJ para o Asaas.
             </div>
           )}
         </div>
@@ -328,11 +335,34 @@ export default function TenantCreatePage() {
         </div>
       )}
 
-      {(inviteToken || inviteExpiresAt) && (
+      {(inviteUrl || inviteToken || inviteExpiresAt) && (
         <div style={{ marginBottom: 12, display: "grid", gap: 10 }}>
+          {inviteUrl && (
+            <div>
+              <label className="admin-label">Link do convite</label>
+              <div className="admin-row" style={{ marginTop: 0 }}>
+                <input className="admin-field" value={inviteUrl} readOnly />
+                <button
+                  className="admin-link"
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(inviteUrl);
+                      setOkMsg("Link copiado.");
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                >
+                  Copiar
+                </button>
+              </div>
+            </div>
+          )}
+
           {inviteToken && (
             <div>
-              <label className="admin-label">Token do convite (fallback)</label>
+              <label className="admin-label">Token do convite</label>
               <div className="admin-row" style={{ marginTop: 0 }}>
                 <input className="admin-field" value={inviteToken} readOnly />
                 <button
@@ -341,9 +371,9 @@ export default function TenantCreatePage() {
                   onClick={async () => {
                     try {
                       await navigator.clipboard.writeText(inviteToken);
-                      setOkMsg("Token copiado. Você pode enviar o link de criação de senha manualmente.");
+                      setOkMsg("Token copiado.");
                     } catch {
-                      // sem drama
+                      // ignore
                     }
                   }}
                 >
@@ -383,7 +413,7 @@ export default function TenantCreatePage() {
               placeholder="ex: gp-holding"
             />
             <div style={{ fontSize: 11, opacity: 0.7, marginTop: 6 }}>
-              Dica: geramos automaticamente pelo nome (você pode editar).
+              Geramos automaticamente pelo nome (você pode editar).
             </div>
           </div>
         </div>
@@ -393,9 +423,7 @@ export default function TenantCreatePage() {
             Ativo
           </label>
           <input type="checkbox" checked={isActiveUI} onChange={(e) => setIsActiveUI(e.target.checked)} />
-          <span style={{ fontSize: 12, opacity: 0.75 }}>
-            {isActiveUI ? "Ativo (padrão)" : "Inativo (você desativa depois no detalhe)"}
-          </span>
+          <span style={{ fontSize: 12, opacity: 0.75 }}>{isActiveUI ? "Cliente habilitado" : "Cliente desativado"}</span>
         </div>
 
         <div className="admin-section-title">Admin inicial</div>
@@ -419,14 +447,9 @@ export default function TenantCreatePage() {
           </div>
         </div>
 
-        <div className="admin-section-title">Boas-vindas (convite para criar senha)</div>
+        <div className="admin-section-title">Convite (criar senha)</div>
 
         <div className="admin-grid-3">
-          <div>
-            <label className="admin-label">Enviar convite</label>
-            <input className="admin-field" value="Sim (obrigatório)" readOnly />
-          </div>
-
           <div>
             <label className="admin-label">Validade do convite (dias)</label>
             <input
@@ -439,13 +462,13 @@ export default function TenantCreatePage() {
             />
           </div>
 
-          <div style={{ fontSize: 12, opacity: 0.75 }}>
-            O backend cria token e deve enviar e-mail automaticamente.
-            Se SMTP falhar, você pode usar o token (fallback).
+          <div style={{ gridColumn: "span 2", fontSize: 12, opacity: 0.75 }}>
+            Um token é gerado no backend e o link aparece como fallback aqui.
+            {!isFree && <> O envio automático de boas-vindas fica para o webhook de pagamento (PAID), conforme fluxo atual.</>}
           </div>
         </div>
 
-        <div className="admin-section-title">Perfil da empresa (opcional)</div>
+        <div className="admin-section-title">Perfil da empresa {isFree ? "(opcional)" : "(obrigatório para plano pago)"}</div>
 
         <div className="admin-grid-2">
           <div>
@@ -481,7 +504,12 @@ export default function TenantCreatePage() {
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CEP</label>
-            <input className="admin-field" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} placeholder="Somente números" />
+            <input
+              className="admin-field"
+              value={postalCode}
+              onChange={(e) => setPostalCode(e.target.value)}
+              placeholder="Somente números"
+            />
           </div>
           <div>
             <label className="admin-label">Número</label>
@@ -517,12 +545,20 @@ export default function TenantCreatePage() {
           </div>
         </div>
 
-        <div className="admin-section-title">Billing (opcional)</div>
+        <div className="admin-section-title">Billing (Asaas)</div>
 
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">Plano</label>
             <input className="admin-field" value={planCode} onChange={(e) => setPlanCode(e.target.value)} />
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 6 }}>
+              Sugestão: <code>free</code>, <code>starter</code>, <code>pro</code> ou valor fixo (ex: <code>1,00</code>).
+            </div>
+          </div>
+
+          <div>
+            <label className="admin-label">Pricing Ref (opcional)</label>
+            <input className="admin-field" value={pricingRef} onChange={(e) => setPricingRef(e.target.value)} />
           </div>
 
           <div>
@@ -533,9 +569,11 @@ export default function TenantCreatePage() {
               <option value="YEARLY">Anual</option>
             </select>
           </div>
+        </div>
 
+        <div className="admin-grid-3">
           <div>
-            <label className="admin-label">Método</label>
+            <label className="admin-label">Método preferido</label>
             <select className="admin-field" value={preferredMethod} onChange={(e) => setPreferredMethod(e.target.value)}>
               <option value="UNDEFINED">Indefinido</option>
               <option value="BOLETO">Boleto</option>
@@ -543,9 +581,7 @@ export default function TenantCreatePage() {
               <option value="CREDIT_CARD">Cartão</option>
             </select>
           </div>
-        </div>
 
-        <div className="admin-grid-3">
           <div className="admin-row" style={{ alignItems: "center", gap: 10, marginTop: 0 }}>
             <label className="admin-label" style={{ margin: 0 }}>
               Is Free
@@ -565,32 +601,22 @@ export default function TenantCreatePage() {
               title={isFree ? "Free desabilita cobrança automaticamente" : ""}
             />
           </div>
+        </div>
+
+        <div className="admin-grid-2">
+          <div>
+            <label className="admin-label">E-mail de cobrança (opcional)</label>
+            <input className="admin-field" value={billingEmail} onChange={(e) => setBillingEmail(e.target.value)} placeholder="financeiro@empresa.com.br" />
+          </div>
 
           <div>
-            <label className="admin-label">Grace days</label>
+            <label className="admin-label">Grace days (atraso)</label>
             <input
               className="admin-field"
               type="number"
               min="1"
               value={graceDaysAfterDue}
               onChange={(e) => setGraceDaysAfterDue(Number(e.target.value || 30))}
-            />
-          </div>
-        </div>
-
-        <div className="admin-grid-2">
-          <div>
-            <label className="admin-label">E-mail de cobrança</label>
-            <input className="admin-field" value={billingEmail} onChange={(e) => setBillingEmail(e.target.value)} />
-          </div>
-
-          <div>
-            <label className="admin-label">Trial ends at (opcional)</label>
-            <input
-              className="admin-field"
-              type="datetime-local"
-              value={trialEndsAt}
-              onChange={(e) => setTrialEndsAt(e.target.value)}
             />
           </div>
         </div>
