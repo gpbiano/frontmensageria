@@ -457,3 +457,11 @@
     padding: 14px 12px;
   }
 }
+/* Disabled states (evita parecer que “não acontece nada”) */
+.admin-primary:disabled,
+.admin-link:disabled,
+.admin-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
