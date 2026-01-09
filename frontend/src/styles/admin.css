@@ -350,3 +350,110 @@
 .admin-danger-solid:active {
   transform: scale(0.99);
 }
+/* =========================
+   Helpers que faltavam (sections / grids / table-rows)
+========================= */
+
+/* Título de seção dentro do form */
+.admin-section-title {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding-top: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: rgba(15, 23, 42, 0.85);
+}
+
+/* Grids utilitárias (dentro do form) */
+.admin-grid-2,
+.admin-grid-3,
+.admin-grid-4 {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+}
+
+.admin-grid-2 { grid-template-columns: 1fr 1fr; }
+.admin-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+.admin-grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+
+/* Responsivo para grids */
+@media (max-width: 980px) {
+  .admin-grid-4 { grid-template-columns: 1fr 1fr; }
+  .admin-grid-3 { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 720px) {
+  .admin-grid-2,
+  .admin-grid-3,
+  .admin-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================
+   "Tabela" em div (head/rows)
+   (para TenantsListPage.jsx)
+========================= */
+.admin-table-head,
+.admin-table-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1.1fr 0.7fr 0.8fr;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 12px;
+}
+
+.admin-table-head {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(15, 23, 42, 0.70);
+  background: rgba(15, 23, 42, 0.03);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.admin-table-row {
+  font-size: 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  transition: background 0.15s ease;
+}
+
+.admin-table-row:hover {
+  background: rgba(15, 23, 42, 0.03);
+}
+
+.admin-table-row:last-child {
+  border-bottom: 0;
+}
+
+/* Ajuste de leitura para valores longos */
+.admin-table-row > div,
+.admin-table-head > div {
+  min-width: 0;
+}
+
+.admin-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mobile: simplifica colunas na listagem */
+@media (max-width: 720px) {
+  .admin-table-head,
+  .admin-table-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .admin-table-head {
+    display: none; /* no mobile fica mais clean sem header */
+  }
+
+  .admin-table-row {
+    padding: 14px 12px;
+  }
+}

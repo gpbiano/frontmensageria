@@ -5,7 +5,8 @@ import { createTenantAdmin } from "../../api/admin.js";
 import "../../styles/admin.css";
 
 function onlyDigits(s) {
-  return String(s || "").replace(/\D+/g, "");
+  const v = String(s || "").replace(/\D+/g, "");
+  return v || "";
 }
 
 function fromIsoLocalInput(v) {
@@ -13,6 +14,15 @@ function fromIsoLocalInput(v) {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
+}
+
+function safeTrim(s) {
+  return String(s || "").trim();
+}
+
+function trimOrNull(s) {
+  const v = safeTrim(s);
+  return v ? v : null;
 }
 
 export default function TenantCreatePage() {
@@ -30,7 +40,7 @@ export default function TenantCreatePage() {
   const [adminEmail, setAdminEmail] = useState("");
   const [adminName, setAdminName] = useState("");
 
-  // CompanyProfile (opcional no create)
+  // CompanyProfile (opcional)
   const [legalName, setLegalName] = useState("");
   const [tradeName, setTradeName] = useState("");
   const [cnpj, setCnpj] = useState("");
@@ -46,7 +56,7 @@ export default function TenantCreatePage() {
   const [state, setState] = useState("");
   const [country, setCountry] = useState("BR");
 
-  // Billing (opcional no create)
+  // Billing (opcional)
   const [planCode, setPlanCode] = useState("free");
   const [isFree, setIsFree] = useState(true);
   const [chargeEnabled, setChargeEnabled] = useState(false);
@@ -57,20 +67,20 @@ export default function TenantCreatePage() {
   const [graceDaysAfterDue, setGraceDaysAfterDue] = useState(30);
 
   const canSubmit = useMemo(() => {
-    const n = String(name || "").trim();
-    const s = String(slug || "").trim();
-    const e = String(adminEmail || "").trim().toLowerCase();
+    const n = safeTrim(name);
+    const s = safeTrim(slug);
+    const e = safeTrim(adminEmail).toLowerCase();
     return Boolean(n && s && e.includes("@") && !loading);
   }, [name, slug, adminEmail, loading]);
 
   async function submit(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
     setErr("");
 
-    const cleanName = String(name || "").trim();
-    const cleanSlug = String(slug || "").trim();
-    const cleanEmail = String(adminEmail || "").trim().toLowerCase();
-    const cleanAdminName = String(adminName || "").trim();
+    const cleanName = safeTrim(name);
+    const cleanSlug = safeTrim(slug);
+    const cleanEmail = safeTrim(adminEmail).toLowerCase();
+    const cleanAdminName = safeTrim(adminName);
 
     if (!cleanName) return setErr("Informe o nome do tenant.");
     if (!cleanSlug) return setErr("Informe o slug.");
@@ -80,7 +90,11 @@ export default function TenantCreatePage() {
 
     try {
       const payload = {
-        tenant: { name: cleanName, slug: cleanSlug, isActive: Boolean(isActive) },
+        tenant: {
+          name: cleanName,
+          slug: cleanSlug,
+          isActive: Boolean(isActive)
+        },
 
         admin: {
           adminEmail: cleanEmail,
@@ -88,30 +102,31 @@ export default function TenantCreatePage() {
           sendInvite: true
         },
 
+        // ✅ tudo opcional (vai como null se vazio)
         companyProfile: {
-          legalName: String(legalName || "").trim() || null,
-          tradeName: String(tradeName || "").trim() || null,
+          legalName: trimOrNull(legalName),
+          tradeName: trimOrNull(tradeName),
           cnpj: onlyDigits(cnpj) || null,
-          ie: String(ie || "").trim() || null,
-          im: String(im || "").trim() || null,
+          ie: trimOrNull(ie),
+          im: trimOrNull(im),
 
           postalCode: onlyDigits(postalCode) || null,
-          address: String(address || "").trim() || null,
-          addressNumber: String(addressNumber || "").trim() || null,
-          complement: String(complement || "").trim() || null,
-          province: String(province || "").trim() || null,
-          city: String(city || "").trim() || null,
-          state: String(state || "").trim() || null,
-          country: String(country || "BR").trim() || "BR"
+          address: trimOrNull(address),
+          addressNumber: trimOrNull(addressNumber),
+          complement: trimOrNull(complement),
+          province: trimOrNull(province),
+          city: trimOrNull(city),
+          state: trimOrNull(state),
+          country: safeTrim(country || "BR") || "BR"
         },
 
         billing: {
-          planCode: String(planCode || "free").trim() || "free",
+          planCode: safeTrim(planCode || "free") || "free",
           isFree: Boolean(isFree),
           chargeEnabled: Boolean(chargeEnabled),
           billingCycle: String(billingCycle || "MONTHLY"),
           preferredMethod: String(preferredMethod || "UNDEFINED"),
-          billingEmail: String(billingEmail || "").trim() || null,
+          billingEmail: trimOrNull(billingEmail),
           trialEndsAt: fromIsoLocalInput(trialEndsAt),
           graceDaysAfterDue: Number(graceDaysAfterDue || 30)
         }
@@ -138,11 +153,22 @@ export default function TenantCreatePage() {
   return (
     <div>
       <div className="admin-header-row">
-        <h1 className="admin-h1">Criar Empresa</h1>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <h1 className="admin-h1" style={{ margin: 0 }}>
+            Criar Empresa
+          </h1>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>
+            Crie o tenant e defina o admin inicial. Os campos de perfil/billing são opcionais.
+          </div>
+        </div>
 
         <div className="admin-actions">
-          <button className="admin-link" type="button" onClick={() => nav("/admin/cadastros")}>
+          <button className="admin-link" type="button" onClick={() => nav("/admin/cadastros")} disabled={loading}>
             Voltar
+          </button>
+
+          <button className="admin-primary" type="button" onClick={submit} disabled={!canSubmit}>
+            {loading ? "Criando..." : "Criar"}
           </button>
         </div>
       </div>
@@ -173,6 +199,9 @@ export default function TenantCreatePage() {
             Ativo
           </label>
           <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+          <span style={{ fontSize: 12, opacity: 0.75 }}>
+            {isActive ? "Ativo (cliente poderá acessar ao finalizar)" : "Inativo (cria já bloqueado)"}
+          </span>
         </div>
 
         <div className="admin-section-title">Admin inicial</div>
@@ -186,11 +215,12 @@ export default function TenantCreatePage() {
               onChange={(e) => setAdminEmail(e.target.value)}
               autoComplete="email"
               inputMode="email"
+              placeholder="admin@empresa.com.br"
             />
           </div>
 
           <div>
-            <label className="admin-label">Admin nome</label>
+            <label className="admin-label">Admin nome (opcional)</label>
             <input className="admin-field" value={adminName} onChange={(e) => setAdminName(e.target.value)} />
           </div>
         </div>
@@ -211,7 +241,7 @@ export default function TenantCreatePage() {
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CNPJ</label>
-            <input className="admin-field" value={cnpj} onChange={(e) => setCnpj(e.target.value)} />
+            <input className="admin-field" value={cnpj} onChange={(e) => setCnpj(e.target.value)} placeholder="Somente números" />
           </div>
           <div>
             <label className="admin-label">IE</label>
@@ -226,27 +256,19 @@ export default function TenantCreatePage() {
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CEP</label>
-            <input className="admin-field" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} />
+            <input className="admin-field" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} placeholder="Somente números" />
           </div>
           <div>
             <label className="admin-label">Número</label>
-            <input
-              className="admin-field"
-              value={addressNumber}
-              onChange={(e) => setAddressNumber(e.target.value)}
-            />
+            <input className="admin-field" value={addressNumber} onChange={(e) => setAddressNumber(e.target.value)} />
           </div>
           <div>
             <label className="admin-label">Complemento</label>
-            <input
-              className="admin-field"
-              value={complement}
-              onChange={(e) => setComplement(e.target.value)}
-            />
+            <input className="admin-field" value={complement} onChange={(e) => setComplement(e.target.value)} />
           </div>
         </div>
 
-        <div>
+        <div className="full">
           <label className="admin-label">Endereço</label>
           <input className="admin-field" value={address} onChange={(e) => setAddress(e.target.value)} />
         </div>
@@ -289,11 +311,7 @@ export default function TenantCreatePage() {
 
           <div>
             <label className="admin-label">Método</label>
-            <select
-              className="admin-field"
-              value={preferredMethod}
-              onChange={(e) => setPreferredMethod(e.target.value)}
-            >
+            <select className="admin-field" value={preferredMethod} onChange={(e) => setPreferredMethod(e.target.value)}>
               <option value="UNDEFINED">Indefinido</option>
               <option value="BOLETO">Boleto</option>
               <option value="PIX">Pix</option>
@@ -314,11 +332,7 @@ export default function TenantCreatePage() {
             <label className="admin-label" style={{ margin: 0 }}>
               Cobrança habilitada
             </label>
-            <input
-              type="checkbox"
-              checked={chargeEnabled}
-              onChange={(e) => setChargeEnabled(e.target.checked)}
-            />
+            <input type="checkbox" checked={chargeEnabled} onChange={(e) => setChargeEnabled(e.target.checked)} />
           </div>
 
           <div>
@@ -336,11 +350,7 @@ export default function TenantCreatePage() {
         <div className="admin-grid-2">
           <div>
             <label className="admin-label">E-mail de cobrança</label>
-            <input
-              className="admin-field"
-              value={billingEmail}
-              onChange={(e) => setBillingEmail(e.target.value)}
-            />
+            <input className="admin-field" value={billingEmail} onChange={(e) => setBillingEmail(e.target.value)} />
           </div>
 
           <div>
@@ -354,9 +364,19 @@ export default function TenantCreatePage() {
           </div>
         </div>
 
-        <div className="full admin-row">
+        {/* Footer */}
+        <div className="full admin-row" style={{ gap: 10 }}>
           <button className="admin-primary" disabled={!canSubmit} type="submit">
             {loading ? "Criando..." : "Criar"}
+          </button>
+
+          <button
+            className="admin-link"
+            type="button"
+            onClick={() => nav("/admin/cadastros")}
+            disabled={loading}
+          >
+            Cancelar
           </button>
         </div>
       </form>
