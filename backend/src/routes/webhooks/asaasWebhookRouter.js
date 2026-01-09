@@ -71,7 +71,7 @@ function pickPayment(payload) {
 }
 
 // ===============================
-// App URL / Invite Link
+// Invite URL
 // ===============================
 function getAppWebUrl() {
   return (
@@ -93,6 +93,12 @@ function buildInviteUrl(token) {
   const u = new URL(path, base);
   u.searchParams.set("token", String(token || ""));
   return u.toString();
+}
+
+function addDays(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + Number(days || 0));
+  return d;
 }
 
 // ===============================
@@ -155,14 +161,6 @@ async function sendPaymentWelcomeEmail({ to, tenantName, inviteUrl, expiresAt })
 
   const html = `
   <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height:1.45">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="width:44px;height:44px;border-radius:12px;background:#0f172a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800">GP</div>
-      <div>
-        <div style="font-size:16px;font-weight:800">GP Labs</div>
-        <div style="font-size:12px;color:#475569">WhatsApp • Automação • Atendimento</div>
-      </div>
-    </div>
-
     <h2 style="margin:0 0 10px">Pagamento confirmado ✅</h2>
     <p style="margin:0 0 8px">
       A assinatura da empresa <b>${String(tenantName || "sua empresa")}</b> foi confirmada.
@@ -172,7 +170,7 @@ async function sendPaymentWelcomeEmail({ to, tenantName, inviteUrl, expiresAt })
     </p>
 
     <p style="margin:16px 0">
-      <a href="${inviteUrl}" style="display:inline-block;padding:12px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">
+      <a href="${inviteUrl}" style="display:inline-block;padding:12px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:10px;font-weight:700;border-radius:12px">
         Criar senha e acessar
       </a>
     </p>
@@ -194,9 +192,6 @@ async function sendPaymentWelcomeEmail({ to, tenantName, inviteUrl, expiresAt })
   return sendResendEmailIfConfigured({ to, subject, html });
 }
 
-// ===============================
-// POST /webhooks/asaas
-// ===============================
 router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
   try {
     if (!validateSignature(req)) {
@@ -246,13 +241,17 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     const graceDays = Number(billing.graceDaysAfterDue || 30);
 
     // ======================================================
-    // PAID
+    // PAID => libera acesso + manda e-mail se era "awaiting_first_payment"
     // ======================================================
     if (event === "PAID") {
       const stillTrial = isWithinTrial(billing, now);
 
-      const prevAccess = String(billing.accessStatus || "");
+      // ✅ Sempre libera (se você quer “só após pagar”, então aqui vira ACTIVE)
       const nextAccess = stillTrial ? "TRIALING" : "ACTIVE";
+
+      const wasAwaitingFirstPayment =
+        String(billing.accessStatus || "") === "BLOCKED" &&
+        String(billing.blockedReason || "").startsWith("awaiting_first_payment");
 
       await prisma.tenantBilling.update({
         where: { tenantId },
@@ -275,20 +274,22 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
         }
       });
 
-      // ✅ Se antes estava PENDING_PAYMENT (primeira liberação), manda e-mail de boas-vindas + criar senha
-      // (gera um token novo pra não correr risco do token antigo ter expirado)
       let welcomeEmail = { sent: false, reason: "not_first_activation" };
 
-      if (prevAccess === "PENDING_PAYMENT") {
+      // ✅ Só manda e-mail automático no primeiro pagamento
+      if (wasAwaitingFirstPayment) {
         const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+
         const admin = await prisma.userTenant.findFirst({
           where: { tenantId, role: "admin", isActive: true },
           include: { user: true }
         });
 
         const to = safeStr(admin?.user?.email) || safeStr(billing?.billingEmail);
+
         if (to && to.includes("@")) {
-          const expiresAt = addDaysForWebhook(7);
+          // cria token novo (evita token antigo expirado)
+          const expiresAt = addDays(7);
 
           const token = await prisma.passwordToken.create({
             data: {
@@ -367,35 +368,7 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
       return res.json({ ok: true, action: "marked_past_due", daysLate, graceDays });
     }
 
-    // ======================================================
-    // Outros eventos (espelho)
-    // ======================================================
-    if (event === "CANCELED") {
-      await prisma.tenantBilling.update({
-        where: { tenantId },
-        data: {
-          lastPaymentStatus: "CANCELED",
-          lastPaymentId: paymentId || billing.lastPaymentId,
-          lastInvoiceUrl: invoiceUrl || billing.lastInvoiceUrl,
-          lastSyncAt: now
-        }
-      });
-      return res.json({ ok: true, action: "canceled_recorded" });
-    }
-
-    if (event === "REFUNDED") {
-      await prisma.tenantBilling.update({
-        where: { tenantId },
-        data: {
-          lastPaymentStatus: "REFUNDED",
-          lastPaymentId: paymentId || billing.lastPaymentId,
-          lastInvoiceUrl: invoiceUrl || billing.lastInvoiceUrl,
-          lastSyncAt: now
-        }
-      });
-      return res.json({ ok: true, action: "refunded_recorded" });
-    }
-
+    // outros eventos...
     await prisma.tenantBilling.update({
       where: { tenantId },
       data: { lastSyncAt: now }
@@ -407,11 +380,5 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     return res.status(500).json({ error: "internal_error" });
   }
 });
-
-function addDaysForWebhook(days) {
-  const d = new Date();
-  d.setDate(d.getDate() + Number(days || 0));
-  return d;
-}
 
 export default router;

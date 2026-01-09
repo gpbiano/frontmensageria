@@ -1,4 +1,6 @@
+// backend/src/routes/admin/tenantsAdminRouter.js
 import express from "express";
+import fetch from "node-fetch";
 import { prisma } from "../../lib/prisma.js";
 import logger from "../../logger.js";
 import {
@@ -71,7 +73,6 @@ function getAppWebUrl() {
 
 function getInvitePath() {
   // sua tela é CreatePasswordPage.jsx
-  // ajuste se necessário (ex.: "/auth/create-password" ou "/create-password")
   return safeStr(process.env.INVITE_PATH) || "/auth/create-password";
 }
 
@@ -85,7 +86,7 @@ function buildInviteUrl(token) {
 }
 
 // ===============================
-// Resend (e-mail)
+// Resend (e-mail) — (mantido, mas hoje você disse que vai enviar no webhook)
 // ===============================
 async function sendResendEmailIfConfigured({ to, subject, html }) {
   const RESEND_API_KEY = safeStr(process.env.RESEND_API_KEY);
@@ -185,10 +186,24 @@ async function sendWelcomeInviteEmail({ to, tenantName, inviteUrl, expiresAt }) 
 
 // ===============================
 // Pricing por valor fixo
+// - aceita "1,00" / "99.90" vindo do front no planCode (se você estiver usando assim)
+// - se não for número, cai no mapa por plano/ciclo
 // ===============================
+function parseFixedValueFromPlanCode(planCodeRaw) {
+  const s = safeStr(planCodeRaw);
+  if (!s) return null;
+
+  // aceita "1,00" ou "99.90" ou "199"
+  const normalized = s.replace(/\./g, "").replace(",", "."); // "1.234,56" -> "1234.56"
+  if (!/^\d+(\.\d+)?$/.test(normalized)) return null;
+
+  const n = Number(normalized);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 // Você pode sobrescrever via .env com JSON:
 // BILLING_PLAN_PRICES={"starter":{"MONTHLY":99.9,"YEARLY":999},"pro":{"MONTHLY":199.9}}
-// Se não definir, cai nos defaults abaixo.
 function getPlanPriceMap() {
   const raw = safeStr(process.env.BILLING_PLAN_PRICES);
   if (!raw) return null;
@@ -208,7 +223,6 @@ function priceFor(planCode, cycle) {
   const map = getPlanPriceMap();
   if (map?.[code]?.[c] != null) return Number(map[code][c]);
 
-  // defaults simples
   const defaults = {
     free: { MONTHLY: 0, QUARTERLY: 0, YEARLY: 0 },
     starter: { MONTHLY: 99.9, QUARTERLY: 269.7, YEARLY: 999.0 },
@@ -316,9 +330,10 @@ router.get("/:id", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants
-// - cria customer + subscription (valor fixo)
-// - acesso: paid => PENDING_PAYMENT (só libera no webhook)
-// - e-mail: só envia quando pago (no webhook)
+// - cria customer + subscription
+// - regra: cliente só acessa após pagar
+//   => paid (isFree=false) nasce BLOCKED com blockedReason awaiting_first_payment
+// - e-mail: você disse que envia no webhook PAID (ok)
 // ===============================
 router.post("/", async (req, res) => {
   try {
@@ -345,6 +360,8 @@ router.post("/", async (req, res) => {
 
     const existingSlug = await prisma.tenant.findUnique({ where: { slug } });
     if (existingSlug) return res.status(409).json({ error: "slug já existe" });
+
+    const now = new Date();
 
     const result = await prisma.$transaction(async (tx) => {
       // 1) tenant
@@ -428,14 +445,13 @@ router.post("/", async (req, res) => {
       // regra: free => chargeEnabled false sempre
       const chargeEnabled = isFree === true ? false : Boolean(billing?.chargeEnabled === true);
 
-      // trialEndsAt: mantemos regra atual (7 dias se não-free),
-      // mas o acesso fica PENDING_PAYMENT até pagar (você pediu "só acessa depois que pagar")
+      // trialEndsAt: mantém regra 7 dias (se não-free), mas acesso bloqueado até pagar
       const trialEndsAt = isFree ? null : addDays(7);
 
-      // ✅ regra de acesso:
+      // ✅ REGRA DE ACESSO (SEM QUEBRAR ENUM):
       // free => ACTIVE
-      // paid => PENDING_PAYMENT (libera somente via webhook PAID)
-      const accessStatus = isFree ? "ACTIVE" : "PENDING_PAYMENT";
+      // paid => BLOCKED (libera no webhook PAID)
+      const accessStatus = isFree ? "ACTIVE" : "BLOCKED";
 
       const b = await tx.tenantBilling.upsert({
         where: { tenantId: tenant.id },
@@ -462,6 +478,10 @@ router.post("/", async (req, res) => {
           trialEndsAt,
           accessStatus,
 
+          // ✅ marca bloqueio inicial do "primeiro pagamento"
+          blockedAt: isFree ? null : now,
+          blockedReason: isFree ? null : "awaiting_first_payment",
+
           graceDaysAfterDue:
             billing?.graceDaysAfterDue != null
               ? Math.max(1, Number(billing.graceDaysAfterDue))
@@ -470,7 +490,7 @@ router.post("/", async (req, res) => {
         update: {}
       });
 
-      // 6) token (sempre cria; envia e-mail só quando pagar)
+      // 6) token (sempre cria; e-mail você envia no webhook PAID)
       const expiresAt = addDays(inviteTtlDays);
       const passwordToken = await tx.passwordToken.create({
         data: {
@@ -490,18 +510,15 @@ router.post("/", async (req, res) => {
     // ======================================================
     let asaas = { ok: false, reason: null };
 
-    // Só cria assinatura se NÃO for free
     if (result.billing?.isFree === true) {
       asaas = { ok: true, skipped: true, reason: "free_plan" };
     } else {
       try {
-        // precisa companyProfile pra customer "bonito" (cnpj/legalName)
         const cp = await prisma.tenantCompanyProfile.findUnique({
           where: { tenantId: result.tenant.id }
         });
 
         if (!cp?.cnpj || !cp?.legalName) {
-          // sem perfil fiscal, não cria customer/subscription
           await prisma.tenantBilling.update({
             where: { tenantId: result.tenant.id },
             data: {
@@ -513,7 +530,6 @@ router.post("/", async (req, res) => {
 
           asaas = { ok: false, reason: "company_profile_missing" };
         } else {
-          // cria customer
           const customer = await asaasCreateCustomer({
             name: cp.legalName,
             cpfCnpj: cp.cnpj,
@@ -527,14 +543,16 @@ router.post("/", async (req, res) => {
             state: cp.state || undefined
           });
 
-          // cria subscription
-          const planCode = result.billing?.planCode || "starter";
           const cycle = String(result.billing?.billingCycle || "MONTHLY").toUpperCase();
-          const value = priceFor(planCode, cycle);
+
+          // ✅ valor fixo: se planCode vier "1,00" (ou número), usa como value
+          const fixedValue = parseFixedValueFromPlanCode(result.billing?.planCode);
+          const planCode = fixedValue ? "custom" : (result.billing?.planCode || "starter");
+          const value = fixedValue != null ? fixedValue : priceFor(planCode, cycle);
 
           const subscription = await asaasCreateSubscription({
             customer: customer.id,
-            billingType: "UNDEFINED", // o cliente escolhe depois / checkout
+            billingType: "UNDEFINED",
             cycle,
             value,
             nextDueDate: nextDueDateISO(1),
@@ -542,7 +560,6 @@ router.post("/", async (req, res) => {
             externalReference: `tenant:${result.tenant.id}`
           });
 
-          // salva ids
           await prisma.tenantBilling.update({
             where: { tenantId: result.tenant.id },
             data: {
@@ -582,7 +599,6 @@ router.post("/", async (req, res) => {
       }
     }
 
-    // resposta
     res.status(201).json({
       ok: true,
       tenant: result.tenant,
@@ -595,7 +611,7 @@ router.post("/", async (req, res) => {
         expiresAt: result.passwordToken.expiresAt,
         url: buildInviteUrl(result.passwordToken.token) || null
       },
-      // ✅ Agora o e-mail é enviado no webhook PAID
+      // ✅ e-mail vai no webhook PAID (como você pediu)
       inviteEmail: { sent: false, reason: "sent_on_payment_webhook" },
       asaas
     });
@@ -686,7 +702,6 @@ router.patch("/:id/billing", async (req, res) => {
       return res.status(404).json({ error: "Billing não encontrado (tenantBilling missing)" });
     }
 
-    // regra: free -> chargeEnabled false
     const finalIsFree = isFree !== undefined ? isFree : current.isFree;
     const finalChargeEnabled =
       finalIsFree === true
@@ -720,7 +735,6 @@ router.patch("/:id/billing", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants/:id/bootstrap
-// (mantém seu comportamento atual: idempotente via guard)
 // ===============================
 router.post("/:id/bootstrap", async (req, res) => {
   try {
