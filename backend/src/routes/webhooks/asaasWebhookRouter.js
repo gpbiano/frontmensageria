@@ -1,22 +1,11 @@
-// backend/src/routes/webhooks/asaasWebhookRouter.js
 import express from "express";
 import crypto from "crypto";
 import logger from "../../logger.js";
 import prismaMod from "../../lib/prisma.js";
-import { sendEmailResend } from "../../services/mailer.js";
 
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 const router = express.Router();
 
-/**
- * ✅ Asaas:
- * Se você configurar "authToken" no webhook do Asaas,
- * ele envia no header:  asaas-access-token: <authToken>
- *
- * Então use ASAAS_WEBHOOK_TOKEN no servidor.
- *
- * (mantive compat com teu ASAAS_WEBHOOK_SECRET e headers antigos)
- */
 const ASAAS_WEBHOOK_TOKEN = String(process.env.ASAAS_WEBHOOK_TOKEN || "").trim();
 const ASAAS_WEBHOOK_SECRET = String(process.env.ASAAS_WEBHOOK_SECRET || "").trim();
 
@@ -58,8 +47,15 @@ function isWithinTrial(billing, now) {
 function normalizeEvent(raw) {
   const e = safeStr(raw).toUpperCase();
 
-  if (e === "PAYMENT_RECEIVED" || e === "PAYMENT_CONFIRMED" || e === "PAYMENT_RECEIVED_IN_CASH") return "PAID";
+  if (
+    e === "PAYMENT_RECEIVED" ||
+    e === "PAYMENT_CONFIRMED" ||
+    e === "PAYMENT_RECEIVED_IN_CASH"
+  )
+    return "PAID";
+
   if (e === "PAYMENT_OVERDUE") return "OVERDUE";
+
   if (e === "PAYMENT_CANCELED" || e === "PAYMENT_DELETED") return "CANCELED";
   if (e === "PAYMENT_REFUNDED") return "REFUNDED";
 
@@ -74,9 +70,9 @@ function pickPayment(payload) {
   return payload;
 }
 
-// -------------------------------
-// Invite URL + token
-// -------------------------------
+// ===============================
+// App URL / Invite Link
+// ===============================
 function getAppWebUrl() {
   return (
     safeStr(process.env.APP_WEB_URL) ||
@@ -87,8 +83,6 @@ function getAppWebUrl() {
 }
 
 function getInvitePath() {
-  // ✅ sua tela atual pega token por querystring
-  // /auth/create-password?token=...
   return safeStr(process.env.INVITE_PATH) || "/auth/create-password";
 }
 
@@ -101,105 +95,108 @@ function buildInviteUrl(token) {
   return u.toString();
 }
 
-function addDays(days) {
-  const d = new Date();
-  d.setDate(d.getDate() + Number(days || 0));
-  return d;
-}
+// ===============================
+// Resend
+// ===============================
+async function sendResendEmailIfConfigured({ to, subject, html }) {
+  const RESEND_API_KEY = safeStr(process.env.RESEND_API_KEY);
+  const RESEND_FROM =
+    safeStr(process.env.RESEND_FROM) ||
+    safeStr(process.env.MAIL_FROM) ||
+    safeStr(process.env.SMTP_FROM) ||
+    "";
 
-async function getPrimaryAdminEmail(tenantId) {
-  // tenta pegar um admin do tenant
-  const m = await prisma.userTenant.findFirst({
-    where: { tenantId: String(tenantId), isActive: true, role: "admin" },
-    orderBy: [{ createdAt: "asc" }],
-    include: { user: { select: { email: true, name: true } } }
-  });
+  if (!RESEND_API_KEY || !RESEND_FROM) {
+    logger.warn(
+      { RESEND_API_KEY: Boolean(RESEND_API_KEY), RESEND_FROM: Boolean(RESEND_FROM) },
+      "resend: não configurado (pulando envio)"
+    );
+    return { sent: false, reason: "resend_not_configured" };
+  }
 
-  const email = safeStr(m?.user?.email);
-  const name = safeStr(m?.user?.name);
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from: RESEND_FROM,
+        to: [to],
+        subject,
+        html
+      })
+    });
 
-  return email ? { email, name: name || null } : null;
-}
-
-async function ensureInviteToken({ tenantId, userId, ttlDays = 7 }) {
-  const now = new Date();
-
-  // tenta reutilizar um token válido
-  const existing = await prisma.passwordToken.findFirst({
-    where: {
-      tenantId: String(tenantId),
-      userId: String(userId),
-      type: "invite",
-      used: false,
-      expiresAt: { gt: now }
-    },
-    orderBy: [{ createdAt: "desc" }]
-  });
-
-  if (existing?.token) return existing;
-
-  // cria novo
-  const expiresAt = addDays(ttlDays);
-  return prisma.passwordToken.create({
-    data: {
-      tenantId: String(tenantId),
-      userId: String(userId),
-      type: "invite",
-      expiresAt,
-      used: false
-      // token gerado no schema
+    const text = await resp.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = { raw: text };
     }
-  });
+
+    if (!resp.ok) {
+      logger.error({ status: resp.status, json }, "resend: falha ao enviar");
+      return { sent: false, reason: "send_failed", status: resp.status, payload: json };
+    }
+
+    return { sent: true, id: json?.id || null };
+  } catch (err) {
+    logger.error({ err }, "resend: erro inesperado");
+    return { sent: false, reason: "exception" };
+  }
 }
 
-async function sendPaidWelcomeEmail({ to, tenantName, inviteUrl, paymentId, invoiceUrl }) {
-  const subject = `Pagamento recebido — seja bem-vindo à GP Labs`;
+async function sendPaymentWelcomeEmail({ to, tenantName, inviteUrl, expiresAt }) {
+  const subject = "Pagamento recebido — Bem-vindo(a) à GP Labs 🎉";
+  const exp = expiresAt ? new Date(expiresAt).toLocaleString("pt-BR") : "";
 
   const html = `
-  <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height:1.4">
-    <h2 style="margin:0 0 10px">Pagamento recebido ✅</h2>
-    <p style="margin:0 0 10px">
-      Recebemos seu pagamento e sua empresa <b>${String(tenantName || "GP Labs")}</b> já está liberada para acesso.
+  <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height:1.45">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <div style="width:44px;height:44px;border-radius:12px;background:#0f172a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800">GP</div>
+      <div>
+        <div style="font-size:16px;font-weight:800">GP Labs</div>
+        <div style="font-size:12px;color:#475569">WhatsApp • Automação • Atendimento</div>
+      </div>
+    </div>
+
+    <h2 style="margin:0 0 10px">Pagamento confirmado ✅</h2>
+    <p style="margin:0 0 8px">
+      A assinatura da empresa <b>${String(tenantName || "sua empresa")}</b> foi confirmada.
+    </p>
+    <p style="margin:0 0 14px">
+      Para ativar seu usuário e acessar a plataforma, crie sua senha:
     </p>
 
-    ${
-      inviteUrl
-        ? `<p style="margin:14px 0 10px">Agora é só criar sua senha:</p>
-           <p style="margin:14px 0">
-             <a href="${inviteUrl}" style="display:inline-block;padding:12px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">
-               Criar senha e acessar
-             </a>
-           </p>
-           <p style="margin:0;color:#475569;font-size:12px">
-             Se o botão não abrir, copie e cole no navegador:<br/>
-             <span style="word-break:break-all">${inviteUrl}</span>
-           </p>`
-        : `<p style="margin:0;color:#b45309">
-             Link não configurado no servidor (APP_WEB_URL/INVITE_PATH). Peça ao suporte para gerar um novo convite.
-           </p>`
-    }
+    <p style="margin:16px 0">
+      <a href="${inviteUrl}" style="display:inline-block;padding:12px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">
+        Criar senha e acessar
+      </a>
+    </p>
 
-    ${
-      invoiceUrl
-        ? `<p style="margin:12px 0 0;color:#64748b;font-size:12px">
-             Comprovante/fatura: <span style="word-break:break-all">${invoiceUrl}</span>
-           </p>`
-        : ""
-    }
+    <p style="margin:0 0 10px;color:#475569;font-size:12px">
+      Se o botão não funcionar, copie e cole no navegador:<br/>
+      <span style="word-break:break-all">${inviteUrl}</span>
+    </p>
 
-    <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0"/>
+    ${exp ? `<p style="margin:10px 0 0;color:#475569;font-size:12px">Este link expira em: ${exp}</p>` : ""}
+
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0"/>
     <p style="margin:0;color:#64748b;font-size:12px">
-      ID do pagamento: ${String(paymentId || "-")}
+      Se você não esperava este e-mail, pode ignorar.
     </p>
   </div>
   `;
 
-  return sendEmailResend({ to, subject, html });
+  return sendResendEmailIfConfigured({ to, subject, html });
 }
 
-/**
- * POST /webhooks/asaas
- */
+// ===============================
+// POST /webhooks/asaas
+// ===============================
 router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
   try {
     if (!validateSignature(req)) {
@@ -225,7 +222,11 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     const pixPayload = safeStr(payment?.pixPayload);
 
     if (!subscriptionId && !customerId) {
-      return res.json({ ok: true, ignored: true, reason: "missing_subscription_and_customer" });
+      return res.json({
+        ok: true,
+        ignored: true,
+        reason: "missing_subscription_and_customer"
+      });
     }
 
     const billing = await prisma.tenantBilling.findFirst({
@@ -242,35 +243,26 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     }
 
     const tenantId = billing.tenantId;
-
-    // ✅ usa graceDaysAfterDue (default 30)
     const graceDays = Number(billing.graceDaysAfterDue || 30);
 
     // ======================================================
-    // 1) PAGO => ACTIVE/TRIALING + e-mail (Resend)
+    // PAID
     // ======================================================
     if (event === "PAID") {
       const stillTrial = isWithinTrial(billing, now);
 
-      // ✅ idempotência de e-mail:
-      // se já processou esse paymentId como RECEIVED, não reenvia
-      const alreadyProcessedSamePayment =
-        paymentId &&
-        safeStr(billing.lastPaymentId) === paymentId &&
-        safeStr(billing.lastPaymentStatus) === "RECEIVED";
+      const prevAccess = String(billing.accessStatus || "");
+      const nextAccess = stillTrial ? "TRIALING" : "ACTIVE";
 
       await prisma.tenantBilling.update({
         where: { tenantId },
         data: {
-          // status de acesso
-          accessStatus: stillTrial ? "TRIALING" : "ACTIVE",
+          accessStatus: nextAccess,
 
-          // limpa inadimplência
           delinquentSince: null,
           blockedAt: null,
           blockedReason: null,
 
-          // espelho de pagamento
           lastPaymentStatus: "RECEIVED",
           lastPaymentId: paymentId || billing.lastPaymentId,
           lastInvoiceUrl: invoiceUrl || billing.lastInvoiceUrl,
@@ -279,70 +271,66 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
           lastPixPayload: pixPayload || billing.lastPixPayload,
 
           lastError: null,
-          lastSyncAt: now,
-
-          // se você usa status da integração também, ajuda a UI:
-          status: "SYNCED"
+          lastSyncAt: now
         }
       });
 
-      // ✅ e-mail somente se ainda não foi processado o mesmo pagamento
-      if (!alreadyProcessedSamePayment) {
-        try {
-          const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+      // ✅ Se antes estava PENDING_PAYMENT (primeira liberação), manda e-mail de boas-vindas + criar senha
+      // (gera um token novo pra não correr risco do token antigo ter expirado)
+      let welcomeEmail = { sent: false, reason: "not_first_activation" };
 
-          // pega admin principal (ou fallback)
-          const admin = await getPrimaryAdminEmail(tenantId);
-          const to = admin?.email || safeStr(billing.billingEmail);
+      if (prevAccess === "PENDING_PAYMENT") {
+        const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+        const admin = await prisma.userTenant.findFirst({
+          where: { tenantId, role: "admin", isActive: true },
+          include: { user: true }
+        });
 
-          if (to && to.includes("@")) {
-            // precisa do userId para token
-            const adminMember = await prisma.userTenant.findFirst({
-              where: { tenantId: String(tenantId), isActive: true, role: "admin" },
-              orderBy: [{ createdAt: "asc" }],
-              select: { userId: true }
-            });
+        const to = safeStr(admin?.user?.email) || safeStr(billing?.billingEmail);
+        if (to && to.includes("@")) {
+          const expiresAt = addDaysForWebhook(7);
 
-            if (adminMember?.userId) {
-              const tokenRow = await ensureInviteToken({
-                tenantId,
-                userId: adminMember.userId,
-                ttlDays: 7
-              });
-
-              const inviteUrl = buildInviteUrl(tokenRow.token);
-
-              await sendPaidWelcomeEmail({
-                to,
-                tenantName: tenant?.name || "GP Labs",
-                inviteUrl,
-                paymentId,
-                invoiceUrl
-              });
-            } else {
-              logger.warn({ tenantId }, "asaas webhook: não encontrou admin userTenant para enviar convite");
+          const token = await prisma.passwordToken.create({
+            data: {
+              tenantId,
+              userId: admin?.user?.id || null,
+              type: "invite",
+              expiresAt,
+              used: false
             }
+          });
+
+          const inviteUrl = buildInviteUrl(token.token);
+
+          if (inviteUrl) {
+            welcomeEmail = await sendPaymentWelcomeEmail({
+              to,
+              tenantName: tenant?.name,
+              inviteUrl,
+              expiresAt
+            });
           } else {
-            logger.warn({ tenantId }, "asaas webhook: sem e-mail válido para envio (admin/billingEmail)");
+            welcomeEmail = { sent: false, reason: "APP_WEB_URL_not_configured" };
           }
-        } catch (mailErr) {
-          logger.error({ mailErr }, "asaas webhook: falha ao enviar e-mail pós-pagamento (não bloqueia fluxo)");
+        } else {
+          welcomeEmail = { sent: false, reason: "missing_admin_email" };
         }
       }
 
       return res.json({
         ok: true,
         action: stillTrial ? "paid_trialing" : "paid_activated",
-        emailed: !alreadyProcessedSamePayment
+        welcomeEmail
       });
     }
 
     // ======================================================
-    // 2) OVERDUE => PAST_DUE + delinquentSince
-    //    - se passar graceDays => BLOCKED
+    // OVERDUE
     // ======================================================
     if (event === "OVERDUE") {
-      const delinquentSince = billing.delinquentSince ? new Date(billing.delinquentSince) : now;
+      const delinquentSince = billing.delinquentSince
+        ? new Date(billing.delinquentSince)
+        : now;
 
       const updated = await prisma.tenantBilling.update({
         where: { tenantId },
@@ -380,7 +368,7 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     }
 
     // ======================================================
-    // 3) Outros eventos => só espelha, sem mexer no acesso
+    // Outros eventos (espelho)
     // ======================================================
     if (event === "CANCELED") {
       await prisma.tenantBilling.update({
@@ -419,5 +407,11 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     return res.status(500).json({ error: "internal_error" });
   }
 });
+
+function addDaysForWebhook(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + Number(days || 0));
+  return d;
+}
 
 export default router;
