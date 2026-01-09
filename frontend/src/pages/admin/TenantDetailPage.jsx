@@ -1,18 +1,18 @@
 // frontend/src/pages/admin/TenantDetailPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { fetchTenantAdmin, updateTenantAdmin } from "../../api/admin.js";
+import { fetchTenantAdmin, updateTenantAdmin, deleteTenantAdmin } from "../../api/admin.js";
 import "../../styles/admin.css";
 
 function onlyDigits(s) {
-  return String(s || "").replace(/\D+/g, "");
+  const v = String(s || "").replace(/\D+/g, "");
+  return v || "";
 }
 
 function toIsoLocalInput(v) {
   if (!v) return "";
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return "";
-  // datetime-local precisa sem timezone
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
     d.getMinutes()
@@ -26,25 +26,35 @@ function fromIsoLocalInput(v) {
   return d.toISOString();
 }
 
+function safeTrim(s) {
+  return String(s || "").trim();
+}
+
+function trimOrNull(s) {
+  const v = safeTrim(s);
+  return v ? v : null;
+}
+
 export default function TenantDetailPage() {
   const nav = useNavigate();
   const params = useParams();
-
   const id = String(params?.id || "").trim();
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   const [err, setErr] = useState("");
   const [okMsg, setOkMsg] = useState("");
 
   // =============================
-  // Form state
+  // Form (editável)
   // =============================
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [isActive, setIsActive] = useState(true);
 
-  // CompanyProfile
+  // CompanyProfile (opcional)
   const [legalName, setLegalName] = useState("");
   const [tradeName, setTradeName] = useState("");
   const [cnpj, setCnpj] = useState("");
@@ -60,18 +70,19 @@ export default function TenantDetailPage() {
   const [state, setState] = useState("");
   const [country, setCountry] = useState("BR");
 
-  // Billing
+  // Billing (opcional)
   const [planCode, setPlanCode] = useState("free");
   const [isFree, setIsFree] = useState(true);
   const [chargeEnabled, setChargeEnabled] = useState(false);
   const [billingCycle, setBillingCycle] = useState("MONTHLY");
   const [preferredMethod, setPreferredMethod] = useState("UNDEFINED");
   const [billingEmail, setBillingEmail] = useState("");
-
   const [trialEndsAt, setTrialEndsAt] = useState("");
   const [graceDaysAfterDue, setGraceDaysAfterDue] = useState(30);
 
-  // read-only mirror
+  // =============================
+  // Regras internas / automático (read-only)
+  // =============================
   const [accessStatus, setAccessStatus] = useState("");
   const [lastPaymentStatus, setLastPaymentStatus] = useState("");
   const [lastInvoiceUrl, setLastInvoiceUrl] = useState("");
@@ -80,13 +91,8 @@ export default function TenantDetailPage() {
   const [lastPixPayload, setLastPixPayload] = useState("");
   const [nextChargeDueDate, setNextChargeDueDate] = useState("");
 
-  // “Pagar” link (prioridade)
   const payUrl = useMemo(() => {
-    return (
-      String(lastInvoiceUrl || "").trim() ||
-      String(lastBankSlipUrl || "").trim() ||
-      "" // pix normalmente é QR/payload, não URL
-    );
+    return String(lastInvoiceUrl || "").trim() || String(lastBankSlipUrl || "").trim() || "";
   }, [lastInvoiceUrl, lastBankSlipUrl]);
 
   async function load() {
@@ -94,7 +100,6 @@ export default function TenantDetailPage() {
       setErr("ID inválido.");
       return;
     }
-
     setErr("");
     setOkMsg("");
     setLoading(true);
@@ -114,7 +119,6 @@ export default function TenantDetailPage() {
       setCnpj(String(cp?.cnpj || ""));
       setIe(String(cp?.ie || ""));
       setIm(String(cp?.im || ""));
-
       setPostalCode(String(cp?.postalCode || ""));
       setAddress(String(cp?.address || ""));
       setAddressNumber(String(cp?.addressNumber || ""));
@@ -131,7 +135,6 @@ export default function TenantDetailPage() {
       setBillingCycle(String(b?.billingCycle || "MONTHLY"));
       setPreferredMethod(String(b?.preferredMethod || "UNDEFINED"));
       setBillingEmail(String(b?.billingEmail || ""));
-
       setTrialEndsAt(toIsoLocalInput(b?.trialEndsAt));
       setGraceDaysAfterDue(Number(b?.graceDaysAfterDue || 30));
 
@@ -143,11 +146,7 @@ export default function TenantDetailPage() {
       setLastPixPayload(String(b?.lastPixPayload || ""));
       setNextChargeDueDate(String(b?.nextChargeDueDate || ""));
     } catch (e) {
-      const msg =
-        e?.response?.data?.error ||
-        e?.response?.data?.message ||
-        e?.message ||
-        "Falha ao carregar.";
+      const msg = e?.response?.data?.error || e?.response?.data?.message || e?.message || "Falha ao carregar.";
       setErr(String(msg));
     } finally {
       setLoading(false);
@@ -160,10 +159,49 @@ export default function TenantDetailPage() {
   }, [id]);
 
   const canSave = useMemo(() => {
-    const n = String(name || "").trim();
-    const s = String(slug || "").trim();
-    return Boolean(n && s && !saving && !loading);
-  }, [name, slug, saving, loading]);
+    const n = safeTrim(name);
+    const s = safeTrim(slug);
+    return Boolean(n && s && !saving && !loading && !deleting);
+  }, [name, slug, saving, loading, deleting]);
+
+  function buildPayload() {
+    return {
+      tenant: {
+        name: safeTrim(name),
+        slug: safeTrim(slug),
+        isActive: Boolean(isActive)
+      },
+
+      // ✅ opcional: manda null quando vazio (não obriga preenchimento)
+      companyProfile: {
+        legalName: trimOrNull(legalName),
+        tradeName: trimOrNull(tradeName),
+        cnpj: onlyDigits(cnpj) || null,
+        ie: trimOrNull(ie),
+        im: trimOrNull(im),
+
+        postalCode: onlyDigits(postalCode) || null,
+        address: trimOrNull(address),
+        addressNumber: trimOrNull(addressNumber),
+        complement: trimOrNull(complement),
+        province: trimOrNull(province),
+        city: trimOrNull(city),
+        state: trimOrNull(state),
+        country: safeTrim(country || "BR") || "BR"
+      },
+
+      billing: {
+        planCode: safeTrim(planCode || "free") || "free",
+        isFree: Boolean(isFree),
+        chargeEnabled: Boolean(chargeEnabled),
+        billingCycle: String(billingCycle || "MONTHLY"),
+        preferredMethod: String(preferredMethod || "UNDEFINED"),
+        billingEmail: trimOrNull(billingEmail),
+        trialEndsAt: fromIsoLocalInput(trialEndsAt),
+        graceDaysAfterDue: Number(graceDaysAfterDue || 30)
+      }
+    };
+  }
 
   async function save(e) {
     e?.preventDefault?.();
@@ -172,54 +210,70 @@ export default function TenantDetailPage() {
     setSaving(true);
 
     try {
-      const payload = {
-        tenant: {
-          name: String(name || "").trim(),
-          slug: String(slug || "").trim(),
-          isActive: Boolean(isActive)
-        },
-
-        companyProfile: {
-          legalName: String(legalName || "").trim(),
-          tradeName: String(tradeName || "").trim() || null,
-          cnpj: onlyDigits(cnpj),
-          ie: String(ie || "").trim() || null,
-          im: String(im || "").trim() || null,
-
-          postalCode: onlyDigits(postalCode),
-          address: String(address || "").trim(),
-          addressNumber: String(addressNumber || "").trim(),
-          complement: String(complement || "").trim() || null,
-          province: String(province || "").trim() || null,
-          city: String(city || "").trim() || null,
-          state: String(state || "").trim() || null,
-          country: String(country || "BR").trim() || "BR"
-        },
-
-        billing: {
-          planCode: String(planCode || "free").trim() || "free",
-          isFree: Boolean(isFree),
-          chargeEnabled: Boolean(chargeEnabled),
-          billingCycle: String(billingCycle || "MONTHLY"),
-          preferredMethod: String(preferredMethod || "UNDEFINED"),
-          billingEmail: String(billingEmail || "").trim() || null,
-          trialEndsAt: fromIsoLocalInput(trialEndsAt),
-          graceDaysAfterDue: Number(graceDaysAfterDue || 30)
-        }
-      };
-
-      await updateTenantAdmin(id, payload);
+      await updateTenantAdmin(id, buildPayload());
       setOkMsg("Salvo com sucesso.");
       await load();
     } catch (e2) {
-      const msg =
-        e2?.response?.data?.error ||
-        e2?.response?.data?.message ||
-        e2?.message ||
-        "Falha ao salvar.";
+      const msg = e2?.response?.data?.error || e2?.response?.data?.message || e2?.message || "Falha ao salvar.";
       setErr(String(msg));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function disableTenant() {
+    // ✅ botão explícito "Desativar" pra evitar erro de operação
+    if (!id) return;
+    setErr("");
+    setOkMsg("");
+
+    const ok = window.confirm(
+      "Deseja DESATIVAR este tenant?\n\nIsso bloqueia o acesso do cliente ao sistema (sem apagar dados)."
+    );
+    if (!ok) return;
+
+    setSaving(true);
+    try {
+      const payload = buildPayload();
+      payload.tenant.isActive = false;
+      await updateTenantAdmin(id, payload);
+      setOkMsg("Tenant desativado com sucesso.");
+      await load();
+    } catch (e2) {
+      const msg = e2?.response?.data?.error || e2?.response?.data?.message || e2?.message || "Falha ao desativar.";
+      setErr(String(msg));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onDelete() {
+    if (!id) return;
+
+    setErr("");
+    setOkMsg("");
+
+    const confirm1 = window.confirm(
+      "Tem certeza que deseja APAGAR esta empresa (tenant)?\n\n⚠️ Isso pode remover dados e acessos. Essa ação pode ser irreversível."
+    );
+    if (!confirm1) return;
+
+    const phrase = safeTrim(slug);
+    const typed = window.prompt(`Para confirmar, digite o SLUG do tenant:\n\n${phrase}`, "");
+    if (safeTrim(typed) !== phrase) {
+      setErr("Confirmação inválida. Operação cancelada.");
+      return;
+    }
+
+    setDeleting(true);
+    try {
+      await deleteTenantAdmin(id);
+      nav("/admin/cadastros");
+    } catch (e2) {
+      const msg = e2?.response?.data?.error || e2?.response?.data?.message || e2?.message || "Falha ao apagar.";
+      setErr(String(msg));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -229,8 +283,20 @@ export default function TenantDetailPage() {
         <h1 className="admin-h1">Editar Empresa</h1>
 
         <div className="admin-actions">
-          <button className="admin-link" type="button" onClick={() => nav("/admin/cadastros")}>
+          <button className="admin-link" type="button" onClick={() => nav("/admin/cadastros")} disabled={saving || deleting}>
             Voltar
+          </button>
+
+          <button className="admin-link" type="button" onClick={load} disabled={loading || saving || deleting}>
+            Recarregar
+          </button>
+
+          <button className="admin-primary" type="button" onClick={save} disabled={!canSave}>
+            {saving ? "Salvando..." : "Salvar"}
+          </button>
+
+          <button className="admin-danger" type="button" onClick={onDelete} disabled={deleting || saving || loading}>
+            {deleting ? "Apagando..." : "Apagar"}
           </button>
         </div>
       </div>
@@ -250,9 +316,7 @@ export default function TenantDetailPage() {
       )}
 
       <form className="admin-form" onSubmit={save}>
-        {/* =============================
-            DADOS BÁSICOS
-        ============================== */}
+        {/* DADOS BÁSICOS */}
         <div className="admin-section-title">Dados do tenant</div>
 
         <div className="admin-grid-2">
@@ -272,51 +336,46 @@ export default function TenantDetailPage() {
             Ativo
           </label>
           <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+
+          <button
+            className="admin-link"
+            type="button"
+            onClick={disableTenant}
+            disabled={saving || loading || deleting || !isActive}
+            title="Desativa sem apagar dados"
+            style={{ marginLeft: 8 }}
+          >
+            Desativar
+          </button>
+
+          <span style={{ marginLeft: 8, fontSize: 12, opacity: 0.75 }}>
+            {isActive ? "Ativo (cliente consegue acessar)" : "Desativado (acesso bloqueado)"}
+          </span>
         </div>
 
-        {/* =============================
-            PERFIL DA EMPRESA
-        ============================== */}
-        <div className="admin-section-title">Perfil da empresa (Fiscal + Endereço)</div>
+        {/* PERFIL DA EMPRESA (OPCIONAL) */}
+        <div className="admin-section-title">Perfil da empresa (opcional)</div>
 
         <div className="admin-grid-2">
           <div>
             <label className="admin-label">Razão Social</label>
-            <input
-              className="admin-field"
-              value={legalName}
-              onChange={(e) => setLegalName(e.target.value)}
-              placeholder="Razão Social"
-            />
+            <input className="admin-field" value={legalName} onChange={(e) => setLegalName(e.target.value)} />
           </div>
-
           <div>
             <label className="admin-label">Nome Fantasia</label>
-            <input
-              className="admin-field"
-              value={tradeName}
-              onChange={(e) => setTradeName(e.target.value)}
-              placeholder="Nome Fantasia"
-            />
+            <input className="admin-field" value={tradeName} onChange={(e) => setTradeName(e.target.value)} />
           </div>
         </div>
 
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CNPJ</label>
-            <input
-              className="admin-field"
-              value={cnpj}
-              onChange={(e) => setCnpj(e.target.value)}
-              placeholder="Somente números"
-            />
+            <input className="admin-field" value={cnpj} onChange={(e) => setCnpj(e.target.value)} placeholder="Somente números" />
           </div>
-
           <div>
             <label className="admin-label">IE</label>
             <input className="admin-field" value={ie} onChange={(e) => setIe(e.target.value)} />
           </div>
-
           <div>
             <label className="admin-label">IM</label>
             <input className="admin-field" value={im} onChange={(e) => setIm(e.target.value)} />
@@ -326,34 +385,19 @@ export default function TenantDetailPage() {
         <div className="admin-grid-3">
           <div>
             <label className="admin-label">CEP</label>
-            <input
-              className="admin-field"
-              value={postalCode}
-              onChange={(e) => setPostalCode(e.target.value)}
-              placeholder="Somente números"
-            />
+            <input className="admin-field" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} placeholder="Somente números" />
           </div>
-
           <div>
             <label className="admin-label">Número</label>
-            <input
-              className="admin-field"
-              value={addressNumber}
-              onChange={(e) => setAddressNumber(e.target.value)}
-            />
+            <input className="admin-field" value={addressNumber} onChange={(e) => setAddressNumber(e.target.value)} />
           </div>
-
           <div>
             <label className="admin-label">Complemento</label>
-            <input
-              className="admin-field"
-              value={complement}
-              onChange={(e) => setComplement(e.target.value)}
-            />
+            <input className="admin-field" value={complement} onChange={(e) => setComplement(e.target.value)} />
           </div>
         </div>
 
-        <div>
+        <div className="full">
           <label className="admin-label">Endereço</label>
           <input className="admin-field" value={address} onChange={(e) => setAddress(e.target.value)} />
         </div>
@@ -363,27 +407,22 @@ export default function TenantDetailPage() {
             <label className="admin-label">Bairro</label>
             <input className="admin-field" value={province} onChange={(e) => setProvince(e.target.value)} />
           </div>
-
           <div>
             <label className="admin-label">Cidade</label>
             <input className="admin-field" value={city} onChange={(e) => setCity(e.target.value)} />
           </div>
-
           <div>
             <label className="admin-label">UF</label>
             <input className="admin-field" value={state} onChange={(e) => setState(e.target.value)} />
           </div>
-
           <div>
             <label className="admin-label">País</label>
             <input className="admin-field" value={country} onChange={(e) => setCountry(e.target.value)} />
           </div>
         </div>
 
-        {/* =============================
-            BILLING
-        ============================== */}
-        <div className="admin-section-title">Billing (Asaas)</div>
+        {/* BILLING (OPCIONAL) */}
+        <div className="admin-section-title">Billing (opcional)</div>
 
         <div className="admin-grid-3">
           <div>
@@ -401,12 +440,8 @@ export default function TenantDetailPage() {
           </div>
 
           <div>
-            <label className="admin-label">Método preferido</label>
-            <select
-              className="admin-field"
-              value={preferredMethod}
-              onChange={(e) => setPreferredMethod(e.target.value)}
-            >
+            <label className="admin-label">Método</label>
+            <select className="admin-field" value={preferredMethod} onChange={(e) => setPreferredMethod(e.target.value)}>
               <option value="UNDEFINED">Indefinido</option>
               <option value="BOLETO">Boleto</option>
               <option value="PIX">Pix</option>
@@ -417,25 +452,17 @@ export default function TenantDetailPage() {
 
         <div className="admin-grid-3">
           <div className="admin-row" style={{ alignItems: "center", gap: 10 }}>
-            <label className="admin-label" style={{ margin: 0 }}>
-              Is Free
-            </label>
+            <label className="admin-label" style={{ margin: 0 }}>Is Free</label>
             <input type="checkbox" checked={isFree} onChange={(e) => setIsFree(e.target.checked)} />
           </div>
 
           <div className="admin-row" style={{ alignItems: "center", gap: 10 }}>
-            <label className="admin-label" style={{ margin: 0 }}>
-              Cobrança habilitada
-            </label>
-            <input
-              type="checkbox"
-              checked={chargeEnabled}
-              onChange={(e) => setChargeEnabled(e.target.checked)}
-            />
+            <label className="admin-label" style={{ margin: 0 }}>Cobrança habilitada</label>
+            <input type="checkbox" checked={chargeEnabled} onChange={(e) => setChargeEnabled(e.target.checked)} />
           </div>
 
           <div>
-            <label className="admin-label">Grace days (atraso)</label>
+            <label className="admin-label">Grace days</label>
             <input
               className="admin-field"
               type="number"
@@ -449,27 +476,17 @@ export default function TenantDetailPage() {
         <div className="admin-grid-2">
           <div>
             <label className="admin-label">E-mail de cobrança</label>
-            <input
-              className="admin-field"
-              value={billingEmail}
-              onChange={(e) => setBillingEmail(e.target.value)}
-              placeholder="financeiro@empresa.com.br"
-            />
+            <input className="admin-field" value={billingEmail} onChange={(e) => setBillingEmail(e.target.value)} />
           </div>
 
           <div>
             <label className="admin-label">Trial ends at</label>
-            <input
-              className="admin-field"
-              type="datetime-local"
-              value={trialEndsAt}
-              onChange={(e) => setTrialEndsAt(e.target.value)}
-            />
+            <input className="admin-field" type="datetime-local" value={trialEndsAt} onChange={(e) => setTrialEndsAt(e.target.value)} />
           </div>
         </div>
 
-        {/* Espelho / status */}
-        <div className="admin-section-title">Status (espelho)</div>
+        {/* REGRAS INTERNAS (AUTOMÁTICO) */}
+        <div className="admin-section-title">Regras internas (automático)</div>
 
         <div className="admin-grid-3">
           <div>
@@ -484,22 +501,50 @@ export default function TenantDetailPage() {
 
           <div>
             <label className="admin-label">Next Charge Due Date</label>
-            <input className="admin-field" value={nextChargeDueDate ? String(nextChargeDueDate) : ""} readOnly />
+            <input className="admin-field" value={nextChargeDueDate || ""} readOnly />
           </div>
         </div>
 
-        {/* ✅ Botão PAGAR (voltou) */}
-        <div className="admin-row" style={{ gap: 10, marginTop: 10 }}>
+        <div className="admin-grid-2">
+          <div>
+            <label className="admin-label">Invoice URL</label>
+            <input className="admin-field" value={lastInvoiceUrl} readOnly />
+          </div>
+          <div>
+            <label className="admin-label">Boleto URL</label>
+            <input className="admin-field" value={lastBankSlipUrl} readOnly />
+          </div>
+        </div>
+
+        {(lastPixQrCode || lastPixPayload) && (
+          <div className="full" style={{ marginTop: 10 }}>
+            {lastPixQrCode && (
+              <div style={{ marginBottom: 10 }}>
+                <label className="admin-label">PIX QR Code</label>
+                <input className="admin-field" value={lastPixQrCode} readOnly />
+              </div>
+            )}
+            {lastPixPayload && (
+              <div>
+                <label className="admin-label">PIX Payload</label>
+                <input className="admin-field" value={lastPixPayload} readOnly />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="full admin-row" style={{ gap: 10 }}>
           <button className="admin-primary" disabled={!canSave} type="submit">
             {saving ? "Salvando..." : "Salvar"}
           </button>
 
-          <button className="admin-link" type="button" onClick={load} disabled={loading || saving}>
+          <button className="admin-link" type="button" onClick={load} disabled={loading || saving || deleting}>
             Recarregar
           </button>
 
           <a
-            className={"admin-link" + (!payUrl ? " is-disabled" : "")}
+            className="admin-link"
             href={payUrl || undefined}
             target={payUrl ? "_blank" : undefined}
             rel={payUrl ? "noreferrer" : undefined}
@@ -516,25 +561,6 @@ export default function TenantDetailPage() {
             Pagar
           </a>
         </div>
-
-        {/* Pix info (quando existir) */}
-        {(lastPixQrCode || lastPixPayload) && (
-          <div style={{ marginTop: 12 }}>
-            <div className="admin-section-title">PIX</div>
-            {lastPixQrCode && (
-              <div style={{ marginBottom: 8 }}>
-                <label className="admin-label">QR Code</label>
-                <input className="admin-field" value={lastPixQrCode} readOnly />
-              </div>
-            )}
-            {lastPixPayload && (
-              <div>
-                <label className="admin-label">Payload</label>
-                <input className="admin-field" value={lastPixPayload} readOnly />
-              </div>
-            )}
-          </div>
-        )}
       </form>
     </div>
   );
