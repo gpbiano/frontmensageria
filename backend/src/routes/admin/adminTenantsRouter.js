@@ -65,7 +65,7 @@ function getAppWebUrl() {
 
 function getInvitePath() {
   // ajuste conforme sua tela de convite / criar senha
-  // ex: /auth/invite?token=...
+  // ex: /create-password (ou /auth/create-password) etc.
   return safeStr(process.env.INVITE_PATH) || "/auth/invite";
 }
 
@@ -73,14 +73,16 @@ function buildInviteUrl(token) {
   const base = getAppWebUrl();
   const path = getInvitePath();
 
-  if (!base) return ""; // sem base, retorna vazio (fallback: token no response)
+  if (!base) return "";
   const u = new URL(path, base);
   u.searchParams.set("token", String(token || ""));
   return u.toString();
 }
 
+// ===============================
+// SMTP (invite / boas-vindas)
+// ===============================
 async function sendInviteEmailIfConfigured({ to, tenantName, token, expiresAt }) {
-  // ✅ Se SMTP não estiver configurado, não quebra o fluxo
   const SMTP_HOST = safeStr(process.env.SMTP_HOST);
   const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
   const SMTP_USER = safeStr(process.env.SMTP_USER);
@@ -98,7 +100,8 @@ async function sendInviteEmailIfConfigured({ to, tenantName, token, expiresAt })
 
   let nodemailer;
   try {
-    nodemailer = (await import("nodemailer")).default || (await import("nodemailer"));
+    const mod = await import("nodemailer");
+    nodemailer = mod?.default || mod;
   } catch (err) {
     logger.warn({ err }, "invite email: nodemailer não disponível (pulando envio)");
     return { sent: false, reason: "nodemailer_missing" };
@@ -164,8 +167,73 @@ async function sendInviteEmailIfConfigured({ to, tenantName, token, expiresAt })
   }
 }
 
+// ===============================
+// ASAAS (Customer) - integrado aqui (sem criar arquivo novo)
+// ===============================
+function getAsaasConfig() {
+  const apiKey = safeStr(process.env.ASAAS_API_KEY);
+  const baseUrl = safeStr(process.env.ASAAS_BASE_URL) || "https://api.asaas.com/v3";
+  return { apiKey, baseUrl };
+}
+
+async function asaasCreateCustomerIfConfigured({ tenantId, companyProfile, adminEmail }) {
+  const { apiKey, baseUrl } = getAsaasConfig();
+
+  if (!apiKey) {
+    return { ok: false, skipped: true, reason: "asaas_not_configured" };
+  }
+
+  const legalName = safeStr(companyProfile?.legalName);
+  const cpfCnpj = normalizeCnpj(companyProfile?.cnpj);
+
+  if (!legalName || !cpfCnpj) {
+    return { ok: false, skipped: true, reason: "company_profile_missing" };
+  }
+
+  // Node >=18 tem fetch. Se teu runtime for antigo, me avisa que eu troco pra axios/node-fetch.
+  const payload = {
+    name: legalName,
+    email: safeStr(adminEmail) || undefined,
+    cpfCnpj
+  };
+
+  const url = `${baseUrl.replace(/\/+$/, "")}/customers`;
+
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        access_token: apiKey
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await resp.json().catch(() => ({}));
+
+    if (!resp.ok) {
+      return {
+        ok: false,
+        skipped: false,
+        reason: "asaas_error",
+        status: resp.status,
+        data
+      };
+    }
+
+    // esperado: { id: "cus_..." }
+    if (!data?.id) {
+      return { ok: false, skipped: false, reason: "asaas_invalid_response", data };
+    }
+
+    return { ok: true, customerId: data.id, data };
+  } catch (err) {
+    logger.error({ err, tenantId }, "asaasCreateCustomerIfConfigured exception");
+    return { ok: false, skipped: false, reason: "asaas_exception" };
+  }
+}
+
 async function hasDefaultGroup(tenantId) {
-  // ✅ usado para o front desabilitar bootstrap quando já existir Default
   const n = await prisma.group.count({
     where: { tenantId: String(tenantId), name: "Default" }
   });
@@ -174,7 +242,6 @@ async function hasDefaultGroup(tenantId) {
 
 // ===============================
 // GET /admin/tenants
-// lista tenants + billing (pra badges no front)
 // ===============================
 router.get("/", async (req, res) => {
   try {
@@ -211,8 +278,6 @@ router.get("/", async (req, res) => {
 
 // ===============================
 // GET /admin/tenants/:id
-// retorna tenant + companyProfile + billing + members
-// + hasDefaultGroup (pra UX do bootstrap)
 // ===============================
 router.get("/:id", async (req, res) => {
   try {
@@ -254,8 +319,7 @@ router.get("/:id", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants
-// cria tenant + user admin + companyProfile + billing + invite
-// + envia e-mail de boas-vindas (se sendInvite=true e SMTP configurado)
+// ✅ cria + tenta ASAAS customer (se companyProfile ok) + envia e-mail (se SMTP ok)
 // ===============================
 router.post("/", async (req, res) => {
   try {
@@ -270,7 +334,6 @@ router.post("/", async (req, res) => {
     const companyProfile = req.body?.companyProfile || null;
     const billing = req.body?.billing || null;
 
-    // ✅ opcional: permitir criar já inativo via payload (se você quiser no front)
     const isActiveRequested =
       req.body?.isActive !== undefined ? Boolean(req.body.isActive) : true;
 
@@ -359,20 +422,12 @@ router.post("/", async (req, res) => {
         });
       }
 
-      // 5) billing (cria sempre; com enums do schema novo)
+      // 5) billing (cria sempre)
       const defaults = asaasGroupDefaults();
 
       const isFree = billing?.isFree !== undefined ? Boolean(billing.isFree) : true;
-
-      // regra: free => chargeEnabled false sempre
       const chargeEnabled = isFree === true ? false : Boolean(billing?.chargeEnabled === true);
-
-      // trial: somente se não for free
       const trialEndsAt = isFree ? null : addDays(7);
-
-      // access status:
-      // - free => ACTIVE (não bloqueia)
-      // - paid => TRIALING (7 dias)
       const accessStatus = isFree ? "ACTIVE" : "TRIALING";
 
       const b = await tx.tenantBilling.upsert({
@@ -418,7 +473,8 @@ router.post("/", async (req, res) => {
                 : Boolean(billing.chargeEnabled)
               : undefined,
 
-          billingCycle: billing?.billingCycle !== undefined ? String(billing.billingCycle) : undefined,
+          billingCycle:
+            billing?.billingCycle !== undefined ? String(billing.billingCycle) : undefined,
           preferredMethod:
             billing?.preferredMethod !== undefined ? String(billing.preferredMethod) : undefined,
 
@@ -442,7 +498,7 @@ router.post("/", async (req, res) => {
         }
       });
 
-      // 6) invite token (token opaco)
+      // 6) invite token
       const expiresAt = addDays(inviteTtlDays);
       const passwordToken = await tx.passwordToken.create({
         data: {
@@ -457,7 +513,51 @@ router.post("/", async (req, res) => {
       return { tenant, user, membership, companyProfile: cp, billing: b, passwordToken };
     });
 
-    // ✅ Envia e-mail fora da transação (não “prende” criação por falha de SMTP)
+    // ✅ ASAAS: tenta criar customer se tiver companyProfile ok (fora da transação)
+    let asaas = { ok: false, skipped: true, reason: "not_run" };
+    try {
+      asaas = await asaasCreateCustomerIfConfigured({
+        tenantId: result.tenant.id,
+        companyProfile: result.companyProfile,
+        adminEmail
+      });
+
+      if (asaas?.ok && asaas?.customerId) {
+        await prisma.tenantBilling.update({
+          where: { tenantId: result.tenant.id },
+          data: {
+            asaasCustomerId: asaas.customerId,
+            status: "SYNCED",
+            lastError: null,
+            lastSyncAt: new Date()
+          }
+        });
+      } else if (asaas?.skipped) {
+        // não faz nada
+      } else {
+        await prisma.tenantBilling.update({
+          where: { tenantId: result.tenant.id },
+          data: {
+            status: "ERROR",
+            lastError: asaas?.reason || "asaas_error",
+            lastSyncAt: new Date()
+          }
+        });
+      }
+    } catch (err) {
+      logger.error({ err }, "asaas create customer failed (outer catch)");
+      await prisma.tenantBilling.update({
+        where: { tenantId: result.tenant.id },
+        data: {
+          status: "ERROR",
+          lastError: "asaas_exception",
+          lastSyncAt: new Date()
+        }
+      });
+      asaas = { ok: false, skipped: false, reason: "asaas_exception" };
+    }
+
+    // ✅ E-mail: fora da transação
     const inviteMail = sendInvite
       ? await sendInviteEmailIfConfigured({
           to: adminEmail,
@@ -467,13 +567,18 @@ router.post("/", async (req, res) => {
         })
       : { sent: false, reason: "sendInvite_false" };
 
+    // ✅ refetch billing pra devolver atualizado (com asaasCustomerId/status)
+    const billingFresh = await prisma.tenantBilling.findUnique({
+      where: { tenantId: result.tenant.id }
+    });
+
     res.status(201).json({
       ok: true,
       tenant: result.tenant,
       adminUser: sanitizeUser(result.user),
       membership: result.membership,
       companyProfile: result.companyProfile,
-      billing: result.billing,
+      billing: billingFresh,
 
       invite: {
         token: result.passwordToken.token,
@@ -482,7 +587,8 @@ router.post("/", async (req, res) => {
       },
 
       sendInviteRequested: sendInvite,
-      inviteEmail: inviteMail
+      inviteEmail: inviteMail,
+      asaas
     });
   } catch (err) {
     const msg = String(err?.message || "");
@@ -571,7 +677,6 @@ router.patch("/:id/billing", async (req, res) => {
       return res.status(404).json({ error: "Billing não encontrado (tenantBilling missing)" });
     }
 
-    // regra: free -> chargeEnabled false
     const finalIsFree = isFree !== undefined ? isFree : current.isFree;
     const finalChargeEnabled =
       finalIsFree === true
@@ -605,8 +710,7 @@ router.patch("/:id/billing", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants/:id/bootstrap
-// cria defaults do tenant (idempotente)
-// ✅ retorna flag "alreadyBootstrapped" e não “faz nada” se Default já existe
+// ✅ idempotente (não faz nada se Default já existe)
 // ===============================
 router.post("/:id/bootstrap", async (req, res) => {
   try {
@@ -672,6 +776,7 @@ router.post("/:id/bootstrap", async (req, res) => {
 
 // ===============================
 // POST /admin/tenants/:id/billing/sync
+// (continua como stub)
 // ===============================
 router.post("/:id/billing/sync", async (req, res) => {
   try {
@@ -722,7 +827,7 @@ router.post("/:id/billing/sync", async (req, res) => {
       ok: true,
       tenantId,
       note:
-        "Sync Asaas stub aplicado. Próximo passo: implementar asaasClient (Customer + Grupo + Assinatura condicional).",
+        "Sync Asaas stub aplicado. Próximo passo: implementar assinatura/cobrança automática se necessário.",
       billing: updated
     });
   } catch (err) {

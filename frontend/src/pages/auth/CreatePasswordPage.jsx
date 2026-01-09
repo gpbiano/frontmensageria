@@ -97,6 +97,7 @@ export default function CreatePasswordPage() {
   }
 
   function goToLogin() {
+    // mantém o teu padrão atual
     window.location.href = "/#login";
   }
 
@@ -110,9 +111,16 @@ export default function CreatePasswordPage() {
       <div className="cp2-hero">
         <div className="cp2-hero-inner">
           <div className="cp2-brand">
+            {/* ✅ Logo real (public/gp-labs-logo.png) */}
             <div className="cp2-logo" aria-hidden="true">
-              GP
+              <img
+                src="/gp-labs-logo.png"
+                alt="GP Labs"
+                style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                draggable={false}
+              />
             </div>
+
             <div className="cp2-brand-text">
               <div className="cp2-brand-title">GP Labs</div>
               <div className="cp2-brand-subtitle">
@@ -248,9 +256,7 @@ export default function CreatePasswordPage() {
                   </button>
                 </div>
 
-                <div className="cp2-mini">
-                  Ao continuar, você concorda com nossas políticas.
-                </div>
+                <div className="cp2-mini">Ao continuar, você concorda com nossas políticas.</div>
 
                 <div className="cp2-policy-row">
                   <button type="button" className="cp2-linkbtn">
@@ -272,7 +278,16 @@ export default function CreatePasswordPage() {
         <footer className="cp2-footer">
           <div className="cp2-footer-top">
             <div className="cp2-footer-brand">
-              <div className="cp2-footer-logo">GP</div>
+              {/* ✅ logo no footer */}
+              <div className="cp2-footer-logo" aria-hidden="true">
+                <img
+                  src="/gp-labs-logo.png"
+                  alt="GP Labs"
+                  style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                  draggable={false}
+                />
+              </div>
+
               <div>
                 <div className="cp2-footer-title">GP Labs</div>
                 <div className="cp2-footer-sub">
