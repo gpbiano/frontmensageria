@@ -1,44 +1,59 @@
 /* frontend/src/styles/admin.css */
+
+/* =========================
+   Base / tokens leves
+========================= */
 .admin-shell {
   display: grid;
   grid-template-columns: 280px 1fr;
   min-height: calc(100vh - 40px);
   gap: 18px;
   padding: 18px;
+
+  /* sensação “app” */
+  background: rgba(15, 23, 42, 0.04);
 }
 
+/* =========================
+   Menu (sidebar)
+========================= */
 .admin-menu {
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 16px;
   padding: 14px;
-  background: rgba(0,0,0,0.10);
+  background: rgba(255, 255, 255, 0.80);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
 }
 
 .admin-title {
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 800;
-  text-align: center;
-  padding: 12px 10px;
-  border: 2px solid rgba(255,255,255,0.25);
-  border-radius: 10px;
-  background: rgba(255,255,255,0.06);
-  margin-bottom: 14px;
+  text-align: left;
+  padding: 12px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.03);
+  margin-bottom: 12px;
+  letter-spacing: -0.2px;
 }
 
 .admin-btn {
   width: 100%;
-  font-size: 22px;
-  padding: 14px 14px;
-  border-radius: 10px;
-  border: 2px solid rgba(255,255,255,0.25);
-  background: rgba(255,255,255,0.08);
+  font-size: 14px;
+  padding: 12px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.70);
   cursor: pointer;
-  margin-bottom: 14px;
-  transition: transform 0.05s ease, background 0.15s ease;
+  margin-bottom: 10px;
+  transition: transform 0.05s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  text-align: left;
 }
 
 .admin-btn:hover {
-  background: rgba(255,255,255,0.12);
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.18);
 }
 
 .admin-btn:active {
@@ -46,112 +61,187 @@
 }
 
 .admin-btn.active {
-  background: rgba(255,255,255,0.18);
-  border-color: rgba(255,255,255,0.35);
+  background: rgba(37, 99, 235, 0.10);
+  border-color: rgba(37, 99, 235, 0.25);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
 }
 
+/* =========================
+   Conteúdo (card principal)
+========================= */
 .admin-content {
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 16px;
   padding: 16px;
-  background: rgba(0,0,0,0.06);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
 }
 
+/* Header row */
 .admin-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
 }
 
 .admin-h1 {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
   margin: 0;
+  letter-spacing: -0.2px;
 }
 
 .admin-actions {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
+/* =========================
+   Inputs / botões de ação
+========================= */
 .admin-input {
   padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.20);
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(248, 250, 252, 1);
   color: inherit;
   min-width: 260px;
+  outline: none;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.admin-input:focus {
+  border-color: rgba(37, 99, 235, 0.35);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
 }
 
 .admin-primary {
   padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.14);
+  border-radius: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  background: rgba(37, 99, 235, 0.10);
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .admin-primary:hover {
-  background: rgba(255,255,255,0.18);
+  background: rgba(37, 99, 235, 0.14);
+  border-color: rgba(37, 99, 235, 0.30);
 }
 
+.admin-primary:active {
+  transform: scale(0.99);
+}
+
+/* Links / ações leves */
+.admin-link {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.70);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.admin-link:hover {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.18);
+}
+
+/* Danger */
+.admin-danger {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(220, 38, 38, 0.30);
+  background: rgba(220, 38, 38, 0.10);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.admin-danger:hover {
+  background: rgba(220, 38, 38, 0.14);
+  border-color: rgba(220, 38, 38, 0.36);
+}
+
+/* =========================
+   Tabela (mais clean)
+========================= */
 .admin-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.80);
 }
 
 .admin-table th,
 .admin-table td {
-  padding: 10px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.10);
+  padding: 12px 12px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
   text-align: left;
   font-size: 14px;
+  vertical-align: middle;
 }
 
 .admin-table th {
   font-size: 12px;
   text-transform: uppercase;
-  opacity: 0.75;
+  letter-spacing: 0.06em;
+  color: rgba(15, 23, 42, 0.70);
+  background: rgba(15, 23, 42, 0.03);
 }
 
+.admin-table tr:hover td {
+  background: rgba(15, 23, 42, 0.03);
+}
+
+.admin-table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* =========================
+   Badge / status
+========================= */
 .admin-badge {
-  display: inline-block;
-  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
   border-radius: 999px;
   font-size: 12px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(15, 23, 42, 0.03);
 }
 
-.admin-danger {
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,100,100,0.35);
-  background: rgba(255,100,100,0.14);
-  cursor: pointer;
+/* Se você quiser, pode aplicar essas classes adicionais quando existir */
+.admin-badge.success {
+  border-color: rgba(22, 163, 74, 0.25);
+  background: rgba(22, 163, 74, 0.10);
+  color: rgba(22, 163, 74, 1);
+}
+.admin-badge.warning {
+  border-color: rgba(217, 119, 6, 0.25);
+  background: rgba(217, 119, 6, 0.10);
+  color: rgba(217, 119, 6, 1);
+}
+.admin-badge.danger {
+  border-color: rgba(220, 38, 38, 0.25);
+  background: rgba(220, 38, 38, 0.10);
+  color: rgba(220, 38, 38, 1);
 }
 
-.admin-danger:hover {
-  background: rgba(255,100,100,0.20);
-}
-
-.admin-link {
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.10);
-  cursor: pointer;
-}
-
-.admin-link:hover {
-  background: rgba(255,255,255,0.14);
-}
-
+/* =========================
+   Form
+========================= */
 .admin-form {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -165,7 +255,7 @@
 
 .admin-label {
   font-size: 12px;
-  opacity: 0.8 (0.8);
+  opacity: 0.8; /* ✅ corrigido */
   margin-bottom: 6px;
   display: block;
 }
@@ -173,10 +263,17 @@
 .admin-field {
   width: 100%;
   padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.20);
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(248, 250, 252, 1);
   color: inherit;
+  outline: none;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.admin-field:focus {
+  border-color: rgba(37, 99, 235, 0.35);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
 }
 
 .admin-row {
@@ -184,4 +281,72 @@
   gap: 10px;
   align-items: center;
   margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* =========================
+   Responsivo
+========================= */
+@media (max-width: 980px) {
+  .admin-shell {
+    grid-template-columns: 1fr;
+  }
+  .admin-input {
+    min-width: 200px;
+    width: 100%;
+  }
+  .admin-header-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .admin-actions {
+    width: 100%;
+  }
+  .admin-primary,
+  .admin-link,
+  .admin-danger {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 720px) {
+  .admin-form {
+    grid-template-columns: 1fr;
+  }
+}
+/* ===== Admin - Danger zone ===== */
+.admin-danger-zone {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(15, 23, 42, 0.10);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-danger-zone .hint {
+  color: rgba(15, 23, 42, 0.65);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.admin-danger-solid {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(220, 38, 38, 0.30);
+  background: rgba(220, 38, 38, 0.10);
+  cursor: pointer;
+  font-weight: 700;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+}
+
+.admin-danger-solid:hover {
+  background: rgba(220, 38, 38, 0.14);
+  border-color: rgba(220, 38, 38, 0.36);
+}
+
+.admin-danger-solid:active {
+  transform: scale(0.99);
 }
