@@ -41,7 +41,6 @@ process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 // LOGGER
 // ===============================
 const { default: logger } = await import("./logger.js");
-
 logger.info({ ENV, TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN }, "🧩 Env carregado");
 
 // ===============================
@@ -121,7 +120,10 @@ app.use(
     quietReqLogger: true,
     autoLogging: {
       ignore: (req) =>
-        req.method === "OPTIONS" || req.url.startsWith("/health") || req.url.startsWith("/webhook/")
+        req.method === "OPTIONS" ||
+        req.url.startsWith("/health") ||
+        req.url.startsWith("/webhook/") ||
+        req.url.startsWith("/webhooks/") // ✅ plural também
     }
   })
 );
@@ -213,13 +215,14 @@ async function webchatTenantFallback(req, res, next) {
   }
 }
 
-// ✅ webhooks precisam do rawBody (não passar no jsonParser/urlencoded)
-function isRawWebhook(req) {
+// ⚠️ Webhooks NÃO passam no parser global (a gente trata cada um no app.use específico)
+function isWebhook(req) {
   const url = String(req.originalUrl || "");
   return (
-    url.startsWith("/webhook/instagram") ||
-    url.startsWith("/webhook/asaas") ||
-    url.startsWith("/webhooks/asaas") // ✅ Asaas pode chamar com plural
+    url.startsWith("/webhook/") ||
+    url.startsWith("/webhooks/") || // ✅ plural
+    url === "/webhook" ||
+    url === "/webhooks"
   );
 }
 
@@ -263,7 +266,7 @@ app.use(
 );
 
 // ===============================
-// BODY PARSERS
+// BODY PARSERS (globais)
 // ===============================
 const jsonParser = express.json({
   limit: "5mb",
@@ -275,14 +278,14 @@ const jsonParser = express.json({
 
 const urlParser = express.urlencoded({ extended: true });
 
+// ✅ Regra: webhooks não entram nos parsers globais
 app.use((req, res, next) => {
-  // webhooks raw não podem passar pelo jsonParser
-  if (isRawWebhook(req)) return next();
+  if (isWebhook(req)) return next();
   return jsonParser(req, res, next);
 });
 
 app.use((req, res, next) => {
-  if (isRawWebhook(req)) return next();
+  if (isWebhook(req)) return next();
   return urlParser(req, res, next);
 });
 
@@ -322,7 +325,7 @@ app.use("/admin", requireAuth, requireSuperAdmin, adminRouter);
 
 // Webchat público
 app.use("/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
-app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
+app.use("/br/webchat", requirePrisma, webchatTenantFallback, confirms, webchatRouter);
 
 // ===============================
 // WEBHOOKS
@@ -330,6 +333,7 @@ app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 app.use("/webhook/whatsapp", whatsappRouter);
 app.use("/webhook/messenger", messengerRouter);
 
+// Instagram: RAW (por causa da assinatura/verify)
 app.use(
   "/webhook/instagram",
   express.raw({
@@ -342,9 +346,10 @@ app.use(
   instagramWebhookRouter
 );
 
-// ✅ Asaas: aceita /webhook/asaas e /webhooks/asaas (plural)
+// ✅ ASAAS: JSON (precisa req.body parseado) + guarda rawBody via verify
+// ✅ aceita /webhook/asaas e /webhooks/asaas
 app.use(
-  ["/webhook/asaas", "/webhooks/asaas"], // ✅ aceita singular e plural
+  ["/webhook/asaas", "/webhooks/asaas"],
   express.json({
     type: ["application/json", "application/*+json"],
     limit: "5mb",
@@ -354,9 +359,6 @@ app.use(
   }),
   asaasWebhookRouter
 );
-
-app.use("/webhook/asaas", asaasRaw, asaasWebhookRouter);
-app.use("/webhooks/asaas", asaasRaw, asaasWebhookRouter);
 
 // ===============================
 // 🔒 PROTECTED MIDDLEWARE (tenant routes)
