@@ -1,27 +1,23 @@
+// backend/src/routes/admin/index.js
 import express from "express";
 
 import adminTenantsRouter from "./adminTenantsRouter.js";
-import usersAdminRouter from "./usersAdminRouter.js";
-import membershipsAdminRouter from "./membershipsAdminRouter.js";
-import bootstrapAdminRouter from "./bootstrapAdminRouter.js";
+// Se você tiver outros routers admin, importe aqui também, ex:
+// import usersAdminRouter from "./usersAdminRouter.js";
+// import membershipsAdminRouter from "./membershipsAdminRouter.js";
+// import bootstrapAdminRouter from "./bootstrapAdminRouter.js";
 
 const router = express.Router();
 
-// health check
-router.get("/health", (_req, res) => {
-  res.json({ ok: true, scope: "admin" });
-});
-
-// tenants (empresas)
+// ✅ rota atual (funcionando)
 router.use("/tenants", adminTenantsRouter);
 
-// users
-router.use("/users", usersAdminRouter);
+// ✅ alias novo (front usa /cadastros)
+router.use("/cadastros", adminTenantsRouter);
 
-// memberships
-router.use("/memberships", membershipsAdminRouter);
-
-// bootstrap
-router.use("/bootstrap", bootstrapAdminRouter);
+// (Opcional) outros routers admin
+// router.use("/users", usersAdminRouter);
+// router.use("/memberships", membershipsAdminRouter);
+// router.use("/bootstrap", bootstrapAdminRouter);
 
 export default router;

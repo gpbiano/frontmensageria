@@ -42,10 +42,7 @@ process.env.TENANT_BASE_DOMAIN ||= "cliente.gplabs.com.br";
 // ===============================
 const { default: logger } = await import("./logger.js");
 
-logger.info(
-  { ENV, TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN },
-  "🧩 Env carregado"
-);
+logger.info({ ENV, TENANT_BASE_DOMAIN: process.env.TENANT_BASE_DOMAIN }, "🧩 Env carregado");
 
 // ===============================
 // PRISMA
@@ -124,9 +121,7 @@ app.use(
     quietReqLogger: true,
     autoLogging: {
       ignore: (req) =>
-        req.method === "OPTIONS" ||
-        req.url.startsWith("/health") ||
-        req.url.startsWith("/webhook/")
+        req.method === "OPTIONS" || req.url.startsWith("/health") || req.url.startsWith("/webhook/")
     }
   })
 );
@@ -145,10 +140,12 @@ function buildAllowedOrigins() {
     "http://localhost:3000"
   ];
   if (!raw) return defaults;
+
   const extra = raw
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+
   return Array.from(new Set([...defaults, ...extra]));
 }
 
@@ -169,7 +166,10 @@ const corsConfig = {
     "X-Tenant-Id",
     "X-Tenant-Slug",
     "X-Widget-Key",
-    "X-Webchat-Token"
+    "X-Webchat-Token",
+
+    // ✅ Asaas manda esse header no webhook
+    "asaas-access-token"
   ],
   exposedHeaders: ["Authorization"],
   maxAge: 86400
@@ -213,9 +213,14 @@ async function webchatTenantFallback(req, res, next) {
   }
 }
 
+// ✅ webhooks precisam do rawBody (não passar no jsonParser/urlencoded)
 function isRawWebhook(req) {
   const url = String(req.originalUrl || "");
-  return url.startsWith("/webhook/instagram") || url.startsWith("/webhook/asaas");
+  return (
+    url.startsWith("/webhook/instagram") ||
+    url.startsWith("/webhook/asaas") ||
+    url.startsWith("/webhooks/asaas") // ✅ Asaas pode chamar com plural
+  );
 }
 
 // ===============================
@@ -234,7 +239,10 @@ const PUBLIC_NO_TENANT_PATHS = [
   "/webhook/whatsapp",
   "/webhook/messenger",
   "/webhook/instagram",
+
+  // ✅ Asaas: aceita singular e plural
   "/webhook/asaas",
+  "/webhooks/asaas",
 
   "/webchat",
   "/br/webchat",
@@ -334,18 +342,17 @@ app.use(
   instagramWebhookRouter
 );
 
-// ✅ Asaas: normalmente precisa do rawBody p/ validação (dependendo do teu webhook)
-app.use(
-  "/webhook/asaas",
-  express.raw({
-    type: "*/*",
-    limit: "5mb",
-    verify: (req, _res, buf) => {
-      req.rawBody = buf;
-    }
-  }),
-  asaasWebhookRouter
-);
+// ✅ Asaas: aceita /webhook/asaas e /webhooks/asaas (plural)
+const asaasRaw = express.raw({
+  type: "*/*",
+  limit: "5mb",
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  }
+});
+
+app.use("/webhook/asaas", asaasRaw, asaasWebhookRouter);
+app.use("/webhooks/asaas", asaasRaw, asaasWebhookRouter);
 
 // ===============================
 // 🔒 PROTECTED MIDDLEWARE (tenant routes)
