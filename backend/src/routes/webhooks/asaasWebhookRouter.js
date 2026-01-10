@@ -322,7 +322,7 @@ router.post(
       // ======================================================
       if (event === "PAID") {
         const stillTrial = isWithinTrial(billing, now);
-        const nextAccess = stillTrial ? "TRIALING" : "ACTIVE";
+        const nextAccess = "ACTIVE";
 
         const wasAwaitingFirstPayment =
           String(billing.accessStatus || "") === "BLOCKED" &&
