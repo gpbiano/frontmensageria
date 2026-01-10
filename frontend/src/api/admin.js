@@ -6,10 +6,6 @@ const API_BASE =
   import.meta.env.VITE_API_BASE_URL ||
   "http://localhost:3010";
 
-// ✅ opcional: força o base do admin sem heurística
-// Ex: VITE_ADMIN_BASE_PATH=/admin/tenants  OU  /admin/cadastros
-const FORCED_ADMIN_BASE_PATH = String(import.meta.env.VITE_ADMIN_BASE_PATH || "").trim();
-
 const AUTH_TOKEN_KEY = "gpLabsAuthToken";
 
 function getToken() {
@@ -27,8 +23,7 @@ function getToken() {
 
 const http = axios.create({
   baseURL: API_BASE,
-  withCredentials: true,
-  timeout: 30000
+  withCredentials: true
 });
 
 http.interceptors.request.use((config) => {
@@ -38,85 +33,25 @@ http.interceptors.request.use((config) => {
 });
 
 // =====================================
-// Base path do Admin
+// ✅ BASE FIXO (produção tem /admin/tenants)
 // =====================================
-let _adminBasePath = null;
+const ADMIN_BASE = "/admin/tenants";
 
-/**
- * Resolve base path do Admin:
- * 1) Se VITE_ADMIN_BASE_PATH estiver setado, usa ele e pronto.
- * 2) Caso contrário:
- *    - tenta /admin/cadastros
- *    - depois /admin/tenants
- *
- * Observação:
- * - Se der 403/401, significa que o endpoint existe mas não autorizou.
- *   Então consideramos como existente e usamos mesmo assim.
- */
-async function resolveAdminBasePath() {
-  if (_adminBasePath) return _adminBasePath;
-
-  if (FORCED_ADMIN_BASE_PATH) {
-    _adminBasePath = FORCED_ADMIN_BASE_PATH.startsWith("/")
-      ? FORCED_ADMIN_BASE_PATH
-      : `/${FORCED_ADMIN_BASE_PATH}`;
-    return _adminBasePath;
-  }
-
-  // ✅ tenta cadastros primeiro (novo)
-  try {
-    await http.get("/admin/cadastros", { params: { page: 1, pageSize: 1, q: "" } });
-    _adminBasePath = "/admin/cadastros";
-    return _adminBasePath;
-  } catch (e) {
-    const status = e?.response?.status;
-    // se não for 404, endpoint existe (pode ser 401/403)
-    if (status && status !== 404) {
-      _adminBasePath = "/admin/cadastros";
-      return _adminBasePath;
-    }
-  }
-
-  // ✅ fallback tenants (legado / alternativo)
-  try {
-    await http.get("/admin/tenants", { params: { page: 1, pageSize: 1, q: "" } });
-    _adminBasePath = "/admin/tenants";
-    return _adminBasePath;
-  } catch (e2) {
-    const status2 = e2?.response?.status;
-    if (status2 && status2 !== 404) {
-      _adminBasePath = "/admin/tenants";
-      return _adminBasePath;
-    }
-  }
-
-  // último fallback
-  _adminBasePath = "/admin/tenants";
-  return _adminBasePath;
+function adminGet(path, config) {
+  return http.get(`${ADMIN_BASE}${path}`, config);
 }
-
-async function adminGet(path, config) {
-  const base = await resolveAdminBasePath();
-  return http.get(`${base}${path}`, config);
+function adminPost(path, data, config) {
+  return http.post(`${ADMIN_BASE}${path}`, data, config);
 }
-
-async function adminPost(path, data, config) {
-  const base = await resolveAdminBasePath();
-  return http.post(`${base}${path}`, data, config);
+function adminPatch(path, data, config) {
+  return http.patch(`${ADMIN_BASE}${path}`, data, config);
 }
-
-async function adminPatch(path, data, config) {
-  const base = await resolveAdminBasePath();
-  return http.patch(`${base}${path}`, data, config);
-}
-
-async function adminDelete(path, config) {
-  const base = await resolveAdminBasePath();
-  return http.delete(`${base}${path}`, config);
+function adminDelete(path, config) {
+  return http.delete(`${ADMIN_BASE}${path}`, config);
 }
 
 // =====================================
-// EXPORTS PRINCIPAIS
+// ✅ EXPORTS (front)
 // =====================================
 export function fetchTenantsAdmin({ page = 1, pageSize = 25, q = "" } = {}) {
   return adminGet("", { params: { page, pageSize, q } });
@@ -152,20 +87,13 @@ export function bootstrapTenantAdmin(id, payload) {
   return adminPost(`/${encodeURIComponent(String(id))}/bootstrap`, payload || {});
 }
 
-/**
- * 🚨 IMPORTANTE:
- * Este endpoint precisa existir no backend:
- * POST /admin/(cadastros|tenants)/:id/billing/sync
- *
- * Se não existir, você SEMPRE verá 404 no console (igual você mostrou).
- */
 export function syncTenantBillingAdmin(id) {
   if (!id) throw new Error("syncTenantBillingAdmin: id é obrigatório");
   return adminPost(`/${encodeURIComponent(String(id))}/billing/sync`, {});
 }
 
 // =====================================
-// COMPAT (nomes antigos)
+// ✅ COMPAT (nomes antigos)
 // =====================================
 export function listTenants(opts) {
   return fetchTenantsAdmin(opts);
