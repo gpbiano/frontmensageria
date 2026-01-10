@@ -325,7 +325,7 @@ app.use("/admin", requireAuth, requireSuperAdmin, adminRouter);
 
 // Webchat público
 app.use("/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
-app.use("/br/webchat", requirePrisma, webchatTenantFallback, confirms, webchatRouter);
+app.use("/br/webchat", requirePrisma, webchatTenantFallback, webchatRouter);
 
 // ===============================
 // WEBHOOKS
