@@ -1,23 +1,14 @@
-// backend/src/routes/webhooks/asaasWebhookRouter.js
 import express from "express";
 import crypto from "crypto";
-import fetch from "node-fetch";
 import logger from "../../logger.js";
 import prismaMod from "../../lib/prisma.js";
 
 const prisma = prismaMod?.prisma || prismaMod?.default || prismaMod;
 const router = express.Router();
 
-/**
- * ✅ TOKEN/SECRET DO WEBHOOK (sem cache “perigoso”):
- * - lê de process.env sempre que validar (pra evitar ficar preso em "")
- * - aceita ASAAS_WEBHOOK_TOKEN ou ASAAS_WEBHOOK_SECRET
- */
-function getWebhookSecret() {
-  const a = String(process.env.ASAAS_WEBHOOK_TOKEN || "").trim();
-  const b = String(process.env.ASAAS_WEBHOOK_SECRET || "").trim();
-  return a || b || "";
-}
+// ✅ ATENÇÃO: se o valor tiver "#", no .env precisa estar ENTRE ASPAS
+const ASAAS_WEBHOOK_TOKEN = String(process.env.ASAAS_WEBHOOK_TOKEN || "").trim();
+const ASAAS_WEBHOOK_SECRET = String(process.env.ASAAS_WEBHOOK_SECRET || "").trim();
 
 function safeStr(v) {
   return String(v || "").trim();
@@ -31,26 +22,30 @@ function timingSafeEq(a, b) {
 }
 
 /**
- * ✅ Validação compatível com o que você mostrou no LOG:
- * - Asaas mandou: header "asaas-access-token": "...."
- * - então validamos por ele primeiro
- * - também aceitamos "x-webhook-signature" / "asaas-signature" (fallback)
- *
- * Política:
- * - Se não existir secret no env -> NÃO bloqueia (permite webhook) [útil em dev]
- * - Se existir secret no env -> exige header e compara timing-safe
+ * Asaas normalmente envia "asaas-access-token" (Access Token configurado no painel).
+ * Aceitamos também variações (por segurança).
  */
-function validateSignature(req) {
-  const expected = getWebhookSecret();
-  if (!expected) return true; // sem segredo configurado -> não bloqueia
-
-  const received =
+function getReceivedToken(req) {
+  return (
     safeStr(req.headers["asaas-access-token"]) ||
+    safeStr(req.headers["x-asaas-access-token"]) ||
+    safeStr(req.headers["x-webhook-token"]) ||
     safeStr(req.headers["x-webhook-signature"]) ||
     safeStr(req.headers["asaas-signature"]) ||
-    safeStr(req.headers["x-asaas-access-token"]);
+    safeStr(req.query?.token) ||
+    ""
+  );
+}
 
+function validateSignature(req) {
+  const expected = ASAAS_WEBHOOK_TOKEN || ASAAS_WEBHOOK_SECRET;
+
+  // ✅ Se não configurou token/secret, não bloqueia (útil em dev)
+  if (!expected) return true;
+
+  const received = getReceivedToken(req);
   if (!received) return false;
+
   return timingSafeEq(received, expected);
 }
 
@@ -68,7 +63,6 @@ function isWithinTrial(billing, now) {
 function normalizeEvent(raw) {
   const e = safeStr(raw).toUpperCase();
 
-  // ✅ principais eventos de pagamento
   if (
     e === "PAYMENT_RECEIVED" ||
     e === "PAYMENT_CONFIRMED" ||
@@ -80,7 +74,6 @@ function normalizeEvent(raw) {
   if (e === "PAYMENT_CANCELED" || e === "PAYMENT_DELETED") return "CANCELED";
   if (e === "PAYMENT_REFUNDED") return "REFUNDED";
 
-  // alguns webhooks vêm como INVOICE_* ou SUBSCRIPTION_*
   return e || "UNKNOWN";
 }
 
@@ -124,7 +117,7 @@ function addDays(days) {
 }
 
 // ===============================
-// Resend
+// Resend (usa fetch global do Node 20)
 // ===============================
 async function sendResendEmailIfConfigured({ to, subject, html }) {
   const RESEND_API_KEY = safeStr(process.env.RESEND_API_KEY);
@@ -183,14 +176,6 @@ async function sendPaymentWelcomeEmail({ to, tenantName, inviteUrl, expiresAt })
 
   const html = `
   <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height:1.45">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="width:44px;height:44px;border-radius:12px;background:#0f172a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800">GP</div>
-      <div>
-        <div style="font-size:16px;font-weight:800">GP Labs</div>
-        <div style="font-size:12px;color:#475569">WhatsApp • Automação • Atendimento</div>
-      </div>
-    </div>
-
     <h2 style="margin:0 0 10px">Pagamento confirmado ✅</h2>
     <p style="margin:0 0 8px">
       A assinatura da empresa <b>${String(tenantName || "sua empresa")}</b> foi confirmada.
@@ -222,23 +207,26 @@ async function sendPaymentWelcomeEmail({ to, tenantName, inviteUrl, expiresAt })
   return sendResendEmailIfConfigured({ to, subject, html });
 }
 
-/**
- * ✅ Observação sobre o 401 que você viu:
- * - No log: o Asaas mandou o header `asaas-access-token`
- * - Você recebeu 401 => validateSignature retornou false
- *
- * Causas mais comuns:
- * 1) ASAAS_WEBHOOK_TOKEN/SECRET no servidor NÃO bate com o token configurado no Asaas
- * 2) env não carregou (ficou vazio) e você estava comparando com valor errado
- *
- * Aqui garantimos:
- * - leitura on-demand do env
- * - suporte explícito ao header `asaas-access-token`
- */
+// ✅ IMPORTANTÍSSIMO:
+// este router deve receber RAW (express.raw) no index.js,
+// mas aqui também aceitamos json, caso chegue já parseado.
 router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
   try {
-    // ✅ valida assinatura
     if (!validateSignature(req)) {
+      const received = getReceivedToken(req);
+      const expected = ASAAS_WEBHOOK_TOKEN || ASAAS_WEBHOOK_SECRET;
+
+      // log seguro (sem expor token)
+      logger.warn(
+        {
+          receivedLen: received ? String(received).length : 0,
+          expectedLen: expected ? String(expected).length : 0,
+          hasExpected: Boolean(expected),
+          path: req.originalUrl
+        },
+        "asaas webhook: invalid_signature"
+      );
+
       return res.status(401).json({ error: "invalid_signature" });
     }
 
@@ -248,12 +236,10 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     const event = normalizeEvent(rawEvent);
 
     const payment = pickPayment(req.body);
-
     const subscriptionId = safeStr(payment?.subscription);
     const customerId = safeStr(payment?.customer);
 
     const paymentId = safeStr(payment?.id);
-
     const invoiceUrl = safeStr(
       payment?.invoiceUrl || payment?.invoiceUrlExternal || payment?.invoiceUrlCustomer
     );
@@ -261,13 +247,8 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     const pixQrCode = safeStr(payment?.pixQrCode);
     const pixPayload = safeStr(payment?.pixPayload);
 
-    // Sem assinatura/subscription o evento não amarra no tenant
     if (!subscriptionId && !customerId) {
-      return res.json({
-        ok: true,
-        ignored: true,
-        reason: "missing_subscription_and_customer"
-      });
+      return res.json({ ok: true, ignored: true, reason: "missing_subscription_and_customer" });
     }
 
     const billing = await prisma.tenantBilling.findFirst({
@@ -287,19 +268,16 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
     const graceDays = Number(billing.graceDaysAfterDue || 30);
 
     // ======================================================
-    // PAID => libera acesso + manda e-mail se era awaiting_first_payment
+    // PAID
     // ======================================================
     if (event === "PAID") {
       const stillTrial = isWithinTrial(billing, now);
-
-      // se tem trialEndsAt no billing, e ainda não passou, fica TRIALING, senão ACTIVE
       const nextAccess = stillTrial ? "TRIALING" : "ACTIVE";
 
       const wasAwaitingFirstPayment =
         String(billing.accessStatus || "") === "BLOCKED" &&
         String(billing.blockedReason || "").startsWith("awaiting_first_payment");
 
-      // ✅ atualiza billing
       await prisma.tenantBilling.update({
         where: { tenantId },
         data: {
@@ -311,7 +289,6 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
 
           lastPaymentStatus: "RECEIVED",
           lastPaymentId: paymentId || billing.lastPaymentId,
-
           lastInvoiceUrl: invoiceUrl || billing.lastInvoiceUrl,
           lastBankSlipUrl: bankSlipUrl || billing.lastBankSlipUrl,
           lastPixQrCode: pixQrCode || billing.lastPixQrCode,
@@ -324,7 +301,6 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
 
       let welcomeEmail = { sent: false, reason: "not_first_activation" };
 
-      // ✅ só manda e-mail automático no primeiro pagamento
       if (wasAwaitingFirstPayment) {
         const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
 
@@ -336,7 +312,6 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
         const to = safeStr(admin?.user?.email) || safeStr(billing?.billingEmail);
 
         if (to && to.includes("@")) {
-          // gera token novo (evita token antigo expirado)
           const expiresAt = addDays(7);
 
           const token = await prisma.passwordToken.create({
@@ -369,18 +344,15 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
       return res.json({
         ok: true,
         action: stillTrial ? "paid_trialing" : "paid_activated",
-        tenantId,
         welcomeEmail
       });
     }
 
     // ======================================================
-    // OVERDUE => marca PAST_DUE e bloqueia após graceDays
+    // OVERDUE
     // ======================================================
     if (event === "OVERDUE") {
-      const delinquentSince = billing.delinquentSince
-        ? new Date(billing.delinquentSince)
-        : now;
+      const delinquentSince = billing.delinquentSince ? new Date(billing.delinquentSince) : now;
 
       const updated = await prisma.tenantBilling.update({
         where: { tenantId },
@@ -389,12 +361,10 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
           delinquentSince,
           lastPaymentStatus: "OVERDUE",
           lastPaymentId: paymentId || billing.lastPaymentId,
-
           lastInvoiceUrl: invoiceUrl || billing.lastInvoiceUrl,
           lastBankSlipUrl: bankSlipUrl || billing.lastBankSlipUrl,
           lastPixQrCode: pixQrCode || billing.lastPixQrCode,
           lastPixPayload: pixPayload || billing.lastPixPayload,
-
           lastSyncAt: now
         }
       });
@@ -413,39 +383,19 @@ router.post("/", express.json({ limit: "5mb" }), async (req, res) => {
           }
         });
 
-        return res.json({ ok: true, action: "blocked_overdue", tenantId, daysLate, graceDays });
+        return res.json({ ok: true, action: "blocked_overdue", daysLate, graceDays });
       }
 
-      return res.json({ ok: true, action: "marked_past_due", tenantId, daysLate, graceDays });
+      return res.json({ ok: true, action: "marked_past_due", daysLate, graceDays });
     }
 
-    // ======================================================
-    // CANCELED / REFUNDED => bloqueia
-    // (mantém simples: bloqueia imediatamente)
-    // ======================================================
-    if (event === "CANCELED" || event === "REFUNDED") {
-      await prisma.tenantBilling.update({
-        where: { tenantId },
-        data: {
-          accessStatus: "BLOCKED",
-          blockedAt: now,
-          blockedReason: event === "CANCELED" ? "payment_canceled" : "payment_refunded",
-          lastPaymentStatus: event,
-          lastPaymentId: paymentId || billing.lastPaymentId,
-          lastSyncAt: now
-        }
-      });
-
-      return res.json({ ok: true, action: "blocked", tenantId, event });
-    }
-
-    // outros eventos: só marca sync
+    // Outros eventos (noop)
     await prisma.tenantBilling.update({
       where: { tenantId },
       data: { lastSyncAt: now }
     });
 
-    return res.json({ ok: true, action: "noop", tenantId, event: rawEvent || "UNKNOWN" });
+    return res.json({ ok: true, action: "noop", event: rawEvent || "UNKNOWN" });
   } catch (err) {
     logger.error({ err }, "❌ Asaas webhook error");
     return res.status(500).json({ error: "internal_error" });
