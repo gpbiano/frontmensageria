@@ -1,22 +1,42 @@
 // backend/src/services/asaasClient.js
 import fetch from "node-fetch";
 
+/**
+ * IMPORTANTE (teu bug atual):
+ * - Antes você lia ASAAS_API_KEY uma única vez no topo do módulo.
+ * - Se o dotenv/PM2 carrega env depois (ou se o process é reiniciado sem update-env),
+ *   o valor fica "" pra sempre e dá "ASAAS_API_KEY não configurada".
+ *
+ * Correção:
+ * - Lemos ENV SEMPRE “on-demand” dentro de getters, garantindo valor atual do process.env.
+ * - Também normalizamos ASAAS_ENV para aceitar "prod" e "production".
+ */
+
 function env(name, def = "") {
-  return String(process.env[name] || def).trim();
+  return String(process.env[name] ?? def).trim();
 }
 
-const ASAAS_API_KEY = env("ASAAS_API_KEY");
-const ASAAS_ENV = env("ASAAS_ENV", "sandbox"); // sandbox | prod
+function getAsaasEnv() {
+  const v = env("ASAAS_ENV", "sandbox").toLowerCase();
+  // aceita variações
+  if (v === "prod" || v === "production") return "prod";
+  return "sandbox";
+}
+
+function getAsaasApiKey() {
+  // não cacheia. sempre pega o valor atual do process.env
+  return env("ASAAS_API_KEY", "");
+}
 
 function baseUrl() {
-  // ✅ sandbox usa domínio diferente no Asaas
   // produção: https://api.asaas.com
   // sandbox:  https://api-sandbox.asaas.com
-  return ASAAS_ENV === "prod" ? "https://api.asaas.com" : "https://api-sandbox.asaas.com";
+  return getAsaasEnv() === "prod" ? "https://api.asaas.com" : "https://api-sandbox.asaas.com";
 }
 
 function assertConfigured() {
-  if (!ASAAS_API_KEY) {
+  const key = getAsaasApiKey();
+  if (!key) {
     const err = new Error("ASAAS_API_KEY não configurada");
     err.code = "ASAAS_NOT_CONFIGURED";
     throw err;
@@ -29,7 +49,8 @@ async function asaasRequest(path, { method = "GET", body } = {}) {
   const url = `${baseUrl()}${path}`;
   const headers = {
     "Content-Type": "application/json",
-    access_token: ASAAS_API_KEY,
+    // ✅ Asaas usa header "access_token"
+    access_token: getAsaasApiKey(),
     "User-Agent": "gplabs-billing/1.0"
   };
 
@@ -48,11 +69,22 @@ async function asaasRequest(path, { method = "GET", body } = {}) {
   }
 
   if (!resp.ok) {
-    const err = new Error(
-      `Asaas error ${resp.status}: ${json?.errors?.[0]?.description || json?.message || "unknown"}`
-    );
+    // tenta extrair mensagem padrão Asaas
+    const description =
+      json?.errors?.[0]?.description ||
+      json?.errors?.[0]?.message ||
+      json?.message ||
+      "unknown";
+
+    const err = new Error(`Asaas error ${resp.status}: ${description}`);
     err.status = resp.status;
     err.payload = json;
+    err.asaas = {
+      env: getAsaasEnv(),
+      baseUrl: baseUrl(),
+      path,
+      method
+    };
     throw err;
   }
 
@@ -67,39 +99,34 @@ function normalizeDigits(s) {
 // Customers
 // -------------------------------
 export async function asaasCreateCustomer(payload) {
-  const body = { ...payload };
+  const body = { ...(payload || {}) };
   if (body.cpfCnpj) body.cpfCnpj = normalizeDigits(body.cpfCnpj);
   if (body.postalCode) body.postalCode = normalizeDigits(body.postalCode);
   return asaasRequest("/v3/customers", { method: "POST", body });
 }
 
 export async function asaasGetCustomer(customerId) {
-  return asaasRequest(`/v3/customers/${encodeURIComponent(customerId)}`);
+  return asaasRequest(`/v3/customers/${encodeURIComponent(String(customerId || ""))}`);
 }
 
 // -------------------------------
 // Subscriptions (Assinaturas)
 // -------------------------------
 export async function asaasCreateSubscription(payload) {
-  // payload esperado (exemplo):
-  // {
-  //   customer: "cus_...",
-  //   billingType: "BOLETO" | "CREDIT_CARD" | "PIX" | "UNDEFINED",
-  //   cycle: "MONTHLY" | "QUARTERLY" | "YEARLY",
-  //   value: 99.9,
-  //   nextDueDate: "2026-01-10",
-  //   description?: "Plano ...",
-  //   externalReference?: "tenant:<id>",
-  // }
-  const body = { ...payload };
+  const body = { ...(payload || {}) };
   return asaasRequest("/v3/subscriptions", { method: "POST", body });
 }
 
 export async function asaasGetSubscription(subscriptionId) {
-  return asaasRequest(`/v3/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  return asaasRequest(`/v3/subscriptions/${encodeURIComponent(String(subscriptionId || ""))}`);
 }
 
+// ✅ export “dinâmico” (reflete o env atual)
 export const asaasConfig = {
-  env: ASAAS_ENV,
-  baseUrl: baseUrl()
+  get env() {
+    return getAsaasEnv();
+  },
+  get baseUrl() {
+    return baseUrl();
+  }
 };
