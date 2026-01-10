@@ -343,13 +343,17 @@ app.use(
 );
 
 // ✅ Asaas: aceita /webhook/asaas e /webhooks/asaas (plural)
-const asaasRaw = express.raw({
-  type: "*/*",
-  limit: "5mb",
-  verify: (req, _res, buf) => {
-    req.rawBody = buf;
-  }
-});
+app.use(
+  ["/webhook/asaas", "/webhooks/asaas"], // ✅ aceita singular e plural
+  express.json({
+    type: ["application/json", "application/*+json"],
+    limit: "5mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    }
+  }),
+  asaasWebhookRouter
+);
 
 app.use("/webhook/asaas", asaasRaw, asaasWebhookRouter);
 app.use("/webhooks/asaas", asaasRaw, asaasWebhookRouter);
